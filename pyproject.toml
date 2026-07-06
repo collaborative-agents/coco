@@ -1,0 +1,50 @@
+[project]
+name = "coco"
+version = "0.1.0"
+description = "Coco — a proactive desktop agent that senses user activity and offers timely suggestions."
+requires-python = ">=3.12"
+dependencies = [
+    "sensing",
+    "proactive_tutor",
+    "external_api",
+    "py_utils",
+]
+
+# The workspace root is a virtual project: it exists only to tie the member
+# packages together. It is never itself built or published.
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+sensing = { workspace = true }
+proactive_tutor = { workspace = true }
+external_api = { workspace = true }
+py_utils = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "lib/sensing",
+    "lib/proactive_tutor",
+    "lib/external_api",
+    "lib/py_utils",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.14.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+lint.select = ["E", "W", "F", "I", "B", "C4", "UP"]
+lint.ignore = ["E501", "B008", "UP046", "UP047"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "*_test.py"]
+asyncio_mode = "auto"

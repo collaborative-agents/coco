@@ -1,0 +1,1022 @@
+/* ── OnboardingView styles ───────────────────────────────────────────────────
+   All classes are prefixed with ob- to avoid conflicts with other components.
+   Font: PT Sans (matches evaluation_platform).
+   Colors: SALT Lab design system (#204A79 primary).
+   ────────────────────────────────────────────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap');
+
+.ob-root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  -webkit-app-region: drag;
+  font-family: 'PT Sans', sans-serif;
+}
+
+.ob-card {
+  position: relative;
+  width: 420px;
+  max-height: 680px;
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  -webkit-app-region: no-drag;
+}
+
+/* ── Header ── */
+.ob-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 0;
+  /* The window is frameless, so the header doubles as the drag handle. */
+  -webkit-app-region: drag;
+  cursor: grab;
+}
+
+.ob-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ob-brand-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #204A79;
+}
+
+.ob-brand-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ob-skip-btn {
+  font-size: 13px;
+  color: #9ca3af;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  /* Keep the button clickable inside the draggable header. */
+  -webkit-app-region: no-drag;
+}
+.ob-skip-btn:hover { color: #6b7280; }
+
+/* ── Progress bars ── */
+.ob-progress {
+  display: flex;
+  gap: 3px;
+  padding: 10px 16px 0;
+}
+
+.ob-pbar {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  transition: background 0.25s;
+}
+.ob-pbar.done   { background: #22c55e; }
+.ob-pbar.active { background: #204A79; }
+.ob-pbar.future { background: #e5e7eb; }
+
+/* ── Body ── */
+.ob-body {
+  padding: 16px 16px 0;
+  flex: 1;
+  overflow-y: auto;
+  /* Header ~42px + progress ~25px + nav ~58px = ~125px overhead */
+  max-height: calc(680px - 125px);
+}
+
+.ob-step-label {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 4px;
+}
+
+.ob-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 6px;
+  line-height: 1.3;
+}
+
+.ob-sub {
+  font-size: 14px;
+  color: #6b7280;
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+/* Scrollable body needs breathing room at the bottom */
+.ob-body::after {
+  content: '';
+  display: block;
+  height: 12px;
+}
+
+/* ── Navigation ── */
+.ob-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 16px;
+}
+
+.ob-counter {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.ob-btn {
+  padding: 8px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  font-family: 'PT Sans', sans-serif;
+}
+.ob-btn:hover { opacity: 0.85; }
+.ob-btn:disabled { opacity: 0.3; cursor: default; }
+
+.ob-btn-primary { background: #204A79; color: #ffffff; }
+.ob-btn-ghost   { background: #f3f4f6; color: #6b7280; }
+.ob-btn-green   { background: #16a34a; color: #ffffff; }
+
+/* ═══════════════════════════════════════════════
+   Step 0 – Stats
+   ═══════════════════════════════════════════════ */
+.ob-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ob-stat-card {
+  border-radius: 10px;
+  padding: 12px 10px;
+  text-align: center;
+}
+.ob-stat-card.violet { background: #E9EFFF; border: 1px solid #BCD0FC; }
+.ob-stat-card.indigo { background: #E9EFFF; border: 1px solid #BCD0FC; }
+
+.ob-stat-num { font-size: 32px; font-weight: 800; line-height: 1; }
+.ob-stat-num.violet { color: #204A79; }
+.ob-stat-num.indigo { color: #204A79; }
+
+.ob-stat-desc { font-size: 14px; margin-top: 4px; line-height: 1.3; }
+.ob-stat-desc.violet { color: #204A79; }
+.ob-stat-desc.indigo { color: #204A79; }
+
+.ob-stat-cite { font-size: 11px; color: #9ca3af; margin-top: 3px; }
+
+.ob-stat-copy {
+  font-size: 14px;
+  color: #4b5563;
+  line-height: 1.5;
+}
+.ob-stat-copy strong { color: #111827; }
+
+/* ═══════════════════════════════════════════════
+   Steps 1, 2 – info rows
+   ═══════════════════════════════════════════════ */
+.ob-info-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ob-info-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.ob-info-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+
+.ob-info-text { font-size: 14px; color: #4b5563; line-height: 1.5; }
+.ob-info-text strong { color: #111827; }
+
+/* ═══════════════════════════════════════════════
+   Step 3 – Two ways to start a session
+   ═══════════════════════════════════════════════ */
+.ob-tabs {
+  display: flex;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.ob-tab {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s, color 0.15s;
+  font-family: 'PT Sans', sans-serif;
+}
+.ob-tab.active   { background: #204A79; color: #ffffff; }
+.ob-tab.inactive { background: #ffffff; color: #9ca3af; }
+
+.ob-method-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.ob-flow-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.ob-flow-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+}
+
+.ob-flow-arrow {
+  font-size: 14px;
+  color: #d1d5db;
+  margin-top: 12px;
+  flex-shrink: 0;
+}
+
+.ob-flow-badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #E9EFFF;
+  border: 1.5px solid #BCD0FC;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.ob-flow-label {
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.ob-method-note {
+  font-size: 12px;
+  color: #6b7280;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  padding: 8px 10px;
+  line-height: 1.5;
+}
+.ob-method-note strong { color: #374151; }
+
+/* Mini UI previews inside step 3 */
+.ob-mini-notif {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.1);
+  padding: 8px 10px;
+  width: 100%;
+}
+.ob-mini-notif-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+.ob-mini-notif-brand {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #1f2937;
+  letter-spacing: .05em;
+}
+.ob-mini-notif-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #204A79;
+}
+.ob-mini-notif-x { font-size: 12px; color: #9ca3af; }
+.ob-mini-notif-msg { font-size: 11px; color: #374151; line-height: 1.4; margin-bottom: 6px; }
+.ob-mini-notif-btns { display: flex; gap: 5px; justify-content: flex-end; }
+.ob-mini-btn-cancel {
+  padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 600;
+  background: #f3f4f6; color: #6b7280; border: none;
+}
+.ob-mini-btn-action {
+  padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 700;
+  background: #204A79; color: white; border: none;
+}
+
+.ob-mini-setup {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+  padding: 8px 10px;
+  width: 100%;
+}
+.ob-mini-setup-hdr {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+.ob-mini-setup-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #204A79;
+}
+.ob-mini-setup-name {
+  font-size: 10px;
+  font-weight: 800;
+  color: #1f2937;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.ob-mini-setup-field { margin-bottom: 5px; }
+.ob-mini-setup-lbl {
+  font-size: 9px;
+  font-weight: 700;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 2px;
+}
+.ob-mini-setup-val {
+  font-size: 10px;
+  color: #374151;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 3px 6px;
+  line-height: 1.3;
+}
+.ob-mini-setup-btns {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 5px;
+}
+.ob-mini-start-btn {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: #204A79;
+  color: white;
+  border: none;
+}
+
+/* ═══════════════════════════════════════════════
+   Step 4 – Chat UI replica
+   ═══════════════════════════════════════════════ */
+.ob-chat {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.ob-chat-header {
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #6b7280;
+}
+
+.ob-chat-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+
+.ob-chat-msgs {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #ffffff;
+}
+
+.ob-msg { max-width: 85%; }
+.ob-msg.ai  { align-self: flex-start; }
+.ob-msg.usr { align-self: flex-end; }
+
+.ob-msg-who {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 2px;
+}
+.ob-msg.usr .ob-msg-who { text-align: right; }
+
+.ob-msg-bubble {
+  padding: 7px 11px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.ob-msg.ai  .ob-msg-bubble { background: #f3f4f6; color: #374151; border-bottom-left-radius: 3px; }
+.ob-msg.usr .ob-msg-bubble { background: #204A79; color: #ffffff; border-bottom-right-radius: 3px; }
+
+.ob-chat-input-row {
+  border-top: 1px solid #e5e7eb;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+}
+
+.ob-chat-input {
+  flex: 1;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #9ca3af;
+  background: #f9fafb;
+  font-family: 'PT Sans', sans-serif;
+}
+
+.ob-chat-send {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #204A79;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════════════════
+   Step 5 – Screenshot shortcut
+   ═══════════════════════════════════════════════ */
+.ob-kbd-demo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  background: #E9EFFF;
+  border: 1px solid #BCD0FC;
+  border-radius: 9px;
+  margin-bottom: 12px;
+  font-size: 18px;
+}
+
+.ob-kbd {
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  font-family: monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #374151;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1);
+}
+
+/* ═══════════════════════════════════════════════
+   Step 6 – AI Toolkit groups
+   ═══════════════════════════════════════════════ */
+.ob-tool-group {
+  margin-bottom: 14px;
+}
+
+.ob-tool-group-label {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #204A79;
+  margin-bottom: 3px;
+}
+
+.ob-tool-group-desc {
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 8px;
+  line-height: 1.45;
+}
+
+/* ── Proceed confirmation modal ── */
+.ob-modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  border-radius: 14px;
+}
+
+.ob-modal {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 22px 24px 18px;
+  width: 300px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+}
+
+.ob-modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.ob-modal-body {
+  font-size: 14px;
+  color: #4b5563;
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+.ob-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ── Chip grid ── */
+.ob-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 12px;
+}
+
+.ob-chip {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  border: 1.5px solid #d1d5db;
+  color: #4b5563;
+  cursor: pointer;
+  background: #ffffff;
+  transition: all 0.12s;
+  user-select: none;
+  font-family: 'PT Sans', sans-serif;
+}
+.ob-chip:hover  { border-color: #BCD0FC; color: #204A79; }
+.ob-chip.on     { background: #204A79; border-color: #204A79; color: #ffffff; }
+.ob-chip.dashed { border-style: dashed; color: #9ca3af; }
+
+.ob-custom-input {
+  width: 100%;
+  border: 1.5px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #374151;
+  outline: none;
+  transition: border-color 0.15s;
+  font-family: 'PT Sans', sans-serif;
+}
+.ob-custom-input:focus { border-color: #204A79; }
+
+/* ═══════════════════════════════════════════════
+   Step 7 – Learning path cards
+   ═══════════════════════════════════════════════ */
+.ob-path-card {
+  border: 1.5px solid #e5e7eb;
+  border-radius: 9px;
+  padding: 10px 12px;
+  margin-bottom: 7px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ob-path-card:hover { border-color: #BCD0FC; }
+.ob-path-card.on    { border-color: #204A79; background: #E9EFFF; }
+
+.ob-path-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 3px;
+}
+
+.ob-path-title { font-size: 14px; font-weight: 700; color: #111827; }
+
+.ob-path-tag {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.ob-path-tag.foundation   { background: #E9EFFF; color: #204A79; }
+.ob-path-tag.intermediate { background: #ecfdf5; color: #065f46; }
+.ob-path-tag.focus        { background: #fef9c3; color: #854d0e; }
+.ob-path-tag.custom       { background: #fce7f3; color: #9d174d; }
+
+.ob-path-desc { font-size: 13px; color: #6b7280; line-height: 1.4; margin-bottom: 5px; }
+
+.ob-path-ds { display: flex; flex-wrap: wrap; gap: 4px; }
+.ob-path-d {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.ob-custom-goal {
+  width: 100%;
+  border: 1.5px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #374151;
+  resize: none;
+  outline: none;
+  margin-top: 7px;
+  font-family: 'PT Sans', sans-serif;
+  transition: border-color 0.15s;
+}
+.ob-custom-goal:focus { border-color: #204A79; }
+
+/* ═══════════════════════════════════════════════
+   Step 8 – Summary
+   ═══════════════════════════════════════════════ */
+.ob-summary-section { margin-bottom: 10px; }
+
+.ob-summary-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 5px;
+}
+
+.ob-summary-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.ob-summary-chip {
+  font-size: 14px;
+  background: #f3f4f6;
+  border-radius: 999px;
+  padding: 4px 12px;
+  color: #374151;
+}
+.ob-summary-chip.empty { color: #9ca3af; font-style: italic; }
+
+.ob-divider { height: 1px; background: #f3f4f6; margin: 10px 0; }
+
+.ob-summary-note {
+  font-size: 13px;
+  color: #9ca3af;
+  line-height: 1.5;
+  margin-top: 6px;
+}
+
+/* ═══════════════════════════════════════════════
+   Step 3 – Direct flow: real mini-UI replicas
+   ═══════════════════════════════════════════════ */
+.ob-direct-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ob-direct-step-label {
+  font-size: 13px;
+  color: #6b7280;
+  padding: 0 2px 2px;
+  line-height: 1.3;
+}
+.ob-direct-step-label strong { color: #374151; }
+
+.ob-direct-arrow {
+  text-align: center;
+  font-size: 11px;
+  color: #d1d5db;
+  line-height: 1;
+  margin: 0;
+}
+
+/* Each panel is a mini replica of a real UI screen */
+.ob-direct-panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+
+/* ── Panel 1: macOS menu bar with fox tray icon ── */
+.ob-mini-menubar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 22px;
+  padding: 0 8px;
+  background: rgba(240,240,240,0.95);
+  border-bottom: 1px solid #d1d5db;
+}
+
+.ob-mini-menubar-left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 9px;
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.ob-mini-apple {
+  font-size: 11px;
+  color: #374151;
+}
+
+.ob-mini-menubar-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ob-mini-fox-tray {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.ob-mini-menubar-time {
+  font-size: 9px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.ob-mini-window-body {
+  padding: 7px 10px;
+  font-size: 10px;
+  color: #9ca3af;
+  text-align: center;
+  font-style: italic;
+}
+
+/* ── Panel 2: "+" dropdown over toolbar ── */
+.ob-mini-dropdown-panel {
+  background: white;
+  border-bottom: 1px solid #f3f4f6;
+  border-radius: 6px;
+  margin: 5px 7px 3px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,.10);
+}
+
+.ob-mini-dropdown-item {
+  font-size: 10.5px;
+  color: #374151;
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.ob-mini-dropdown-item:last-child { border-bottom: none; }
+
+.ob-mini-dropdown-hl {
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 700;
+}
+
+/* ── Shared mini toolbar strip ── */
+.ob-mini-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  background: white;
+  border-top: 1px solid #f3f4f6;
+  flex-wrap: nowrap;
+}
+
+.ob-mini-plus-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid #d1d5db;
+  background: white;
+  font-size: 14px;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  font-weight: 300;
+}
+
+.ob-mini-plus-active {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.ob-mini-ws-chip {
+  font-size: 9.5px;
+  color: #6b7280;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 1.5px 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ob-mini-aicoach-chip {
+  font-size: 9.5px;
+  color: #7c3aed;
+  background: #ede9fe;
+  border: 1.5px solid #c4b5fd;
+  border-radius: 999px;
+  padding: 1.5px 7px;
+  white-space: nowrap;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.ob-mini-model-chip {
+  font-size: 9px;
+  color: #6b7280;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ob-mini-send-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #9ca3af;
+  color: white;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ── Panel 3: Mode selection modal ── */
+.ob-mini-mode-modal {
+  padding: 8px 8px 6px;
+}
+
+.ob-mini-mode-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #111827;
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.ob-mini-mode-sub {
+  font-size: 9.5px;
+  color: #9ca3af;
+  text-align: center;
+  margin-bottom: 7px;
+}
+
+.ob-mini-mode-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.ob-mini-mode-card {
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 7px 6px;
+  text-align: center;
+  background: white;
+}
+
+.ob-mini-mode-card-on {
+  border-color: #204A79;
+  background: #E9EFFF;
+  box-shadow: 0 0 0 1.5px #BCD0FC;
+}
+
+.ob-mini-mode-fox {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  margin: 0 auto 3px;
+  display: block;
+}
+
+.ob-mini-mode-icon {
+  font-size: 30px;
+  margin-bottom: 3px;
+  line-height: 1;
+}
+
+.ob-mini-mode-card-name {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 1px;
+}
+
+.ob-mini-mode-card-desc {
+  font-size: 8.5px;
+  color: #6b7280;
+}
+
+/* ── Panel 4: Chat input with AI Coach chip ── */
+.ob-mini-chat-placeholder {
+  padding: 7px 10px 4px;
+  font-size: 10.5px;
+  color: #9ca3af;
+}
+
+.ob-mini-interval-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px 4px;
+  font-size: 9px;
+  color: #9ca3af;
+  border-top: 1px solid #f3f4f6;
+  background: #fafafa;
+  flex-wrap: nowrap;
+}
+
+.ob-mini-interval-val {
+  font-size: 9px;
+  font-weight: 700;
+  color: #374151;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.ob-mini-idle-badge {
+  font-size: 9px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.ob-mini-help-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #d1d5db;
+  color: #9ca3af;
+  font-size: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  font-weight: 700;
+}

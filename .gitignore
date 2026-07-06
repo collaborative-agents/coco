@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+downloads/
+*.egg-info/
+*.egg
+.venv/
+venv/
+
+# uv
+uv.lock
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Test / coverage
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Secrets / local config
+.env
+.env.local
+*.pem
+gcp_credentials.json
+*credentials*.json
+
+# Node / Electron
+node_modules/
+.webpack/
+out/
+service-dist/
+desktop/dist/
+desktop/.erb/dll/
+# Electron-builder outputs. Keep release/app/package.json (the committed app
+# manifest); ignore only generated build artifacts under it.
+desktop/release/build/
+desktop/release/app/dist/
+desktop/release/app/node_modules/
+
+# Logs & local data
+logs/
+*.log
+records/
+records_debug*/
+
+# OS
+.DS_Store

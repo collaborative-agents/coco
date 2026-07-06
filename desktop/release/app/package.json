@@ -1,0 +1,18 @@
+{
+  "name": "coco",
+  "version": "1.0.0",
+  "description": "Coco, your proactive co-assistant",
+  "license": "MIT",
+  "author": {
+    "name": "Yijia Shao",
+    "email": "shaoyj.echo@gmail.com",
+    "url": "https://github.com/collaborative-agents/coco"
+  },
+  "main": "./dist/main/main.js",
+  "scripts": {
+    "rebuild": "node -r ts-node/register ../../.erb/scripts/electron-rebuild.js",
+    "postinstall": "npm run rebuild && npm run link-modules",
+    "link-modules": "node -r ts-node/register ../../.erb/scripts/link-modules.ts"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,48 @@
+{
+  "app": {
+    "name": "Coco"
+  },
+  "services": [
+    {
+      "id": "tutor-server",
+      "name": "Tutor Server",
+      "enabled": true,
+      "type": "python",
+      "command": "uv",
+      "args": [
+        "run", "python", "-m", "proactive_tutor.tutor_server",
+        "--port=8081",
+        "--model_name=tinfoil/gemma4-31b"
+      ],
+      "cwd": "${PROJECT_ROOT}",
+      "shell": true,
+      "restartOnCrash": true,
+      "logPath": "${ELECTRON_UI_ROOT}/logs/tutor-server.log",
+      "env": {
+        "ANTHROPIC_API_KEY": ""
+      }
+    },
+    {
+      "id": "sensing-server",
+      "name": "Sensing Server",
+      "enabled": true,
+      "type": "python",
+      "command": "uv",
+      "args": [
+        "run", "python", "-m", "lib.sensing.sensing.sensing_server",
+        "--port=8080",
+        "--ai_tutoring=True",
+        "--tutor_url=http://localhost:8081",
+        "--observer_model=tinfoil/gemma4-31b",
+        "--observer_interval_seconds=30"
+      ],
+      "cwd": "${PROJECT_ROOT}",
+      "shell": true,
+      "restartOnCrash": true,
+      "logPath": "${ELECTRON_UI_ROOT}/logs/sensing-server.log",
+      "env": {
+        "GEMINI_API_KEY": ""
+      }
+    }
+  ]
+}
