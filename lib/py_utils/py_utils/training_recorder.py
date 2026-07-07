@@ -57,7 +57,7 @@ def default_records_dir(fallback: str | None = None) -> str:
         return os.path.expanduser(env)
     if fallback:
         return os.path.expanduser(fallback)
-    return os.path.expanduser("~/Downloads/records_debug")
+    return os.path.expanduser("~/Downloads/coco-records")
 
 
 class TrainingRecorder:

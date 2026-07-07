@@ -147,8 +147,9 @@ cost (each observation is one multimodal call). Set `0` to disable the ticker
 #### Training data
 
 Each run writes append-only JSONL into a shared directory — `$COCO_RECORDS_DIR`
-if set (so the sensing and tutor processes write to one joinable dir), else
-`~/Downloads/records_debug_<timestamp>/` (`py_utils/training_recorder.py`):
+if set (so the sensing and tutor processes write to one joinable dir; the
+desktop app points this at `coco-records/` in its user-data folder), else
+`~/Downloads/coco-records/` (`py_utils/training_recorder.py`):
 
 - `observations.jsonl` — every observer call: input prompt, output JSON,
   screenshot paths. *(both modes)*
@@ -161,9 +162,15 @@ if set (so the sensing and tutor processes write to one joinable dir), else
   / `thumbs_up` / `thumbs_down`) on a bubble or chat message; an "ignore" is a
   `shown` row with no matching `engage`/`dismiss`, derived offline.
 
-Observer screenshots are deleted after the observer reads them unless
-`COLLECT_TRAINING_SCREENSHOTS=1`, which copies them into the run dir for observer
-training.
+There are two data modes, both selected by a single flag:
+
+- **Normal usage** (default): observer screenshots are deleted the instant the
+  observer has read them, so images never pile up on disk. Only the small text
+  JSONL logs above remain.
+- **Training-collection mode** (`COLLECT_TRAINING_SCREENSHOTS=1`): screenshots
+  are copied into `observer_screenshots/` inside the run dir before deletion, so
+  they can be used to train the observer. Privacy-sensitive and disk-heavy —
+  enable it deliberately.
 
 ### Usage Example
 

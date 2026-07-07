@@ -89,6 +89,9 @@ let chatWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let onboardingWindow: BrowserWindow | null = null;
 let sessionSetupWindow: BrowserWindow | null = null;
+// True once the Python services have been started. Guards against double-start
+// and lets us defer startup until the user has chosen their models.
+let observerStarted = false;
 // isFloatMode: chat panel is in narrow side-panel mode (vs. expanded width).
 let isFloatMode = true;
 // Set true once the app is genuinely quitting so window 'close' handlers stop
@@ -562,10 +565,22 @@ ipcMain.on('show-session-setup', () => {
 // Read the user's onboarding profile for the AI tools and tutor mode they
 // selected. Returns sensible defaults when the file is missing or malformed.
 // Shared by createProactiveTutorSession() and the instant-suggestion precompute.
-function readProfile(): { aiTools: string[]; scenario: string; customObserverPrompt: string } {
+function readProfile(): {
+  aiTools: string[];
+  scenario: string;
+  customObserverPrompt: string;
+  tutorModel: string;
+  observerModel: string;
+} {
   let aiTools: string[] = [];
   let scenario = 'everyday_support';
   let customObserverPrompt = '';
+  // Empty when the user hasn't chosen a model. The desktop app imposes no
+  // default — an empty value passes through config.json's ${TUTOR_MODEL} /
+  // ${OBSERVER_MODEL} and each Python service falls back to its own built-in
+  // default. This keeps the model source of truth in one place (the services).
+  let tutorModel = '';
+  let observerModel = '';
   try {
     const profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
     if (typeof profile.tutorScenario === 'string' && profile.tutorScenario) {
@@ -577,6 +592,12 @@ function readProfile(): { aiTools: string[]; scenario: string; customObserverPro
     if (typeof profile.customSystemPrompt === 'string' && profile.customSystemPrompt.trim()) {
       customObserverPrompt = profile.customSystemPrompt;
     }
+    if (typeof profile.tutorModel === 'string' && profile.tutorModel.trim()) {
+      tutorModel = profile.tutorModel.trim();
+    }
+    if (typeof profile.observerModel === 'string' && profile.observerModel.trim()) {
+      observerModel = profile.observerModel.trim();
+    }
     // "Custom" mode customizes only the sensing observer prompt. The judge/tutor
     // still run on a real base scenario, so map 'custom' → 'everyday_support'.
     if (scenario === 'custom') {
@@ -585,7 +606,7 @@ function readProfile(): { aiTools: string[]; scenario: string; customObserverPro
   } catch (err) {
     log.warn(`[Profile] Could not read profile at ${profilePath()}: ${err}.`);
   }
-  return { aiTools, scenario, customObserverPrompt };
+  return { aiTools, scenario, customObserverPrompt, tutorModel, observerModel };
 }
 
 // ── Instant suggestion precompute cache ─────────────────────────────────────
@@ -1005,7 +1026,23 @@ ipcMain.handle('get-activity-history', async (_event, sinceTs?: number) => {
 ipcMain.removeHandler('update-settings');
 ipcMain.handle(
   'update-settings',
-  async (_event, { scenario, aiTools }: { scenario: string; aiTools: string[] }) => {
+  async (
+    _event,
+    {
+      scenario,
+      aiTools,
+      tutorModel,
+      observerModel,
+    }: {
+      scenario: string;
+      aiTools: string[];
+      tutorModel?: string;
+      observerModel?: string;
+    },
+  ) => {
+    // Empty means "no explicit choice" — the service uses its built-in default.
+    const nextTutorModel = (tutorModel ?? '').trim();
+    const nextObserverModel = (observerModel ?? '').trim();
     // 1. Persist into the profile (merged with existing fields).
     try {
       let profile: Record<string, unknown> = {};
@@ -1016,10 +1053,24 @@ ipcMain.handle(
       }
       profile.tutorScenario = scenario;
       profile.aiTools = aiTools;
+      profile.tutorModel = nextTutorModel;
+      profile.observerModel = nextObserverModel;
       fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
     } catch (err) {
       log.error('[Settings] Failed to persist profile:', err);
       return { success: false, error: String(err) };
+    }
+
+    // Keep the env in sync so a later service (re)start uses the new models.
+    process.env.TUTOR_MODEL = nextTutorModel;
+    process.env.OBSERVER_MODEL = nextObserverModel;
+
+    // If the services were gated off waiting for a model choice, boot them now
+    // (with the models just saved). The live-apply below then no-ops on the
+    // cold start since the servers come up already configured.
+    if (!observerStarted && nextTutorModel && nextObserverModel) {
+      log.info('[Settings] Models configured — starting services.');
+      startObserver();
     }
 
     // 2. Apply live to the running servers (best-effort).
@@ -1030,8 +1081,25 @@ ipcMain.handle(
     try {
       await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
       await axios.post(`${tutor}/context/ai_tools`, { ai_tools: aiTools }, { timeout: 8000 });
+      // Only push a model when the user set one; an empty choice keeps whatever
+      // the service already runs (its built-in default) until the next restart.
+      if (nextTutorModel) {
+        await axios.post(`${tutor}/config/model`, { model: nextTutorModel }, { timeout: 8000 });
+      }
     } catch (err) {
       log.warn(`[Settings] Tutor update failed: ${(err as Error).message}`);
+    }
+    // Swap the observer model live (no restart) on the sensing server.
+    if (nextObserverModel) {
+      try {
+        await axios.post(
+          `${sensing}/config/observer_model`,
+          { model: nextObserverModel },
+          { timeout: 8000 },
+        );
+      } catch (err) {
+        log.warn(`[Settings] Observer model update failed: ${(err as Error).message}`);
+      }
     }
     // Update the observer/judge scenario too (sensing) if a session is running.
     if (currentSessionId) {
@@ -1152,20 +1220,60 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
 
+// Warning shown when the user hasn't chosen their models yet. Its action opens
+// the chat (where ⚙ Settings → Models lives).
+const showModelsRequiredWarning = () => {
+  showNotification({
+    message:
+      'Coco is paused. Choose a tutor and an observer model to begin — open the chat, then ⚙ Settings → Models. Coco starts sensing as soon as you save.',
+    actionLabel: 'Open settings',
+  });
+};
+
+// Effective model ids: an explicit shell/.env value wins, else the saved
+// profile (Settings → Models). Empty string when neither is set.
+const effectiveModels = (): { tutor: string; observer: string } => {
+  const { tutorModel, observerModel } = readProfile();
+  return {
+    tutor: (process.env.TUTOR_MODEL || tutorModel || '').trim(),
+    observer: (process.env.OBSERVER_MODEL || observerModel || '').trim(),
+  };
+};
+
 // Starts the sensing services and observation stream. Called once onboarding
-// is complete (or immediately on subsequent launches where it's already done).
+// is complete (or immediately on subsequent launches where it's already done),
+// and again from update-settings the moment the user first saves their models.
 const startObserver = () => {
-  // Shared training-data directory for this run. Both the sensing server
-  // (observer/judge) and the tutor server read $COCO_RECORDS_DIR so all their
-  // JSONL logs land in one joinable directory. Set before services spawn so
-  // the children inherit it.
+  // Already running — nothing to do (guards the two call sites + the
+  // start-on-save path in update-settings).
+  if (observerStarted) return;
+
+  // Gate on model choice: until BOTH a tutor and an observer model are set
+  // (via Settings → Models, or TUTOR_MODEL/OBSERVER_MODEL in the env), we do
+  // not spawn the Python services. Instead we surface a warning that routes to
+  // Settings. Saving models calls startObserver() again, passing this gate.
+  const { tutor: tutorModel, observer: observerModel } = effectiveModels();
+  if (!tutorModel || !observerModel) {
+    log.warn('[Models] No models chosen yet — services not started.');
+    showModelsRequiredWarning();
+    return;
+  }
+  observerStarted = true;
+
+  // Shared records directory. Both the sensing server (observer/judge) and the
+  // tutor server read $COCO_RECORDS_DIR so all their JSONL logs — and, in
+  // training-collection mode, retained screenshots — land in one joinable
+  // directory. It lives alongside the user's other local data (memory,
+  // profile, activity history) under the app's userData dir. Set before
+  // services spawn so the children inherit it.
   if (!process.env.COCO_RECORDS_DIR) {
     const dir = path.join(
-      app.getPath('downloads'),
-      `records_debug_${Math.floor(Date.now() / 1000)}`,
+      app.getPath('userData'),
+      'coco-records',
+      `session_${Math.floor(Date.now() / 1000)}`,
     );
     process.env.COCO_RECORDS_DIR = dir;
-    log.info(`[Training] COCO_RECORDS_DIR=${dir}`);
+    log.info(`[Records] COCO_RECORDS_DIR=${dir}`);
   }
 
   // Expose the app's user-data dir to the services so sensing can persist the
@@ -1175,6 +1283,12 @@ const startObserver = () => {
     process.env.COCO_USER_DATA_DIR = app.getPath('userData');
     log.info(`[Profile] COCO_USER_DATA_DIR=${process.env.COCO_USER_DATA_DIR}`);
   }
+
+  // Pass the resolved models to the services. config.json references
+  // ${TUTOR_MODEL}/${OBSERVER_MODEL}, which the service manager expands from env.
+  process.env.TUTOR_MODEL = tutorModel;
+  process.env.OBSERVER_MODEL = observerModel;
+  log.info(`[Models] tutor=${tutorModel} observer=${observerModel}`);
 
   try {
     serviceManager.startAll();

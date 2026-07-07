@@ -1,3 +1,4 @@
+"""Modified from https://github.com/GeneralUserModels/gum/blob/main/gum/gum.py"""
 from __future__ import annotations
 
 import asyncio
@@ -92,7 +93,7 @@ class GUM:
         self,
         user_name: str,
         *observers: Observer,
-        data_directory: str = "~/Downloads/records_debug",
+        data_directory: str = "~/Downloads/coco-records",
         db_name: str = "actions.db",
         max_concurrent_updates: int = 4,
         verbosity: int = logging.INFO,

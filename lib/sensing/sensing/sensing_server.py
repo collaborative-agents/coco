@@ -109,6 +109,12 @@ class HotKeyBufferResponse(BaseModel):
     count: int
 
 
+class ObserverModelRequest(BaseModel):
+    """Request model for switching the observer (multimodal) model at runtime."""
+
+    model: str
+
+
 class SessionConfigRequest(BaseModel):
     """Request model for configuring the streamer with a tutor session.
 
@@ -177,6 +183,24 @@ async def guidance_delivered():
         logger.info("Screen idle timer reset (guidance delivered)")
     if progress_detector is not None:
         progress_detector.reset_cooldown()
+    total = await streamer.get_total_stored_actions() if streamer else 0
+    return StatusResponse(status="ok", total_actions=total)
+
+
+@app.post("/config/observer_model", response_model=StatusResponse)
+async def set_observer_model(req: ObserverModelRequest):
+    """Switch the observer (multimodal) model live — no restart needed.
+
+    The processor reads ``_observer_model`` on every observation, so mutating it
+    takes effect on the next tick. Mirrors the tutor server's ``/config/model``.
+    """
+    ai_proc = _get_ai_processor()
+    if ai_proc is None:
+        raise HTTPException(
+            status_code=503, detail="AI tutoring processor not running"
+        )
+    ai_proc._observer_model = req.model
+    logger.info(f"Observer model updated: {req.model}")
     total = await streamer.get_total_stored_actions() if streamer else 0
     return StatusResponse(status="ok", total_actions=total)
 
@@ -732,14 +756,12 @@ async def main_async(
     timestamp = int(time.time())
     # Prefer the shared records dir ($COCO_RECORDS_DIR, set by the launcher so the
     # sensing and tutor processes write to one joinable dir); else per-run default.
-    session_dir = default_records_dir(fallback=f"~/Downloads/records_debug_{timestamp}")
+    session_dir = default_records_dir(fallback=f"~/Downloads/coco-records/session_{timestamp}")
     db_path = f"{session_dir}/actions.db"
     screenshot_dir = f"{session_dir}/screenshots"
     import os as _os
 
     _progress_log_path = _os.path.expanduser(f"{session_dir}/progress_judgments.jsonl")
-    # db_path = "~/Downloads/records_debug/actions.db"
-    # screenshot_dir = "~/Downloads/records_debug/screenshots"
 
     # Initialize screen observer
     screen = Screen(
@@ -886,6 +908,10 @@ def main(
     enable_judge: bool = False,
     observer_interval_seconds: float = 15.0,
 ):
+    # An empty --observer_model (e.g. the desktop app leaving the choice unset)
+    # falls back to this built-in default rather than an invalid empty model.
+    if not (observer_model or "").strip():
+        observer_model = "gemini/gemini-3-flash-preview"
     asyncio.run(
         main_async(
             port=port,

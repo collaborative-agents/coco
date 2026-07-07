@@ -50,6 +50,7 @@ desktop/release/app/node_modules/
 logs/
 *.log
 records/
+coco-records/
 records_debug*/
 
 # OS

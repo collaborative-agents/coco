@@ -2,6 +2,9 @@
 name = "coco"
 version = "0.1.0"
 description = "Coco — a proactive desktop agent that senses user activity and offers timely suggestions."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Yijia Shao", email = "shaoyj.echo@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "sensing",

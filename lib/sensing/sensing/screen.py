@@ -145,7 +145,7 @@ class Screen(Observer):
     # ─────────────────────────────── construction
     def __init__(
         self,
-        screenshots_dir: str = "~/Downloads/records_debug/screenshots",
+        screenshots_dir: str = "~/Downloads/coco-records/screenshots",
         hotkey_captures_dir: str | None = None,
         skip_when_visible: str | list[str] | None = None,
         history_k: int = 10,

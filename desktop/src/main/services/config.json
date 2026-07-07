@@ -12,7 +12,7 @@
       "args": [
         "run", "python", "-m", "proactive_tutor.tutor_server",
         "--port=8081",
-        "--model_name=tinfoil/gemma4-31b"
+        "--model_name=${TUTOR_MODEL}"
       ],
       "cwd": "${PROJECT_ROOT}",
       "shell": true,
@@ -33,7 +33,7 @@
         "--port=8080",
         "--ai_tutoring=True",
         "--tutor_url=http://localhost:8081",
-        "--observer_model=tinfoil/gemma4-31b",
+        "--observer_model=${OBSERVER_MODEL}",
         "--observer_interval_seconds=30"
       ],
       "cwd": "${PROJECT_ROOT}",

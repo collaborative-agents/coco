@@ -716,6 +716,10 @@ async def main_async(port: int = 8081, model_name: str = "gemini/gemini-2.5-pro"
 
 
 def main(port: int = 8081, model_name: str = "gemini/gemini-2.5-pro"):
+    # An empty --model_name (e.g. the desktop app leaving the choice unset)
+    # falls back to this built-in default rather than an invalid empty model.
+    if not (model_name or "").strip():
+        model_name = "gemini/gemini-2.5-pro"
     asyncio.run(main_async(port=port, model_name=model_name))
 
 

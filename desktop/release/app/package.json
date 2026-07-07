@@ -1,8 +1,8 @@
 {
   "name": "coco",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Coco, your proactive co-assistant",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": {
     "name": "Yijia Shao",
     "email": "shaoyj.echo@gmail.com",
