@@ -195,6 +195,7 @@ const S: Record<string, React.CSSProperties> = {
   modelLabel: { fontSize: 12, fontWeight: 600, color: '#374151' },
   modelHint: { fontWeight: 400, color: '#9ca3af' },
   modelNote: { fontSize: 11, lineHeight: 1.5, color: '#9ca3af', marginTop: -2, marginBottom: 14 },
+  modelLink: { color: ACCENT, textDecoration: 'underline', cursor: 'pointer' },
   memoryArea: { width: '100%', minHeight: 96, resize: 'vertical', border: '1.5px solid #d1d5db', borderRadius: 8, padding: '8px 11px', fontSize: 13, lineHeight: 1.5, color: '#374151', outline: 'none', fontFamily: FONT, boxSizing: 'border-box', marginBottom: 8 },
   sectionDivider: { height: 1, background: '#f3f4f6', margin: '4px 0 14px' },
   helpText: { fontSize: 11.5, color: '#9ca3af', lineHeight: 1.5, marginBottom: 8 },
@@ -635,8 +636,17 @@ export default function SessionChatView() {
           </div>
           <div style={S.modelNote}>
             Use a <code>provider/model</code> id (e.g. <code>{EXAMPLE_TUTOR_MODEL}</code>), and set
-            the matching API key in <code>.env</code>. Both are required — Coco stays paused until
-            they&apos;re set. Applied live — no restart needed.
+            the matching API key in <code>.env</code>. See the{' '}
+            <a
+              href="https://github.com/collaborative-agents/coco/blob/main/lib/external_api/README.md#model-providers"
+              target="_blank"
+              rel="noreferrer"
+              style={S.modelLink}
+            >
+              supported providers &amp; handles (and their privacy trade-offs)
+            </a>{' '}
+            in the README. Both are required — Coco stays paused until they&apos;re set. Applied
+            live — no restart needed.
           </div>
 
           <div style={S.saveRow}>

@@ -194,6 +194,13 @@ uv run python -m sensing.sensing_server --observer_model=anthropic/claude-sonnet
 uv run python -m sensing.sensing_server --observer_interval_seconds=10
 ```
 
+### Model providers
+
+The observer model accepts any `provider/model` id, routed by prefix through the
+shared LLM dispatcher. See [`external_api`](../external_api/README.md#model-providers)
+for the full list of supported backends, their handles, and the **privacy
+trade-offs** of each (the observer sends screenshots to whichever model you pick).
+
 ### Configuration
 
 Key parameters:
