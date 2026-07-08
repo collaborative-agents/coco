@@ -3,17 +3,11 @@ Stateless instant-suggestion generator.
 
 Given a single observation (plus optional task label and the user's AI tools),
 produce a ready-to-use suggestion that the desktop UI can reveal immediately
-when the user clicks "Help me with this" — with no session, conversation
-history, or DB required.
+when the user clicks "Help me with this".
 
 Two kinds of suggestion are produced (decided by the LLM):
   - ``content``  : a finished artifact (email, Slack message, …) to copy.
   - ``delegate`` : a ready-to-paste prompt plus the target tool to hand it to.
-
-This is intentionally standalone rather than reusing ``TutorSystem``, which
-carries per-session conversation history, curriculum state, a training
-recorder, and a single mutable agent — none of which exist pre-session, and
-which would not be safe under concurrent requests.
 """
 
 from __future__ import annotations
@@ -26,8 +20,6 @@ from proactive_tutor.ai_tool_capabilities import (
     format_tool_names,
     get_capabilities_for_tools,
 )
-
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-20250514"
 
 _PROMPT_PATH = Path(__file__).parent / "prompts_everyday" / "instant_suggestion.txt"
 INSTANT_SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
@@ -146,7 +138,7 @@ def generate_instant_suggestion(
     task_label: str | None,
     scenario: str,
     ai_tools: list[str],
-    model: str = DEFAULT_MODEL,
+    model: str,
 ) -> dict:
     """Generate a single ready-to-use suggestion for *observation*.
 

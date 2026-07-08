@@ -101,11 +101,6 @@ def _install_custom_observer_prompt(prompt: str) -> str:
 
 _OBSERVER_PROMPT: str = _load_observer_prompt()
 
-# Allow overriding the model via environment variable; default to Gemini 2.5 Pro
-# because the observer prompt was designed for a multimodal Gemini model.
-# _OBSERVER_MODEL: str = os.getenv("OBSERVER_MODEL", "gemini/gemini-2.5-pro")
-_OBSERVER_MODEL = "gemini/gemini-2.5-pro"
-
 
 def build_multimodal_messages(
     *,
@@ -145,8 +140,8 @@ def _observe(
     text_prompt: str,
     image_paths: list[str] | None = None,
     *,
+    model: str,
     system_prompt: str = _OBSERVER_PROMPT,
-    model: str = _OBSERVER_MODEL,
     max_tokens: int = 4096,
 ) -> str:
     """Generate an observer response."""
@@ -549,7 +544,8 @@ class AiTutoringProcessor(SegmentProcessor):
         tutor_url: str,
         ai_tutor_output_log: str,
         snapshot_buffer_max_size: int = 6,
-        observer_model: str = _OBSERVER_MODEL,
+        *,
+        observer_model: str,
         scenario: str = "everyday_support",
     ) -> None:
         self._http_client = http_client
@@ -600,7 +596,8 @@ class AiTutoringProcessor(SegmentProcessor):
         tutor_url: str,
         ai_tutor_output_log: str,
         snapshot_buffer_max_size: int = 6,
-        observer_model: str = _OBSERVER_MODEL,
+        *,
+        observer_model: str,
         scenario: str = "everyday_support",
     ) -> AiTutoringProcessor:
         """Build an ``AiTutoringProcessor`` from high-level config values.

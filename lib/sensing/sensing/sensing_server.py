@@ -904,14 +904,16 @@ def main(
     workflow_induction: bool = False,
     ai_tutoring: bool = True,
     tutor_url: str = "http://localhost:8081",
-    observer_model: str = "gemini/gemini-3-flash-preview",
+    observer_model: str = "",
     enable_judge: bool = False,
     observer_interval_seconds: float = 15.0,
 ):
-    # An empty --observer_model (e.g. the desktop app leaving the choice unset)
-    # falls back to this built-in default rather than an invalid empty model.
+    # The observer model must be supplied explicitly; there is no built-in
+    # default so the caller (CLI or desktop app) always chooses it consciously.
     if not (observer_model or "").strip():
-        observer_model = "gemini/gemini-3-flash-preview"
+        raise ValueError(
+            "--observer_model is required"
+        )
     asyncio.run(
         main_async(
             port=port,

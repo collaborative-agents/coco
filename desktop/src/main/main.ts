@@ -575,10 +575,9 @@ function readProfile(): {
   let aiTools: string[] = [];
   let scenario = 'everyday_support';
   let customObserverPrompt = '';
-  // Empty when the user hasn't chosen a model. The desktop app imposes no
-  // default — an empty value passes through config.json's ${TUTOR_MODEL} /
-  // ${OBSERVER_MODEL} and each Python service falls back to its own built-in
-  // default. This keeps the model source of truth in one place (the services).
+  // Empty when the user hasn't chosen a model. The Python services requires
+  // an explicit model, so an empty value here must never reach them —
+  // startObserver() gates on both models being set before spawning the services.
   let tutorModel = '';
   let observerModel = '';
   try {
@@ -1040,7 +1039,9 @@ ipcMain.handle(
       observerModel?: string;
     },
   ) => {
-    // Empty means "no explicit choice" — the service uses its built-in default.
+    // Empty means "no explicit choice". The services require a model, so an
+    // empty value is never sent: the start/live-apply steps below are all gated
+    // on a non-empty model (services stay gated off until the user picks one).
     const nextTutorModel = (tutorModel ?? '').trim();
     const nextObserverModel = (observerModel ?? '').trim();
     // 1. Persist into the profile (merged with existing fields).
@@ -1082,7 +1083,7 @@ ipcMain.handle(
       await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
       await axios.post(`${tutor}/context/ai_tools`, { ai_tools: aiTools }, { timeout: 8000 });
       // Only push a model when the user set one; an empty choice keeps whatever
-      // the service already runs (its built-in default) until the next restart.
+      // model the service is already running until the next restart.
       if (nextTutorModel) {
         await axios.post(`${tutor}/config/model`, { model: nextTutorModel }, { timeout: 8000 });
       }

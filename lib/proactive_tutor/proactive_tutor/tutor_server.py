@@ -1,16 +1,5 @@
 """
 FastAPI server exposing TutorSystem over HTTP.
-
-Run:
-    uv run python -m proactive_tutor.tutor_server
-
-Endpoints:
-    GET  /health
-    POST /events/user_prompt   {observation, user_text?, image_paths?} -> {guidance}
-    POST /events/pause         {observation, text_prompt} -> {guidance}
-    GET  /context              -> {conversation_history, problem_statement}
-    POST /context/problem_statement  {problem_statement} -> {status}
-    GET  /viz/{exec_id}        -> serves visualization HTML output
 """
 
 import asyncio
@@ -35,8 +24,9 @@ app = FastAPI(title="Tutor System API")
 tutor: TutorSystem | None = None
 
 # Model the server was started with. Used by the stateless /suggestion/instant
-# endpoint, which does not own a TutorSystem instance. Set in main_async().
-configured_model_name: str = "anthropic/claude-sonnet-4-20250514"
+# endpoint, which does not own a TutorSystem instance. Set in main_async();
+# empty until then (the server requires an explicit --model_name at startup).
+configured_model_name: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -647,7 +637,9 @@ def _run_viz_fixer(code: str, error: dict, problem_statement: str | None) -> dic
         "Now produce your JSON with fixed_code and changes_summary.",
     ]
 
-    model = tutor.tutor_agent.model if tutor else "gemini/gemini-2.5-flash"
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    model = tutor.tutor_agent.model
     raw = prompt_to_text(
         model=model,
         system_prompt=_get_viz_fixer_prompt(),
@@ -700,7 +692,7 @@ async def retry_visualization(req: VizRetryRequest):
 # ---------------------------------------------------------------------------
 
 
-async def main_async(port: int = 8081, model_name: str = "gemini/gemini-2.5-pro"):
+async def main_async(port: int = 8081, model_name: str = ""):
     global tutor, configured_model_name
     configured_model_name = model_name
     # Ensure the visualization output directory exists at startup.
@@ -715,11 +707,13 @@ async def main_async(port: int = 8081, model_name: str = "gemini/gemini-2.5-pro"
     await server.serve()
 
 
-def main(port: int = 8081, model_name: str = "gemini/gemini-2.5-pro"):
-    # An empty --model_name (e.g. the desktop app leaving the choice unset)
-    # falls back to this built-in default rather than an invalid empty model.
+def main(port: int = 8081, model_name: str = ""):
+    # The model must be supplied explicitly; there is no built-in default so the
+    # caller (CLI or desktop app) always chooses it consciously.
     if not (model_name or "").strip():
-        model_name = "gemini/gemini-2.5-pro"
+        raise ValueError(
+            "--model_name is required"
+        )
     asyncio.run(main_async(port=port, model_name=model_name))
 
 

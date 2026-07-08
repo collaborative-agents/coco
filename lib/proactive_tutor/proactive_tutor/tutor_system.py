@@ -3,7 +3,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from proactive_tutor.agents.diagnostic import DiagnosticAgent
 from proactive_tutor.agents.tutor import TutorAgent
 from proactive_tutor.ai_tool_capabilities import (
     format_tool_names,
@@ -29,15 +28,11 @@ class TutorSystem:
 
     def __init__(
         self,
-        # model_name: str = "gemini/gemini-2.5-pro",
-        model_name: str = "anthropic/claude-sonnet-4-20250514",
+        model_name: str,
         scenario: str = "everyday_support",
     ):
         self._scenario = scenario
         prompts_dir = self._prompts_dir(scenario)
-        self.diagnostic_agent = DiagnosticAgent(
-            model_name, (prompts_dir / "diagnostic.txt").read_text()
-        )
         self.tutor_agent = TutorAgent(
             model_name, (prompts_dir / "tutor.txt").read_text()
         )
@@ -195,9 +190,6 @@ class TutorSystem:
         """Reconfigure both agents to use a different model."""
         logger.info(f"[SET MODEL] {model_name}")
         prompts_dir = self._prompts_dir(self._scenario)
-        self.diagnostic_agent = DiagnosticAgent(
-            model_name, (prompts_dir / "diagnostic.txt").read_text()
-        )
         self.tutor_agent = TutorAgent(
             model_name, (prompts_dir / "tutor.txt").read_text()
         )
@@ -217,10 +209,7 @@ class TutorSystem:
         logger.info(f"[SET SCENARIO] {scenario}")
         self._scenario = scenario
         prompts_dir = self._prompts_dir(scenario)
-        model_name = self.diagnostic_agent.model
-        self.diagnostic_agent = DiagnosticAgent(
-            model_name, (prompts_dir / "diagnostic.txt").read_text()
-        )
+        model_name = self.tutor_agent.model
         self.tutor_agent = TutorAgent(
             model_name, (prompts_dir / "tutor.txt").read_text()
         )
