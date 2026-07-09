@@ -46,7 +46,10 @@ const dotenv = require('dotenv');
 app.setName('coco');
 
 if (app.isPackaged) {
-  dotenv.config({ path: path.join(process.resourcesPath, '.env') });
+  // Packaged: read .env from the user-data folder (e.g. ~/Library/Application
+  // Support/coco/.env). Bundling it via extraResources would ship the
+  // builder's API keys inside every distributed app bundle.
+  dotenv.config({ path: path.join(app.getPath('userData'), '.env') });
 } else {
   // Dev: cwd is the desktop app dir, but the canonical .env (with GEMINI_API_KEY,
   // ANTHROPIC_API_KEY, etc.) lives at the repo root, one level up.

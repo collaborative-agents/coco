@@ -723,7 +723,7 @@ async def observations_stream():
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
-async def start_fastapi_server(host: str = "0.0.0.0", port: int = 8080):
+async def start_fastapi_server(host: str = "127.0.0.1", port: int = 8080):
     """Run FastAPI with uvicorn inside asyncio loop."""
     config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server = uvicorn.Server(config)

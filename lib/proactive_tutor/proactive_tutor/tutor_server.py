@@ -702,7 +702,7 @@ async def main_async(port: int = 8081, model_name: str = ""):
     logger.info(f"Initializing TutorSystem with model {model_name}...")
     tutor = TutorSystem(model_name=model_name)
     logger.info(f"TutorSystem ready. Starting HTTP server on port {port}...")
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
 

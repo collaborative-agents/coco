@@ -259,8 +259,7 @@
     },
     "extraResources": [
       "./assets/**",
-      "./service-dist/**",
-      "./.env"
+      "./service-dist/**"
     ],
     "publish": null
   },

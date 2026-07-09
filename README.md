@@ -73,6 +73,8 @@ Coco continuously observes user actions and decides when to offer proactive sugg
 
 ## Data & privacy
 
+Coco collects nothing — no telemetry, no analytics, no Coco servers. For a full breakdown of each component's inputs/outputs, the data-flow diagram, every file Coco writes to disk, and exactly what is sent to the VLM, see [PRIVACY.md](PRIVACY.md).
+
 ### What stays on your machine
 
 
