@@ -122,7 +122,17 @@ interface ChatMessage {
   text: string;
   images?: string[];
   isError?: boolean;
+  /** Stable id for tutor messages so thumbs feedback can reference them. */
+  id?: string;
+  /** When the message was appended — lets latency_s capture time-to-rate. */
+  ts?: number;
 }
+
+// crypto.randomUUID needs a secure context; fall back for safety.
+const makeMessageId = (): string =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 // ── Styles (inline so the view is self-contained in a transparent window) ──────
 // Palette mirrors the onboarding panel: SALT Lab blue with a light-blue accent.
@@ -174,6 +184,10 @@ const S: Record<string, React.CSSProperties> = {
   textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
   sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
   sendBtnDisabled: { opacity: 0.4, cursor: 'default' },
+  feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
+  feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
+  feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
+  feedbackBtnLocked: { opacity: 0.25, cursor: 'default' },
   typing: { alignSelf: 'flex-start', color: '#9ca3af', fontSize: 12, fontStyle: 'italic', paddingLeft: 32 },
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   // Settings panel (mirrors the onboarding toolkit step)
@@ -269,8 +283,25 @@ export default function SessionChatView() {
   const [memoryDraft, setMemoryDraft] = useState('');
   const [memoryLoaded, setMemoryLoaded] = useState('');
   const [memoryFlash, setMemoryFlash] = useState(false);
+  // One thumbs vote per tutor message, keyed by message id.
+  const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
+
+  // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
+  // same pipeline as the bubble reactions.
+  const rateMessage = (m: ChatMessage, dir: 'up' | 'down') => {
+    if (!m.id || ratings[m.id]) return;
+    setRatings((prev) => ({ ...prev, [m.id as string]: dir }));
+    window.electron?.ipcRenderer.sendMessage('training-feedback', {
+      kind: dir === 'up' ? 'thumbs_up' : 'thumbs_down',
+      surface: 'chat',
+      message_id: m.id,
+      session_id: sessionIdRef.current,
+      latency_s: m.ts ? (Date.now() - m.ts) / 1000 : null,
+      text: m.text,
+    });
+  };
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -296,7 +327,10 @@ export default function SessionChatView() {
       if (r?.error) {
         setMessages((m) => [...m, { role: 'tutor', text: r.error as string, isError: true }]);
       } else {
-        setMessages((m) => [...m, { role: 'tutor', text: r?.guidance ?? '' }]);
+        setMessages((m) => [
+          ...m,
+          { role: 'tutor', text: r?.guidance ?? '', id: makeMessageId(), ts: Date.now() },
+        ]);
       }
       scrollToBottom();
     },
@@ -313,6 +347,7 @@ export default function SessionChatView() {
       if (sessionId && sessionId !== sessionIdRef.current) {
         sessionIdRef.current = sessionId;
         setMessages([]);
+        setRatings({});
       }
       setProblem(problemStatement ?? '');
     });
@@ -644,8 +679,34 @@ export default function SessionChatView() {
             ) : (
               <>
                 <div style={S.tutorAvatar}>C</div>
-                <div style={m.isError ? S.errBubble : S.tutorBubble}>
-                  {m.isError ? m.text : <TutorMessage text={m.text} />}
+                <div>
+                  <div style={m.isError ? S.errBubble : S.tutorBubble}>
+                    {m.isError ? m.text : <TutorMessage text={m.text} />}
+                  </div>
+                  {!m.isError && m.id && (
+                    <div style={S.feedbackRow}>
+                      {(['up', 'down'] as const).map((dir) => (
+                        <button
+                          key={dir}
+                          type="button"
+                          aria-label={dir === 'up' ? 'Helpful' : 'Not helpful'}
+                          title={dir === 'up' ? 'Helpful' : 'Not helpful'}
+                          disabled={!!ratings[m.id as string]}
+                          style={{
+                            ...S.feedbackBtn,
+                            ...(ratings[m.id as string] === dir
+                              ? S.feedbackBtnRated
+                              : ratings[m.id as string]
+                                ? S.feedbackBtnLocked
+                                : {}),
+                          }}
+                          onClick={() => rateMessage(m, dir)}
+                        >
+                          {dir === 'up' ? '👍' : '👎'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             )}

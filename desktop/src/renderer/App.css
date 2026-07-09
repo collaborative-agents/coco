@@ -290,6 +290,44 @@ body,
   background: var(--bubble-accent-soft);
 }
 
+/* Thumbs up/down under a revealed suggestion. One vote — the chosen thumb
+   stays highlighted and both lock. */
+.bubble-feedback-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.bubble-feedback-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s ease, background 0.12s ease;
+  -webkit-app-region: no-drag;
+}
+
+.bubble-feedback-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--bubble-accent-soft);
+}
+
+.bubble-feedback-btn:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.bubble-feedback-btn.is-rated {
+  opacity: 1;
+  background: var(--bubble-accent-soft);
+  border-color: var(--bubble-accent);
+}
+
 /* Tier-1 (progress/observing) "?" badge: a passive explainer in the top-right
    corner. No action — hovering reveals a tooltip that points to the pet. */
 .bubble-help-badge {

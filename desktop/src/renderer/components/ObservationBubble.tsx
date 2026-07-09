@@ -66,6 +66,10 @@ export default function ObservationBubble({
   // Transient confirmation shown after Copy / Approve.
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // One rating per revealed suggestion; locks the thumbs after the first click.
+  const [rated, setRated] = useState<'up' | 'down' | null>(null);
+  // When the suggestion was revealed — lets latency_s capture time-to-rate.
+  const suggestionShownAt = useRef<number>(Date.now());
 
   // Reset clicked state when a new observation arrives. ObservationBubble is
   // never remounted between observations (same position in the tree), so local
@@ -74,7 +78,12 @@ export default function ObservationBubble({
   useEffect(() => {
     setHelpClicked(false);
     setToast(null);
+    setRated(null);
   }, [bubble?.status, bubble?.phrase]);
+
+  useEffect(() => {
+    if (bubble?.suggestion) suggestionShownAt.current = Date.now();
+  }, [bubble?.suggestion]);
 
   useEffect(
     () => () => {
@@ -106,6 +115,22 @@ export default function ObservationBubble({
     showToast(
       toolId ? `Opening ${toolLabel} — paste with ⌘V` : 'Copied to clipboard',
     );
+  };
+
+  // Rate the revealed suggestion. Logged into feedback.jsonl via the sensing
+  // server so it joins observations by observation_id.
+  const rate = (dir: 'up' | 'down') => {
+    if (rated || !suggestion) return;
+    setRated(dir);
+    window.electron?.ipcRenderer.sendMessage('training-feedback', {
+      kind: dir === 'up' ? 'thumbs_up' : 'thumbs_down',
+      surface: 'bubble',
+      observation_id: bubble?.observationId ?? null,
+      status,
+      latency_s: (Date.now() - suggestionShownAt.current) / 1000,
+      text: suggestion.copyText ?? null,
+    });
+    showToast('Thanks for the feedback');
   };
 
   return (
@@ -187,6 +212,32 @@ export default function ObservationBubble({
               Open {t.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Rate the suggested prompt/content — one vote, then it locks. */}
+      {suggestion && (
+        <div className="bubble-feedback-row">
+          <button
+            type="button"
+            className={`bubble-feedback-btn${rated === 'up' ? ' is-rated' : ''}`}
+            aria-label="Good suggestion"
+            title="Good suggestion"
+            disabled={rated !== null}
+            onClick={() => rate('up')}
+          >
+            👍
+          </button>
+          <button
+            type="button"
+            className={`bubble-feedback-btn${rated === 'down' ? ' is-rated' : ''}`}
+            aria-label="Not helpful"
+            title="Not helpful"
+            disabled={rated !== null}
+            onClick={() => rate('down')}
+          >
+            👎
+          </button>
         </div>
       )}
 
