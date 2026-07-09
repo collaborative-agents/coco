@@ -11,11 +11,6 @@ import {
   encodeCustomAgent,
 } from './observation-types';
 
-// Example model ids shown as placeholders in Settings. These are illustrative
-// only — the app imposes no default.
-const EXAMPLE_TUTOR_MODEL = 'tinfoil/gemma4-31b';
-const EXAMPLE_OBSERVER_MODEL = 'tinfoil/gemma4-31b';
-
 // ── Tutor guidance parsing ─────────────────────────────────────────────────────
 // The local tutor server returns a JSON envelope string, e.g.
 //   {"guidance": "...", "example_prompt": "...", "visualization_code": "<html>"}
@@ -191,11 +186,6 @@ const S: Record<string, React.CSSProperties> = {
   chipEmpty: { fontSize: 12, color: '#9ca3af', fontStyle: 'italic' },
   customForm: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: -6, marginBottom: 14 },
   customInput: { width: '100%', border: '1.5px solid #d1d5db', borderRadius: 8, padding: '7px 11px', fontSize: 13, color: '#374151', outline: 'none', fontFamily: FONT, boxSizing: 'border-box' },
-  modelField: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 },
-  modelLabel: { fontSize: 12, fontWeight: 600, color: '#374151' },
-  modelHint: { fontWeight: 400, color: '#9ca3af' },
-  modelNote: { fontSize: 11, lineHeight: 1.5, color: '#9ca3af', marginTop: -2, marginBottom: 14 },
-  modelLink: { color: ACCENT, textDecoration: 'underline', cursor: 'pointer' },
   memoryArea: { width: '100%', minHeight: 96, resize: 'vertical', border: '1.5px solid #d1d5db', borderRadius: 8, padding: '8px 11px', fontSize: 13, lineHeight: 1.5, color: '#374151', outline: 'none', fontFamily: FONT, boxSizing: 'border-box', marginBottom: 8 },
   sectionDivider: { height: 1, background: '#f3f4f6', margin: '4px 0 14px' },
   helpText: { fontSize: 11.5, color: '#9ca3af', lineHeight: 1.5, marginBottom: 8 },
@@ -259,19 +249,13 @@ export default function SessionChatView() {
   const [profile, setProfile] = useState<{
     scenario: string;
     aiTools: string[];
-    tutorModel: string;
-    observerModel: string;
   }>({
     scenario: 'everyday_support',
     aiTools: [],
-    tutorModel: '',
-    observerModel: '',
   });
   // Editable draft of the settings, synced from the loaded profile.
   const [editScenario, setEditScenario] = useState('everyday_support');
   const [editTools, setEditTools] = useState<string[]>([]);
-  const [editTutorModel, setEditTutorModel] = useState('');
-  const [editObserverModel, setEditObserverModel] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
   // "+ Custom" tool forms (mirrors the onboarding toolkit step).
   const [showAddChatbot, setShowAddChatbot] = useState(false);
@@ -344,14 +328,10 @@ export default function SessionChatView() {
         const next = {
           scenario: typeof p.tutorScenario === 'string' ? p.tutorScenario : 'everyday_support',
           aiTools: Array.isArray(p.aiTools) ? p.aiTools : [],
-          tutorModel: typeof p.tutorModel === 'string' ? p.tutorModel : '',
-          observerModel: typeof p.observerModel === 'string' ? p.observerModel : '',
         };
         setProfile(next);
         setEditScenario(next.scenario);
         setEditTools(next.aiTools);
-        setEditTutorModel(next.tutorModel);
-        setEditObserverModel(next.observerModel);
       })
       .catch(() => {});
   }, []);
@@ -382,19 +362,12 @@ export default function SessionChatView() {
     id;
 
   const saveSettings = async () => {
-    // Empty is allowed — it means "use the service's built-in default".
-    const tutorModel = editTutorModel.trim();
-    const observerModel = editObserverModel.trim();
     const res = await window.electron?.ipcRenderer.invoke('update-settings', {
       scenario: editScenario,
       aiTools: editTools,
-      tutorModel,
-      observerModel,
     });
     if ((res as { success?: boolean })?.success) {
-      setProfile({ scenario: editScenario, aiTools: editTools, tutorModel, observerModel });
-      setEditTutorModel(tutorModel);
-      setEditObserverModel(observerModel);
+      setProfile({ scenario: editScenario, aiTools: editTools });
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     }
@@ -403,9 +376,7 @@ export default function SessionChatView() {
   const dirty =
     editScenario !== profile.scenario ||
     editTools.length !== profile.aiTools.length ||
-    editTools.some((t) => !profile.aiTools.includes(t)) ||
-    editTutorModel.trim() !== profile.tutorModel ||
-    editObserverModel.trim() !== profile.observerModel;
+    editTools.some((t) => !profile.aiTools.includes(t));
 
   // Load the agent memory whenever the Settings panel is opened.
   useEffect(() => {
@@ -604,50 +575,6 @@ export default function SessionChatView() {
               <button type="button" style={S.addBtn} onClick={addCustomAgent}>Add agent</button>
             </div>
           )}
-
-          <div style={S.groupLabel}>Models</div>
-          <div style={S.modelField}>
-            <label style={S.modelLabel} htmlFor="tutor-model-input">
-              Tutor <span style={S.modelHint}>generates guidance</span>
-            </label>
-            <input
-              id="tutor-model-input"
-              style={S.customInput}
-              placeholder={`e.g. ${EXAMPLE_TUTOR_MODEL}`}
-              value={editTutorModel}
-              onChange={(e) => setEditTutorModel(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </div>
-          <div style={S.modelField}>
-            <label style={S.modelLabel} htmlFor="observer-model-input">
-              Observer <span style={S.modelHint}>reads your screen · must be vision-capable</span>
-            </label>
-            <input
-              id="observer-model-input"
-              style={S.customInput}
-              placeholder={`e.g. ${EXAMPLE_OBSERVER_MODEL}`}
-              value={editObserverModel}
-              onChange={(e) => setEditObserverModel(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </div>
-          <div style={S.modelNote}>
-            Use a <code>provider/model</code> id (e.g. <code>{EXAMPLE_TUTOR_MODEL}</code>), and set
-            the matching API key in <code>.env</code>. See the{' '}
-            <a
-              href="https://github.com/collaborative-agents/coco/blob/main/lib/external_api/README.md#model-providers"
-              target="_blank"
-              rel="noreferrer"
-              style={S.modelLink}
-            >
-              supported providers &amp; handles (and their privacy trade-offs)
-            </a>{' '}
-            in the README. Both are required — Coco stays paused until they&apos;re set. Applied
-            live — no restart needed.
-          </div>
 
           <div style={S.saveRow}>
             <button

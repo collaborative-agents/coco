@@ -569,17 +569,10 @@ function readProfile(): {
   aiTools: string[];
   scenario: string;
   customObserverPrompt: string;
-  tutorModel: string;
-  observerModel: string;
 } {
   let aiTools: string[] = [];
   let scenario = 'everyday_support';
   let customObserverPrompt = '';
-  // Empty when the user hasn't chosen a model. The Python services requires
-  // an explicit model, so an empty value here must never reach them —
-  // startObserver() gates on both models being set before spawning the services.
-  let tutorModel = '';
-  let observerModel = '';
   try {
     const profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
     if (typeof profile.tutorScenario === 'string' && profile.tutorScenario) {
@@ -591,12 +584,6 @@ function readProfile(): {
     if (typeof profile.customSystemPrompt === 'string' && profile.customSystemPrompt.trim()) {
       customObserverPrompt = profile.customSystemPrompt;
     }
-    if (typeof profile.tutorModel === 'string' && profile.tutorModel.trim()) {
-      tutorModel = profile.tutorModel.trim();
-    }
-    if (typeof profile.observerModel === 'string' && profile.observerModel.trim()) {
-      observerModel = profile.observerModel.trim();
-    }
     // "Custom" mode customizes only the sensing observer prompt. The judge/tutor
     // still run on a real base scenario, so map 'custom' → 'everyday_support'.
     if (scenario === 'custom') {
@@ -605,7 +592,7 @@ function readProfile(): {
   } catch (err) {
     log.warn(`[Profile] Could not read profile at ${profilePath()}: ${err}.`);
   }
-  return { aiTools, scenario, customObserverPrompt, tutorModel, observerModel };
+  return { aiTools, scenario, customObserverPrompt };
 }
 
 // ── Instant suggestion precompute cache ─────────────────────────────────────
@@ -1030,21 +1017,13 @@ ipcMain.handle(
     {
       scenario,
       aiTools,
-      tutorModel,
-      observerModel,
     }: {
       scenario: string;
       aiTools: string[];
-      tutorModel?: string;
-      observerModel?: string;
     },
   ) => {
-    // Empty means "no explicit choice". The services require a model, so an
-    // empty value is never sent: the start/live-apply steps below are all gated
-    // on a non-empty model (services stay gated off until the user picks one).
-    const nextTutorModel = (tutorModel ?? '').trim();
-    const nextObserverModel = (observerModel ?? '').trim();
-    // 1. Persist into the profile (merged with existing fields).
+    // 1. Persist into the profile (merged with existing fields). Models are
+    // configured via .env (TUTOR_MODEL / OBSERVER_MODEL), not here.
     try {
       let profile: Record<string, unknown> = {};
       try {
@@ -1054,24 +1033,10 @@ ipcMain.handle(
       }
       profile.tutorScenario = scenario;
       profile.aiTools = aiTools;
-      profile.tutorModel = nextTutorModel;
-      profile.observerModel = nextObserverModel;
       fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
     } catch (err) {
       log.error('[Settings] Failed to persist profile:', err);
       return { success: false, error: String(err) };
-    }
-
-    // Keep the env in sync so a later service (re)start uses the new models.
-    process.env.TUTOR_MODEL = nextTutorModel;
-    process.env.OBSERVER_MODEL = nextObserverModel;
-
-    // If the services were gated off waiting for a model choice, boot them now
-    // (with the models just saved). The live-apply below then no-ops on the
-    // cold start since the servers come up already configured.
-    if (!observerStarted && nextTutorModel && nextObserverModel) {
-      log.info('[Settings] Models configured — starting services.');
-      startObserver();
     }
 
     // 2. Apply live to the running servers (best-effort).
@@ -1082,25 +1047,8 @@ ipcMain.handle(
     try {
       await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
       await axios.post(`${tutor}/context/ai_tools`, { ai_tools: aiTools }, { timeout: 8000 });
-      // Only push a model when the user set one; an empty choice keeps whatever
-      // model the service is already running until the next restart.
-      if (nextTutorModel) {
-        await axios.post(`${tutor}/config/model`, { model: nextTutorModel }, { timeout: 8000 });
-      }
     } catch (err) {
       log.warn(`[Settings] Tutor update failed: ${(err as Error).message}`);
-    }
-    // Swap the observer model live (no restart) on the sensing server.
-    if (nextObserverModel) {
-      try {
-        await axios.post(
-          `${sensing}/config/observer_model`,
-          { model: nextObserverModel },
-          { timeout: 8000 },
-        );
-      } catch (err) {
-        log.warn(`[Settings] Observer model update failed: ${(err as Error).message}`);
-      }
     }
     // Update the observer/judge scenario too (sensing) if a session is running.
     if (currentSessionId) {
@@ -1221,25 +1169,22 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
 
-// Warning shown when the user hasn't chosen their models yet. Its action opens
-// the chat (where ⚙ Settings → Models lives).
+// Warning shown when the user hasn't set their models yet. Models are
+// configured via TUTOR_MODEL / OBSERVER_MODEL in the .env file.
 const showModelsRequiredWarning = () => {
   showNotification({
     message:
-      'Coco is paused. Choose a tutor and an observer model to begin — open the chat, then ⚙ Settings → Models. Coco starts sensing as soon as you save.',
-    actionLabel: 'Open settings',
+      'Coco is paused. Set TUTOR_MODEL and OBSERVER_MODEL in your .env file, then restart Coco to begin.',
+    actionLabel: 'Got it',
   });
 };
 
-// Effective model ids: an explicit shell/.env value wins, else the saved
-// profile (Settings → Models). Empty string when neither is set.
-const effectiveModels = (): { tutor: string; observer: string } => {
-  const { tutorModel, observerModel } = readProfile();
-  return {
-    tutor: (process.env.TUTOR_MODEL || tutorModel || '').trim(),
-    observer: (process.env.OBSERVER_MODEL || observerModel || '').trim(),
-  };
-};
+// Effective model ids, read from the environment (TUTOR_MODEL / OBSERVER_MODEL,
+// populated from .env at startup). Empty string when a model is not set.
+const effectiveModels = (): { tutor: string; observer: string } => ({
+  tutor: (process.env.TUTOR_MODEL || '').trim(),
+  observer: (process.env.OBSERVER_MODEL || '').trim(),
+});
 
 // Starts the sensing services and observation stream. Called once onboarding
 // is complete (or immediately on subsequent launches where it's already done),
@@ -1250,9 +1195,8 @@ const startObserver = () => {
   if (observerStarted) return;
 
   // Gate on model choice: until BOTH a tutor and an observer model are set
-  // (via Settings → Models, or TUTOR_MODEL/OBSERVER_MODEL in the env), we do
-  // not spawn the Python services. Instead we surface a warning that routes to
-  // Settings. Saving models calls startObserver() again, passing this gate.
+  // (via TUTOR_MODEL / OBSERVER_MODEL in the .env), we do not spawn the Python
+  // services. Instead we surface a warning that tells the user to set them.
   const { tutor: tutorModel, observer: observerModel } = effectiveModels();
   if (!tutorModel || !observerModel) {
     log.warn('[Models] No models chosen yet — services not started.');
