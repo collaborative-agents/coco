@@ -101,6 +101,21 @@ See [lib/external_api/README.md](lib/external_api/README.md) for model provider 
 We thank Long Lin for designing the avatar. The screen-capture and observation-storage core builds on the [GUM (General User Models) project](https://github.com/GeneralUserModels/gum).
 
 
+## Citation
+
+If you find Coco useful in your research or work, please consider citing it:
+
+```bibtex
+@software{coco2026,
+  title        = {Coco: Proactive Co-Assistant Through Continuous Context Observation},
+  author       = {Shao, Yijia and Wang, Yihan and Wang, Haowen},
+  year         = {2026},
+  url          = {https://github.com/collaborative-agents/coco},
+  note         = {Proactive co-assistant that senses computer-use context and offers timely help, running fully on-device.}
+}
+```
+
+
 ## Contact
 
 Coco is under active development — we'd love to hear from you.
