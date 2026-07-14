@@ -108,7 +108,7 @@ If you find Coco useful in your research or work, please consider citing it:
 ```bibtex
 @software{coco2026,
   title        = {Coco: Proactive Co-Assistant Through Continuous Context Observation},
-  author       = {Shao, Yijia and Wang, Yihan and Wang, Haowen},
+  author       = {Shao, Yijia and Wang, Yihan, Wang, Haowen, and Yang, Diyi},
   year         = {2026},
   url          = {https://github.com/collaborative-agents/coco},
   note         = {Proactive co-assistant that senses computer-use context and offers timely help, running fully on-device.}
