@@ -31,6 +31,7 @@ from pathlib import Path
 
 import httpx
 from external_api.llm import chat_completion
+from external_api.types import LLMCallMetrics
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 from sensing.language import ActionNode, SequenceNode, annotate_high_level_nodes
@@ -143,7 +144,7 @@ def _observe(
     model: str,
     system_prompt: str = _OBSERVER_PROMPT,
     max_tokens: int = 4096,
-) -> str:
+) -> tuple[str, LLMCallMetrics]:
     """Generate an observer response."""
     # user_content: list[TextContent | ImageURLContent] = []
 
@@ -181,23 +182,24 @@ def _observe(
         image_paths=image_paths,
     )
 
-    result, _ = chat_completion(
+    result, metrics = chat_completion(
         messages=messages,
         model=model,
         max_tokens=max_tokens,
+        operation="observer",
     )
 
     if isinstance(result.content, str):
-        return result.content
+        return result.content, metrics
 
     if isinstance(result.content, list):
         for block in result.content:
             if isinstance(block, dict) and block.get("type") == "text":
-                return block.get("text", "")
+                return block.get("text", ""), metrics
             if hasattr(block, "text"):
-                return block.text  # type: ignore
+                return block.text, metrics  # type: ignore
 
-    return ""
+    return "", metrics
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +697,11 @@ class AiTutoringProcessor(SegmentProcessor):
             self._obs_subscribers.remove(q)
 
     def _broadcast_observation(
-        self, type_: str, observation: str, observation_id: str | None = None
+        self,
+        type_: str,
+        observation: str,
+        observation_id: str | None = None,
+        llm_metrics: dict | None = None,
     ) -> None:
         if not self._obs_subscribers:
             return
@@ -732,6 +738,8 @@ class AiTutoringProcessor(SegmentProcessor):
         }
         if observation_id:
             event["observation_id"] = observation_id
+        if llm_metrics is not None:
+            event["llm_metrics"] = llm_metrics
         if task_label:
             event["task_label"] = task_label
         if applying_ai_output is not None:
@@ -845,7 +853,7 @@ class AiTutoringProcessor(SegmentProcessor):
         image_path: str | None = None,
         timestamp: str | None = None,
         hotkey_image_paths: list[str] | None = None,
-    ) -> str:
+    ) -> tuple[str, LLMCallMetrics]:
         """Add an optional snapshot then generate and return an observation string.
 
         Called by ``sensing_server``'s ``/observe/user_prompt`` endpoint so
@@ -859,11 +867,11 @@ class AiTutoringProcessor(SegmentProcessor):
         """
         if image_path and timestamp:
             self._add_snapshot(image_path, timestamp)
-        obs, _ = await self._handle_observation(
+        obs, _, metrics = await self._handle_observation(
             type=type, user_text=user_text, hotkey_image_paths=hotkey_image_paths
         )
         self._log(f"[{type.upper()} OBSERVATION (generate_observation)] {obs}\n")
-        return obs
+        return obs, metrics
 
     async def configure_session(self) -> None:
         """Reset per-session observer state for a new tutor session.
@@ -937,7 +945,7 @@ class AiTutoringProcessor(SegmentProcessor):
         )
         if image_path and timestamp:
             self._add_snapshot(image_path, timestamp)
-        obs, _ = await self._handle_observation(
+        obs, _text, _metrics = await self._handle_observation(
             type="user_prompt",
             user_text=user_text,
             hotkey_image_paths=hotkey_image_paths,
@@ -955,7 +963,7 @@ class AiTutoringProcessor(SegmentProcessor):
             return
         self._add_snapshot(image_path, timestamp)
         if len(self.snapshot_buffer.buffer) >= self.snapshot_buffer.max_size:
-            obs, _ = await self._handle_observation(type="snapshot")
+            obs, _text, _metrics = await self._handle_observation(type="snapshot")
             self._log(f"[SNAPSHOT OBSERVATION] {obs}\n")
             self.snapshot_buffer.obs_history.append(obs)
             self.snapshot_buffer.buffer.clear()
@@ -968,7 +976,7 @@ class AiTutoringProcessor(SegmentProcessor):
         print(f"[HANDLE PAUSE] image_path: {image_path}, timestamp: {timestamp}")
         if image_path and timestamp:
             self._add_snapshot(image_path, timestamp)
-        obs, text = await self._handle_observation(type="pause")
+        obs, text, metrics = await self._handle_observation(type="pause")
         self._log(f"[PAUSE OBSERVATION] {obs}\n")
 
         payload = {
@@ -976,6 +984,7 @@ class AiTutoringProcessor(SegmentProcessor):
                 "data_type": "pause_detected",
                 "observation": obs,
                 "text": text,
+                "llm_metrics": metrics,
             }
         }
         self.broadcast_pause(payload)
@@ -992,7 +1001,7 @@ class AiTutoringProcessor(SegmentProcessor):
         user_text: str | None = None,
         type: str | None = None,
         hotkey_image_paths: list[str] | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, LLMCallMetrics]:
         from datetime import datetime as _dt
 
         text = await self._build_context_prompt()
@@ -1033,7 +1042,7 @@ class AiTutoringProcessor(SegmentProcessor):
         all_image_paths = snapshot_image_paths + hk_paths
 
         observation_id = uuid.uuid4().hex
-        obs = _observe(
+        obs, metrics = _observe(
             text_prompt,
             all_image_paths,
             system_prompt=self._observer_prompt,
@@ -1053,6 +1062,7 @@ class AiTutoringProcessor(SegmentProcessor):
                 observer_output=obs,
                 model=self._observer_model,
                 screenshot_paths=all_image_paths,
+                llm_metrics=metrics,
             )
 
         # Delete only the rolling snapshot files — the observer has already
@@ -1078,9 +1088,12 @@ class AiTutoringProcessor(SegmentProcessor):
         # the observation_id so the UI can echo it back in feedback (engage /
         # dismiss) and we can join the reaction to this exact observation.
         self._broadcast_observation(
-            type or "unknown", obs, observation_id=observation_id
+            type or "unknown",
+            obs,
+            observation_id=observation_id,
+            llm_metrics=metrics,
         )
-        return obs, text
+        return obs, text, metrics
 
     @staticmethod
     def _cleanup_consumed_screenshots(image_paths: list[str]) -> None:

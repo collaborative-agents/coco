@@ -15,7 +15,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from external_api.llm import prompt_to_text
+from external_api.llm import prompt_to_text_with_metrics
+from external_api.types import LLMCallMetrics
 from proactive_tutor.ai_tool_capabilities import (
     format_tool_names,
     get_capabilities_for_tools,
@@ -140,6 +141,19 @@ def generate_instant_suggestion(
     ai_tools: list[str],
     model: str,
 ) -> dict:
+    suggestion, _ = generate_instant_suggestion_with_metrics(
+        observation, task_label, scenario, ai_tools, model
+    )
+    return suggestion
+
+
+def generate_instant_suggestion_with_metrics(
+    observation: str,
+    task_label: str | None,
+    scenario: str,
+    ai_tools: list[str],
+    model: str,
+) -> tuple[dict, LLMCallMetrics]:
     """Generate a single ready-to-use suggestion for *observation*.
 
     Blocking (performs LLM I/O); call from a thread in async contexts.
@@ -148,5 +162,10 @@ def generate_instant_suggestion(
     scenario-specific prompts; the current prompt is scenario-agnostic.
     """
     user_prompt = _build_user_prompt(observation, task_label, ai_tools or [])
-    raw = prompt_to_text(model, INSTANT_SYSTEM_PROMPT, user_prompt)
-    return _parse_instant_suggestion(raw)
+    raw, metrics = prompt_to_text_with_metrics(
+        model,
+        INSTANT_SYSTEM_PROMPT,
+        user_prompt,
+        operation="instant_suggestion",
+    )
+    return _parse_instant_suggestion(raw), metrics

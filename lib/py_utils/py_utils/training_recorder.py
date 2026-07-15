@@ -116,6 +116,7 @@ class TrainingRecorder:
         observer_output: str,
         model: str,
         screenshot_paths: list[str],
+        llm_metrics: dict | None = None,
     ) -> None:
         retained: list[str] = []
         if self._retain and screenshot_paths:
@@ -131,6 +132,8 @@ class TrainingRecorder:
             "screenshot_paths": list(screenshot_paths),
             "retained_screenshots": retained,
         }
+        if llm_metrics is not None:
+            row["llm_metrics"] = llm_metrics
         self._append(self._obs_path, row)
 
     def log_decision(
@@ -206,6 +209,7 @@ class TrainingRecorder:
         tutor_input: str,
         tutor_output: str,
         image_paths: list[str] | None = None,
+        llm_metrics: dict | None = None,
     ) -> None:
         """Log one tutor LLM call (the delivered-assistance content).
 
@@ -222,6 +226,8 @@ class TrainingRecorder:
             "tutor_output": tutor_output,
             "image_paths": list(image_paths or []),
         }
+        if llm_metrics is not None:
+            row["llm_metrics"] = llm_metrics
         self._append(self._dir / "tutor_calls.jsonl", row)
 
     def log_feedback(

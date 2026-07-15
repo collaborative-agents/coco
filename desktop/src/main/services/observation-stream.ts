@@ -1,5 +1,19 @@
 import log from 'electron-log';
 
+export interface LLMCallMetrics {
+  call_id?: string;
+  operation?: string | null;
+  model?: string;
+  provider?: string;
+  modality?: 'llm' | 'vlm';
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  duration_ms?: number;
+}
+
 export interface ObservationEvent {
   type: string;
   observation?: string;
@@ -13,6 +27,7 @@ export interface ObservationEvent {
   observation_id?: string;
   /** "yes"/"no" — whether the user is applying AI output (discernment opportunities). */
   applying_ai_output?: string;
+  llm_metrics?: LLMCallMetrics;
 }
 
 interface StartOpts {

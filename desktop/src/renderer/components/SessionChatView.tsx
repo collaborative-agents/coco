@@ -10,6 +10,7 @@ import {
   encodeCustomChatbot,
   encodeCustomAgent,
 } from './observation-types';
+import type { LLMCallMetrics } from './observation-types';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -132,6 +133,8 @@ interface ChatMessage {
   id?: string;
   /** When the message was appended — lets latency_s capture time-to-rate. */
   ts?: number;
+  observerMetrics?: LLMCallMetrics | null;
+  tutorMetrics?: LLMCallMetrics | null;
 }
 
 // crypto.randomUUID needs a secure context; fall back for safety.
@@ -139,6 +142,18 @@ const makeMessageId = (): string =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+function formatMetricTokens(n?: number): string {
+  if (typeof n !== 'number') return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+function formatMetricLatency(ms?: number): string {
+  if (typeof ms !== 'number') return '0s';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s`;
+  return `${Math.round(ms)}ms`;
+}
 
 // ── Styles (inline so the view is self-contained in a transparent window) ──────
 // Palette mirrors the onboarding panel: SALT Lab blue with a light-blue accent.
@@ -193,6 +208,8 @@ const S: Record<string, React.CSSProperties> = {
   hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
   hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
   feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
+  metricRow: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, color: '#6b7280', fontSize: 10.5 },
+  metricChip: { border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 6, padding: '1px 5px', lineHeight: 1.35 },
   feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
   feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
   feedbackBtnLocked: { opacity: 0.25, cursor: 'default' },
@@ -256,6 +273,41 @@ function TutorMessage({ text }: { text: string }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ChatMetrics({
+  observerMetrics,
+  tutorMetrics,
+}: {
+  observerMetrics?: LLMCallMetrics | null;
+  tutorMetrics?: LLMCallMetrics | null;
+}) {
+  const metrics = [observerMetrics, tutorMetrics].filter(
+    (m): m is LLMCallMetrics => Boolean(m),
+  );
+  if (metrics.length === 0) return null;
+
+  const inputTokens = metrics.reduce(
+    (total, m) => total + (m.input_tokens ?? m.prompt_tokens ?? 0),
+    0,
+  );
+  const outputTokens = metrics.reduce(
+    (total, m) => total + (m.output_tokens ?? m.completion_tokens ?? 0),
+    0,
+  );
+  const durationMs = metrics.reduce(
+    (total, m) => total + (m.duration_ms ?? 0),
+    0,
+  );
+
+  return (
+    <div style={S.metricRow}>
+      <span style={S.metricChip}>
+        {formatMetricTokens(inputTokens)} in / {formatMetricTokens(outputTokens)}{' '}
+        out / {formatMetricLatency(durationMs)}
+      </span>
     </div>
   );
 }
@@ -331,13 +383,25 @@ export default function SessionChatView() {
         images,
       });
       setSending(false);
-      const r = res as { guidance?: string; error?: string } | undefined;
+      const r = res as {
+        guidance?: string;
+        error?: string;
+        observerMetrics?: LLMCallMetrics | null;
+        tutorMetrics?: LLMCallMetrics | null;
+      } | undefined;
       if (r?.error) {
         setMessages((m) => [...m, { role: 'tutor', text: r.error as string, isError: true }]);
       } else {
         setMessages((m) => [
           ...m,
-          { role: 'tutor', text: r?.guidance ?? '', id: makeMessageId(), ts: Date.now() },
+          {
+            role: 'tutor',
+            text: r?.guidance ?? '',
+            id: makeMessageId(),
+            ts: Date.now(),
+            observerMetrics: r?.observerMetrics ?? null,
+            tutorMetrics: r?.tutorMetrics ?? null,
+          },
         ]);
       }
       scrollToBottom();
@@ -704,6 +768,12 @@ export default function SessionChatView() {
                   <div style={m.isError ? S.errBubble : S.tutorBubble}>
                     {m.isError ? m.text : <TutorMessage text={m.text} />}
                   </div>
+                  {!m.isError && (
+                    <ChatMetrics
+                      observerMetrics={m.observerMetrics}
+                      tutorMetrics={m.tutorMetrics}
+                    />
+                  )}
                   {!m.isError && m.id && (
                     <div style={S.feedbackRow}>
                       {(['up', 'down'] as const).map((dir) => (

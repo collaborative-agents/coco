@@ -465,7 +465,7 @@ class Streamer:
         image_path: str | None = None,
         timestamp: str | None = None,
         hotkey_image_paths: list[str] | None = None,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """Delegate to the first processor that supports ``generate_observation``.
 
         Called by the sensing server's ``/observe/user_prompt`` endpoint.

@@ -39,7 +39,7 @@ import {
   pruneActivity,
 } from './activity-store';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
-import type { ObservationStatus, AiToolButton } from '../renderer/components/observation-types';
+import type { ObservationStatus, AiToolButton, LLMCallMetrics } from '../renderer/components/observation-types';
 
 const dotenv = require('dotenv');
 
@@ -647,6 +647,7 @@ interface InstantSuggestion {
   prompt?: string;
   copyText: string;
   availableTools?: AiToolButton[];
+  llm_metrics?: LLMCallMetrics;
 }
 
 const suggestionCache = new Map<string, { ts: number; promise: Promise<InstantSuggestion | null> }>();
@@ -919,6 +920,7 @@ ipcMain.handle(
 
     // Best-effort screen observation for context (chat still works without it).
     let observation = '';
+    let observerMetrics: LLMCallMetrics | null = null;
     try {
       const obs = await axios.post(
         `http://127.0.0.1:${sensingPort}/observe/user_prompt`,
@@ -926,6 +928,7 @@ ipcMain.handle(
         { timeout: 30000 },
       );
       observation = String(obs.data?.observation ?? '');
+      observerMetrics = (obs.data?.llm_metrics ?? null) as LLMCallMetrics | null;
     } catch (err) {
       log.warn(`[Chat] observe/user_prompt failed: ${(err as Error).message}`);
     }
@@ -940,7 +943,11 @@ ipcMain.handle(
         },
         { timeout: 120000 },
       );
-      return { guidance: String(resp.data?.guidance ?? '') };
+      return {
+        guidance: String(resp.data?.guidance ?? ''),
+        observerMetrics,
+        tutorMetrics: (resp.data?.llm_metrics ?? null) as LLMCallMetrics | null,
+      };
     } catch (err) {
       const ax = err as { response?: { data?: unknown }; message?: string };
       log.error('[Chat] events/user_prompt failed:', JSON.stringify(ax?.response?.data ?? ax?.message));
@@ -1313,6 +1320,7 @@ const startObserver = () => {
           ts: event.ts ?? Math.floor(Date.now() / 1000),
           status: status as ObservationStatus,
           observation: cleanObservation(event.observation),
+          llm_metrics: event.llm_metrics,
         });
       }
 

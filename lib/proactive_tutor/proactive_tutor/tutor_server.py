@@ -57,6 +57,7 @@ class EventRequest(BaseModel):
 
 class GuidanceResponse(BaseModel):
     guidance: str
+    llm_metrics: dict | None = None
 
 
 class InstantSuggestionRequest(BaseModel):
@@ -73,6 +74,7 @@ class InstantSuggestionResponse(BaseModel):
     targetTool: str | None = None
     prompt: str | None = None
     copyText: str  # unified text the UI copies (body for content, prompt for delegate)
+    llm_metrics: dict | None = None
 
 
 class ContextResponse(BaseModel):
@@ -430,17 +432,20 @@ async def suggestion_instant(req: InstantSuggestionRequest):
     The desktop app calls this eagerly when a proactive bubble appears so the
     suggestion can be revealed instantly when the user clicks "Help me".
     """
-    from proactive_tutor.instant_suggestion import generate_instant_suggestion
+    from proactive_tutor.instant_suggestion import (
+        generate_instant_suggestion_with_metrics,
+    )
 
     try:
-        result = await asyncio.to_thread(
-            generate_instant_suggestion,
+        result, llm_metrics = await asyncio.to_thread(
+            generate_instant_suggestion_with_metrics,
             req.observation,
             req.task_label,
             req.scenario,
             req.ai_tools,
             configured_model_name,
         )
+        result["llm_metrics"] = llm_metrics
         return InstantSuggestionResponse(**result)
     except Exception as e:
         logger.error(f"instant suggestion failed: {e}", exc_info=True)
@@ -454,15 +459,15 @@ async def handle_user_prompt(req: EventRequest):
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     try:
         # TutorSystem calls are blocking (LLM I/O); run in a thread.
-        raw_guidance = await asyncio.to_thread(
-            tutor.handle_user_prompt,
+        raw_guidance, llm_metrics = await asyncio.to_thread(
+            tutor.handle_user_prompt_with_metrics,
             req.observation,
             req.image_paths,
             req.user_text,
         )
         # Execute visualization code (also blocking) and mutate the JSON.
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
-        return GuidanceResponse(guidance=guidance)
+        return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
     except Exception as e:
         logger.error(f"Error in handle_user_prompt: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -474,15 +479,15 @@ async def handle_pause(req: EventRequest):
     if tutor is None:
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     try:
-        raw_guidance = await asyncio.to_thread(
-            tutor.handle_pause,
+        raw_guidance, llm_metrics = await asyncio.to_thread(
+            tutor.handle_pause_with_metrics,
             req.observation,
             req.trigger_reason,
             req.evidence,
             req.teaching_depth,
         )
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
-        return GuidanceResponse(guidance=guidance)
+        return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
     except Exception as e:
         logger.error(f"Error in handle_pause: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
