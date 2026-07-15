@@ -125,9 +125,7 @@ def _build_call_metrics(
 ) -> LLMCallMetrics:
     prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
     completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-    cache_creation_input_tokens = int(
-        usage.get("cache_creation_input_tokens", 0) or 0
-    )
+    cache_creation_input_tokens = int(usage.get("cache_creation_input_tokens", 0) or 0)
     cache_read_input_tokens = int(usage.get("cache_read_input_tokens", 0) or 0)
     return LLMCallMetrics(
         call_id=uuid.uuid4().hex,

@@ -200,9 +200,7 @@ async def set_observer_model(req: ObserverModelRequest):
     """
     ai_proc = _get_ai_processor()
     if ai_proc is None:
-        raise HTTPException(
-            status_code=503, detail="AI tutoring processor not running"
-        )
+        raise HTTPException(status_code=503, detail="AI tutoring processor not running")
     ai_proc._observer_model = req.model
     logger.info(f"Observer model updated: {req.model}")
     total = await streamer.get_total_stored_actions() if streamer else 0
@@ -776,7 +774,9 @@ async def main_async(
     timestamp = int(time.time())
     # Prefer the shared records dir ($COCO_RECORDS_DIR, set by the launcher so the
     # sensing and tutor processes write to one joinable dir); else per-run default.
-    session_dir = default_records_dir(fallback=f"~/Downloads/coco-records/session_{timestamp}")
+    session_dir = default_records_dir(
+        fallback=f"~/Downloads/coco-records/session_{timestamp}"
+    )
     db_path = f"{session_dir}/actions.db"
     screenshot_dir = f"{session_dir}/screenshots"
     import os as _os
@@ -931,9 +931,7 @@ def main(
     # The observer model must be supplied explicitly; there is no built-in
     # default so the caller (CLI or desktop app) always chooses it consciously.
     if not (observer_model or "").strip():
-        raise ValueError(
-            "--observer_model is required"
-        )
+        raise ValueError("--observer_model is required")
     asyncio.run(
         main_async(
             port=port,
