@@ -15,6 +15,24 @@ export type ObservationStatus =
   | 'observing'
   | 'discernment_opportunity';
 
+export interface LLMCallMetrics {
+  call_id?: string;
+  operation?: string | null;
+  model?: string;
+  provider?: string;
+  modality?: 'llm' | 'vlm';
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  duration_ms?: number;
+  started_at?: number;
+  ended_at?: number;
+  success?: boolean;
+  error?: string | null;
+}
+
 export interface ObservationEvent {
   type: string;
   observation?: string;
@@ -24,6 +42,7 @@ export interface ObservationEvent {
   applying_ai_output?: string;
   /** Stable id of the observer call that produced this event (for feedback joins). */
   observation_id?: string;
+  llm_metrics?: LLMCallMetrics;
 }
 
 /**
@@ -43,6 +62,7 @@ export interface InstantSuggestion {
   targetTool?: string;
   prompt?: string;
   copyText: string;
+  llm_metrics?: LLMCallMetrics;
   /**
    * The user's own AI tools (from their onboarding selection), so a `delegate`
    * bubble can show one "Open" button per available tool and let the user pick
@@ -317,6 +337,7 @@ export interface ActivityRecord {
   status: ObservationStatus;
   /** Cleaned, human-readable observation text. */
   observation: string;
+  llm_metrics?: LLMCallMetrics;
 }
 
 

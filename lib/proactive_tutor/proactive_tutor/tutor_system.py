@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from external_api.types import LLMCallMetrics
 from proactive_tutor.agents.tutor import TutorAgent
 from proactive_tutor.ai_tool_capabilities import (
     format_tool_names,
@@ -101,6 +102,7 @@ class TutorSystem:
         tutor_input: str,
         tutor_output: str,
         image_paths: list[str] | None,
+        llm_metrics: dict | None = None,
     ) -> None:
         """Record the tutor LLM call (input + generated guidance) for training."""
         if self._recorder is None:
@@ -115,6 +117,7 @@ class TutorSystem:
                 tutor_input=tutor_input,
                 tutor_output=tutor_output,
                 image_paths=image_paths,
+                llm_metrics=llm_metrics,
             )
         except Exception as e:
             logger.debug(f"[TUTOR] failed to log tutor call: {e}")
@@ -369,6 +372,17 @@ class TutorSystem:
         image_paths: list[str] | None = None,
         user_text: str | None = None,
     ) -> str:
+        guidance, _ = self.handle_user_prompt_with_metrics(
+            obs=obs, image_paths=image_paths, user_text=user_text
+        )
+        return guidance
+
+    def handle_user_prompt_with_metrics(
+        self,
+        obs: str,
+        image_paths: list[str] | None = None,
+        user_text: str | None = None,
+    ) -> tuple[str, LLMCallMetrics]:
         """
         Process a user-prompt event.
 
@@ -411,9 +425,13 @@ class TutorSystem:
             + f'\n\n<observation timestamp="{obs_ts}">\n{obs}\n</observation>'
             + dim_note
         )
-        guidance = self.tutor_agent.tutor(text_prompt, image_paths=image_paths)
+        guidance, metrics = self.tutor_agent.tutor_with_metrics(
+            text_prompt, image_paths=image_paths
+        )
         logger.info(f"[TUTOR] {guidance}")
-        self._log_tutor_call("user_prompt", text_prompt, guidance, image_paths)
+        self._log_tutor_call(
+            "user_prompt", text_prompt, guidance, image_paths, llm_metrics=metrics
+        )
         weak_competency = None
 
         # print("\n=== Tutor Response ===")
@@ -429,7 +447,7 @@ class TutorSystem:
         # User-prompt events don't have a structured trigger_type; treat as
         # a general coaching moment and update state if a competency was targeted.
         self._update_curriculum_state("teaching_moment", weak_competency)
-        return guidance
+        return guidance, metrics
 
     def handle_pause(
         self,
@@ -438,6 +456,21 @@ class TutorSystem:
         evidence: str = "",
         teaching_depth: str = "not_applicable",
     ) -> str:
+        guidance, _ = self.handle_pause_with_metrics(
+            obs=obs,
+            trigger_reason=trigger_reason,
+            evidence=evidence,
+            teaching_depth=teaching_depth,
+        )
+        return guidance
+
+    def handle_pause_with_metrics(
+        self,
+        obs: str,
+        trigger_reason: str = "struggle",
+        evidence: str = "",
+        teaching_depth: str = "not_applicable",
+    ) -> tuple[str, LLMCallMetrics]:
         """
         Process a pause/idle event.
 
@@ -525,9 +558,9 @@ class TutorSystem:
             + f"\n\n{curriculum_block}"
             + f'\n\n<observation timestamp="{obs_ts}">\n{obs}\n</observation>'
         )
-        guidance = self.tutor_agent.tutor(text_prompt)
+        guidance, metrics = self.tutor_agent.tutor_with_metrics(text_prompt)
         logger.info(f"[PAUSE][TUTOR] {guidance}")
-        self._log_tutor_call("pause", text_prompt, guidance, None)
+        self._log_tutor_call("pause", text_prompt, guidance, None, llm_metrics=metrics)
         weak_competency = None
 
         print("\n=== Pause Guidance ===")
@@ -537,7 +570,7 @@ class TutorSystem:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.conversation_history.append(f"[{ts}] [Tutor]: {guidance}")
         self._update_curriculum_state(trigger_reason, weak_competency)
-        return guidance
+        return guidance, metrics
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -90,6 +90,7 @@ class ObserveUserPromptResponse(BaseModel):
     """Response model returning the generated observation string."""
 
     observation: str
+    llm_metrics: dict | None = None
     hotkey_image_path: str | None = (
         None  # absolute path of the pinned hot-key capture, if any
     )
@@ -268,7 +269,7 @@ async def observe_user_prompt(request: ObserveUserPromptRequest):
                     f"Pinned hot-key capture #{request.hotkey_index} not found or file missing"
                 )
 
-        observation = await streamer.generate_observation(
+        observation, llm_metrics = await streamer.generate_observation(
             type="user_prompt",
             user_text=request.text,
             image_path=image_path or None,
@@ -279,6 +280,7 @@ async def observe_user_prompt(request: ObserveUserPromptRequest):
         # directly to tutor_server for vision-based annotation.
         return ObserveUserPromptResponse(
             observation=observation,
+            llm_metrics=llm_metrics,
             hotkey_image_path=hk_paths[0] if hk_paths else None,
         )
     except Exception as e:

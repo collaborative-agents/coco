@@ -482,7 +482,7 @@ class ProgressDetector:
             image_path, timestamp = await self._screen._inspect()
             if image_path:
                 self._ai_processor._add_snapshot(image_path, timestamp)
-                fresh_obs, _ = await self._ai_processor._handle_observation(
+                fresh_obs, _, _ = await self._ai_processor._handle_observation(
                     type="progress_check"
                 )
                 # The observer stamps each call with an id; grab the fresh one so
@@ -660,7 +660,7 @@ class ProgressDetector:
         from sensing.segment_processor import _observe  # late import to avoid cycle
 
         try:
-            raw = _observe(
+            raw, _ = _observe(
                 text_prompt=user_prompt,
                 image_paths=[],
                 system_prompt=self._judge_prompt,
@@ -742,11 +742,12 @@ class ProgressDetector:
 
         # Reuse the observer to build a rich observation (same as pause)
         try:
-            obs, text = await ai._handle_observation(type="pause")
+            obs, text, metrics = await ai._handle_observation(type="pause")
         except Exception as e:
             logger.error(f"ProgressDetector: observer failed during fire: {e}")
             obs = f"Struggle detected: {judgment.evidence}"
             text = obs
+            metrics = None
 
         # Prepend human-readable evidence to the observation so downstream
         # prompts and logs explain *why* we spoke up (transparency).
@@ -756,7 +757,7 @@ class ProgressDetector:
         # Surface the struggle to live UI subscribers (e.g. the Electron avatar
         # bubble) tagged as "struggle" so it's visually distinct from a plain
         # pause and carries the prefixed transparency text.
-        ai._broadcast_observation("struggle", obs)
+        ai._broadcast_observation("struggle", obs, llm_metrics=metrics)
 
         payload = {
             "data": {

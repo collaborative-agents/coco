@@ -80,6 +80,30 @@ function dayHeading(dayStartTs: number, todayStart: number): string {
   });
 }
 
+function formatMetricTokens(n?: number): string {
+  if (typeof n !== 'number') return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+function formatMetricLatency(ms?: number): string {
+  if (typeof ms !== 'number') return '0s';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+function LlmMetricChips({ record }: { record: ActivityRecord }) {
+  const m = record.llm_metrics;
+  if (!m) return null;
+  return (
+    <div className="obs-history-metrics">
+      <span>{formatMetricTokens(m.input_tokens ?? m.prompt_tokens)} in</span>
+      <span>{formatMetricTokens(m.output_tokens ?? m.completion_tokens)} out</span>
+      <span>{formatMetricLatency(m.duration_ms)}</span>
+    </div>
+  );
+}
+
 function FlowTimeline({ summary }: { summary: DaySummary }) {
   const { segments, windowStartTs, windowEndTs } = summary;
   const winDur = Math.max(1, windowEndTs - windowStartTs);
@@ -226,6 +250,7 @@ function ActivityPanel({
                       {formatClockTime(e.ts)}
                     </span>
                   </div>
+                  <LlmMetricChips record={e} />
                   <button
                     type="button"
                     className="obs-history-row"
@@ -420,6 +445,7 @@ function PetView() {
           status: incomingStatus,
           observation: cleanObservation(event.observation),
           ts: event.ts ?? Math.floor(Date.now() / 1000),
+          llm_metrics: event.llm_metrics,
         };
         // Prepend so the list is newest-first.
         // Deduplicate: if the most recent record has the same text and
