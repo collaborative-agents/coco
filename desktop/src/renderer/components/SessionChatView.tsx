@@ -11,6 +11,12 @@ import {
   encodeCustomAgent,
 } from './observation-types';
 
+// Platform-appropriate label for the global screen-capture hot key
+// (registered in main.ts as CommandOrControl+Shift+Space).
+const IS_MAC =
+  typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+const HOTKEY_LABEL = IS_MAC ? 'Cmd + Shift + Space' : 'Ctrl + Shift + Space';
+
 // ── Tutor guidance parsing ─────────────────────────────────────────────────────
 // The local tutor server returns a JSON envelope string, e.g.
 //   {"guidance": "...", "example_prompt": "...", "visualization_code": "<html>"}
@@ -184,6 +190,8 @@ const S: Record<string, React.CSSProperties> = {
   textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
   sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
   sendBtnDisabled: { opacity: 0.4, cursor: 'default' },
+  hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
+  hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
   feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
   feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
   feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
@@ -445,6 +453,19 @@ export default function SessionChatView() {
     });
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, [sendMessage]);
+
+  // Hot-key screen capture (Cmd/Ctrl+Shift+Space) → preview thumbnail in the
+  // input bar, reusing the same pending-image strip that paste drives.
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on('hotkey-capture', (data: any) => {
+      const url = (data ?? {}).imageDataUrl as string | undefined;
+      if (url) setPendingImages((prev) => [...prev, url]);
+    });
+    // Tell main the listener is live so it can flush any capture that arrived
+    // while this window was still loading (e.g. the hot key just opened it).
+    window.electron?.ipcRenderer.sendMessage('hotkey-capture-ready');
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
@@ -751,6 +772,9 @@ export default function SessionChatView() {
           >
             Send
           </button>
+        </div>
+        <div style={S.hotkeyHint}>
+          Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot
         </div>
       </div>
     </div>

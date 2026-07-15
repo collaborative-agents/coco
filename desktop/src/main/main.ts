@@ -92,6 +92,28 @@ let chatWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let onboardingWindow: BrowserWindow | null = null;
 let sessionSetupWindow: BrowserWindow | null = null;
+
+// Hot-key screen captures (Cmd/Ctrl+Shift+Space) waiting to be shown as preview
+// thumbnails in the chat input bar. When the hot key opens a fresh chat window,
+// the capture can arrive before the renderer has mounted its IPC listener, so we
+// buffer here and flush once the renderer announces it is ready.
+let pendingHotkeyCaptures: string[] = [];
+let hotkeyRendererReady = false;
+
+// Deliver any buffered hot-key captures to the chat renderer. No-op until the
+// renderer has signalled readiness — that handshake is what makes delivery
+// race-free regardless of whether the window was already open.
+const flushHotkeyCaptures = () => {
+  if (!hotkeyRendererReady) return;
+  if (!chatWindow || chatWindow.isDestroyed()) return;
+  if (pendingHotkeyCaptures.length === 0) return;
+  const toSend = pendingHotkeyCaptures;
+  pendingHotkeyCaptures = [];
+  toSend.forEach((imageDataUrl) => {
+    chatWindow?.webContents.send('hotkey-capture', { imageDataUrl });
+  });
+};
+
 // True once the Python services have been started. Guards against double-start
 // and lets us defer startup until the user has chosen their models.
 let observerStarted = false;
@@ -218,6 +240,10 @@ const CHAT_EXPANDED_W = 820;
 
 const createChatWindow = () => {
   if (chatWindow && !chatWindow.isDestroyed()) return;
+
+  // A fresh renderer hasn't mounted its hot-key listener yet; wait for its
+  // readiness handshake before flushing any buffered captures.
+  hotkeyRendererReady = false;
 
   chatWindow = new BrowserWindow({
     show: false,
@@ -434,6 +460,15 @@ ipcMain.on('onboarding-complete', (_event, profile: object) => {
   // Onboarding window closes itself (window.close() in renderer). Start the
   // avatar now that setup is complete; the chat panel is created on demand.
   createAvatarWindow();
+});
+
+// The chat renderer announces (on mount) that its hot-key-capture listener is
+// live. Flush any captures that arrived before it was ready — this handshake is
+// what lets the hot key open the chat AND attach the screenshot reliably.
+ipcMain.removeAllListeners('hotkey-capture-ready');
+ipcMain.on('hotkey-capture-ready', () => {
+  hotkeyRendererReady = true;
+  flushHotkeyCaptures();
 });
 
 // Pet click / "open chat". If a session is already active, reopen its chat
@@ -1349,10 +1384,32 @@ app
     // Register global shortcut for screenshot capture (Cmd+Shift+Space).
     // Works system-wide even when Electron is not the focused app.
     globalShortcut.register('CommandOrControl+Shift+Space', () => {
+      // Open the chat panel immediately so the preview has somewhere to land
+      // (and the keypress feels responsive). If it was closed, this creates a
+      // fresh renderer whose readiness handshake drives the flush below.
+      showChatPanel();
+
       const sensingPort = process.env.SENSING_PORT || '8080';
       const req = require('http').request(
         { hostname: '127.0.0.1', port: sensingPort, path: '/hotkey/capture', method: 'POST' },
-        () => {}
+        (res: import('http').IncomingMessage) => {
+          // Read the capture response and buffer its image, then flush to the
+          // chat input bar. flushHotkeyCaptures() no-ops until the renderer is
+          // ready, so a just-opened window still gets the capture once mounted.
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            try {
+              const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+              const dataUrl = body?.image_data_url;
+              if (!dataUrl) return;
+              pendingHotkeyCaptures.push(dataUrl);
+              flushHotkeyCaptures();
+            } catch {
+              // Ignore malformed responses — capture still lands server-side.
+            }
+          });
+        }
       );
       req.on('error', () => {}); // silent if sensing server is not running
       req.end();

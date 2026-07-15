@@ -5,6 +5,7 @@ FastAPI server for exposing Streamer data via HTTP API.
 """
 
 import asyncio
+import base64
 import json
 import os
 import subprocess
@@ -41,7 +42,7 @@ def _notify_hotkey_captured(index: int) -> None:
     try:
         script = (
             f'display notification "Screenshot #{index} saved" '
-            f'with title "Tutor Hot Key" '
+            f'with title "Coco Hot Key" '
             f'subtitle "Cmd+Shift+Space captured"'
         )
         subprocess.Popen(
@@ -100,6 +101,9 @@ class HotKeyCaptureResponse(BaseModel):
     index: int
     image_path: str
     timestamp: str
+    # base64 data URL of the captured image, so callers (e.g. the Electron
+    # renderer) can preview it directly without a follow-up file read.
+    image_data_url: str | None = None
 
 
 class HotKeyBufferResponse(BaseModel):
@@ -284,6 +288,21 @@ async def observe_user_prompt(request: ObserveUserPromptRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _encode_image_data_url(image_path: str) -> str | None:
+    """Read an image file and return a base64 data URL, or None on failure."""
+    try:
+        if not image_path or not os.path.exists(image_path):
+            return None
+        suffix = os.path.splitext(image_path)[1].lower()
+        media_type = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return f"data:{media_type};base64,{b64}"
+    except Exception as e:  # noqa: BLE001 — preview is best-effort
+        logger.warning(f"Failed to encode hot-key image {image_path}: {e}")
+        return None
+
+
 @app.post("/hotkey/capture", response_model=HotKeyCaptureResponse)
 async def trigger_hotkey_capture():
     """Manually trigger a hot-key capture (frontend fallback).
@@ -314,6 +333,7 @@ async def trigger_hotkey_capture():
             index=capture.index,
             image_path=capture.image_path,
             timestamp=capture.timestamp,
+            image_data_url=_encode_image_data_url(capture.image_path),
         )
     except HTTPException:
         raise
