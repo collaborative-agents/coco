@@ -6,6 +6,12 @@ import foxStudying from '../../../assets/write1.png';
 import foxEveryday from '../../../assets/tool1.png';
 import foxWaiting from '../../../assets/wait1.png';
 
+// Platform-appropriate label for the global screen-capture hot key
+// (registered in main.ts as CommandOrControl+Shift+Space).
+const IS_MAC =
+  typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+const HOTKEY_LABEL = IS_MAC ? 'Cmd + Shift + Space' : 'Ctrl + Shift + Space';
+
 const MODES = [
   {
     id: 'student_learning',
@@ -178,9 +184,22 @@ function Step3() {
             </div>
           </div>
 
+          <div className="ob-direct-arrow">or</div>
+
+          {/* Grab a screenshot with the global hot key */}
+          <div className="ob-direct-step-label">Press a hot key to capture your screen</div>
+          <div className="ob-direct-panel">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: '#f3f4f6' }}>
+              <kbd className="ob-kbd">{HOTKEY_LABEL}</kbd>
+              <div style={{ fontSize: 10.5, color: '#6b7280' }}>
+                Works anywhere — grabs a screenshot and opens the chat with it attached.
+              </div>
+            </div>
+          </div>
+
           <div className="ob-method-note" style={{ marginTop: 8 }}>
-            The chat opens right away — just describe what you&apos;re working on
-            to start a session.
+            Either way the chat opens right away — just describe what you&apos;re
+            working on to start a session.
           </div>
 
         </div>

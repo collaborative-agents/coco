@@ -711,9 +711,7 @@ def main(port: int = 8081, model_name: str = ""):
     # The model must be supplied explicitly; there is no built-in default so the
     # caller (CLI or desktop app) always chooses it consciously.
     if not (model_name or "").strip():
-        raise ValueError(
-            "--model_name is required"
-        )
+        raise ValueError("--model_name is required")
     asyncio.run(main_async(port=port, model_name=model_name))
 
 

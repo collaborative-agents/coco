@@ -47,4 +47,3 @@ export default async function notarizeMacos(context) {
     teamId: process.env.APPLE_TEAM_ID,
   });
 }
-

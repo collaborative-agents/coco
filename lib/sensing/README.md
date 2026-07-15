@@ -49,7 +49,7 @@ CREATE TABLE observations (
   - `POST /actions/query`: Query actions by time range (returns actions, states, time_info)
   - `POST /observe/user_prompt`: Capture screenshot and generate observation for a user prompt
   - `POST /session`: Configure streamer for a new session.
-  - Also exposes streaming (`GET /events/pause/stream`, `GET /observations/stream`), feedback (`POST /feedback`), hotkey-capture, and session-end endpoints.
+  - Also exposes streaming (`GET /events/pause/stream`, `GET /observations/stream`), feedback (`POST /feedback`), hotkey-capture (Ctrl/Command + Shift + Space), and session-end endpoints.
 
 
 ### Data Flow

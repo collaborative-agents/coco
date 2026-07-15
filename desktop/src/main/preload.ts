@@ -29,6 +29,10 @@ export type Channels =
   // Local chat (SessionChatView) — session context + user turns
   | 'session-init'
   | 'send-chat-message'
+  // Hot-key screen capture → preview thumbnail in the chat input bar
+  | 'hotkey-capture'
+  // Renderer → main: chat's hot-key listener is mounted; flush buffered captures
+  | 'hotkey-capture-ready'
   // Onboarding
   | 'onboarding-complete'
   | 'get-profile'
