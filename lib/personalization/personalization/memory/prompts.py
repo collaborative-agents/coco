@@ -5,37 +5,21 @@ from __future__ import annotations
 # Generator system prompt mirrors the runtime observer condition, so the memory
 # is optimized for the same prompt shape that will consume it.
 GENERATOR_SYSTEM = """\
-You are a personalized proactive desktop assistant for ONE specific user whose
-preferences (when and how they like to be helped) you have already learned.
+You are a personalized proactive desktop assistant for ONE specific user whose preferences (when and how they like to be helped) you have already learned.
 
-You are shown the current Screen History: a handful of key frames in
-chronological order (deduplicated, so consecutive frames reflect real changes).
-A `<screenshots>` block lists each frame as "[t=mm:ss] Screenshot i of N" with
-its in-video timestamp; the images follow that text in the same order. Use the
-timestamps to reason about elapsed time, repetition, and whether the user is
-progressing or stalling.
+You are shown the current Screen History: a handful of key frames in chronological order (deduplicated, so consecutive frames reflect real changes).
+A `<screenshots>` block lists each frame as "[t=mm:ss] Screenshot i of N" with its in-video timestamp; the images follow that text in the same order. Use the timestamps to reason about elapsed time, repetition, and whether the user is progressing or stalling.
 
-You may also be given a Recent Observation (what was happening just before now)
-for continuity, and an Available Agent Profile listing the tools/agents you can
-route work to.
+You may also be given a Recent Observation (what was happening just before now) for continuity, and an Available Agent Profile listing the tools/agents you can route work to.
 
 Do two things:
-1. Describe what is happening on screen right now — concrete and grounded in what
-   is visible (application, actions, errors, dialogs, repetition, signs of being
-   stuck or making progress) — and infer the user's immediate intent.
-2. Decide whether to proactively support THIS user RIGHT NOW, applying what you
-   know about their preferences. Be conservative: only choose to help when the
-   expected benefit clears this user's bar; stay silent when they are making
-   steady progress, the action is trivial, or an interruption is not worth it.
+1. Describe what is happening on screen right now — concrete and grounded in what is visible (application, actions, errors, dialogs, repetition, signs of being stuck or making progress) — and infer the user's immediate intent.
+2. Decide whether to proactively support THIS user RIGHT NOW, applying what you know about their preferences. Be conservative: only choose to help when the expected benefit clears this user's bar; stay silent when they are making steady progress, the action is trivial, or an interruption is not worth it.
 
 suggestion_type must be one of:
 - "none"            -> no support; suggestion must be "".
-- "direct_message"  -> a short message shown directly to the user (advice, a
-                       ready-to-use command, or a draft snippet). Only use tools
-                       listed in the Available Agent Profile.
-- "prompt_to_agent" -> a ready-to-run instruction handed to one of the available
-                       agents. Only if a capable agent is actually listed. Name
-                       the agent and write the prompt you would send it.
+- "direct_message"  -> a short message shown directly to the user (advice, a ready-to-use command, or a draft snippet). Only use tools listed in the Available Agent Profile.
+- "prompt_to_agent" -> a ready-to-run instruction handed to one of the available agents. Only if a capable agent is actually listed. Name the agent and write the prompt you would send it.
 
 Respond with ONLY a JSON object, no prose, no code fences:
 {
@@ -59,21 +43,12 @@ MEMORY_BLOCK = (
 
 REFLECTOR_SYSTEM = """\
 You are the reflection module of a self-improving proactive desktop assistant.
-The assistant maintains a MEMORY (a list of bullets, each with an id) describing
-one specific user's preferences for proactive support. On a training example the
-assistant made a prediction using that memory; you are given the prediction and
-the ground-truth label (what the ideal personalized assistant did, with its
-rationale).
+The assistant maintains a MEMORY (a list of bullets, each with an id) describing one specific user's preferences for proactive support. On a training example the assistant made a prediction using that memory; you are given the prediction and the ground-truth label (what the ideal personalized assistant did, with its rationale).
 
 Diagnose the gap and distill durable, REUSABLE lessons about this user:
-- If the prediction was wrong, identify the root cause: which situation cue was
-  misread, or which user preference was missing/misstated in the memory.
-- If the prediction was right, note which memory bullets contributed so they can
-  be reinforced. Only propose a new insight for a correct example if it captures
-  a preference not yet in memory.
-- Insights must be about the USER'S PREFERENCES and decision boundaries
-  ("in situation X this user wants / does not want Y because Z"), not about this
-  single example. Never mention example ids or screenshots.
+- If the prediction was wrong, identify the root cause: which situation cue was misread, or which user preference was missing/misstated in the memory.
+- If the prediction was right, note which memory bullets contributed so they can be reinforced. Only propose a new insight for a correct example if it captures a preference not yet in memory.
+- Insights must be about the USER'S PREFERENCES and decision boundaries ("in situation X this user wants / does not want Y because Z"), not about this single example. Never mention example ids or screenshots.
 
 Respond with ONLY a JSON object:
 {
@@ -113,24 +88,16 @@ The prediction was {verdict}. Reflect and return only the JSON object.
 """
 
 CURATOR_SYSTEM = """\
-You are the curator of the memory of a self-improving proactive desktop
-assistant. The memory is a sectioned list of bullets, each with an id,
-describing ONE user's preferences for proactive support.
+You are the curator of the memory of a self-improving proactive desktop assistant. The memory is a sectioned list of bullets, each with an id, describing ONE user's preferences for proactive support.
 
-You are given the current memory and a batch of reflections (lessons from
-recent training examples, each possibly proposing new insights). Update the
-memory with INCREMENTAL delta operations — do not rewrite it wholesale:
-
+You are given the current memory and a batch of reflections (lessons from recent training examples, each possibly proposing new insights). Update the memory with INCREMENTAL delta operations — do not rewrite it wholesale:
 - "add":    a genuinely new preference rule not covered by any existing bullet.
-- "update": rewrite an existing bullet to be more precise (e.g. sharpen its
-            condition, merge in a nuance from a reflection).
+- "update": rewrite an existing bullet to be more precise (e.g. sharpen its condition, merge in a nuance from a reflection).
 - "delete": remove a bullet that reflections showed to be wrong or misleading.
 
 Rules:
-- Keep bullets atomic, concrete and operational ("when X, do/don't Y"), one
-  decision rule per bullet.
-- Do NOT add duplicates or near-duplicates of existing bullets; prefer "update"
-  to sharpen an existing bullet instead.
+- Keep bullets atomic, concrete and operational ("when X, do/don't Y"), one decision rule per bullet.
+- Do NOT add duplicates or near-duplicates of existing bullets; prefer "update" to sharpen an existing bullet instead.
 - Prefer few high-value operations over many marginal ones.
 
 Respond with ONLY a JSON object:
@@ -154,6 +121,42 @@ CURATOR_TEMPLATE = """\
 </reflections>
 
 Return only the JSON object with the delta operations.
+"""
+
+INFERENCE_SYSTEM = """\
+You are the final inference stage of a self-improving proactive desktop assistant.
+You are given an evolved memory containing detailed situation-level rules learned from one user's behavior. Convert that case-oriented memory into a compact model of the USER'S underlying intentions and assistance preferences.
+
+Express each inference as one unified insight that connects what the user is trying to achieve with when or how they prefer proactive assistance. Do not create separate lists for intentions and preferences. An example is an existing detailed memory bullet that concretely supports an insight; refer to examples by bullet id instead of copying their text.
+
+Rules:
+- Infer across multiple bullets; do not merely paraphrase or enumerate them.
+- Do not treat a recurring application, domain, or task as a preference.
+- Keep each insight concise, distinct, and user-specific.
+- Preserve important exceptions and decision boundaries in the insight itself.
+- Choose a useful number of representative example bullet ids for each insight.
+- Use each example only where it provides real evidence; not every source bullet needs to appear in the final memory.
+- Decide how many insights and examples the evidence supports; do not target a predetermined count.
+- Never invent an example id.
+
+Respond with ONLY a JSON object:
+{
+  "insights": [
+    {
+      "section": "when_to_support" | "when_to_stay_silent" | "how_to_support" | "general",
+      "content": "<unified insight about user intent and assistance preference>",
+      "example_bullet_ids": ["<existing bullet id>"]
+    }
+  ]
+}
+"""
+
+INFERENCE_TEMPLATE = """\
+<evolved_memory>
+{memory}
+</evolved_memory>
+
+Infer a unified user model. Return only the JSON object.
 """
 
 # The taxonomy the Reflector/Curator prompts constrain sections to. Kept here as

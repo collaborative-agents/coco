@@ -5,10 +5,9 @@
 the ACE (https://arxiv.org/abs/2510.04618), ACON (https://arxiv.org/abs/2510.00615):
 1. For each batch, it generates predictions under the current memory,
 2. Reflects on the gaps against ground truth,
-3. Curates a batch of reflections into
-Maintain a sectioned bullet memory and update it with incremental delta ops,
-then grow and refine the memory (votes reinforce/penalize bullets,
-the lowest-utility bullets are dropped over the cap).
+3. Curates reflections into incremental delta ops on a sectioned bullet memory,
+4. Grows and refines that detailed memory using helpful/harmful votes, and
+5. Infers a compact user model, retaining selected detailed bullets as examples.
 
 """
 
@@ -21,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from personalization.memory.roles import curate, generate, reflect
+from personalization.memory.roles import curate, generate, infer_memory, reflect
 from personalization.memory.state import SectionedMemory
 from personalization.schemas import LabeledMoment
 
@@ -110,6 +109,8 @@ class SelfEvolvingLearner:
         md_path = out / "memory.md" if out else None
         log_fh = (out / "progress.jsonl").open("a") if out else None
 
+        # Any prior inference is stale as soon as detailed evolution resumes.
+        self.memory.inferred = None
         rng = random.Random(cfg.seed)
         for epoch in range(1, cfg.epochs + 1):
             order = list(range(len(moments)))
@@ -117,7 +118,7 @@ class SelfEvolvingLearner:
             n_correct = n_seen = 0
             for start in range(0, len(order), cfg.batch_size):
                 batch = [moments[i] for i in order[start : start + cfg.batch_size]]
-                memory_text = self.memory.render(with_ids=True)
+                memory_text = self.memory.render_evolved(with_ids=True)
 
                 results = self._generate_batch(batch, memory_text)
                 n_seen += len(results)
@@ -174,7 +175,9 @@ class SelfEvolvingLearner:
                 # Checkpoint after every batch so a crash/preemption loses nothing.
                 if state_path:
                     state_path.write_text(json.dumps(self.memory.to_json(), indent=2))
-                    md_path.write_text(self.memory.render(with_ids=False) + "\n")
+                    md_path.write_text(
+                        self.memory.render_evolved(with_ids=False) + "\n"
+                    )
 
             if log:
                 print(
@@ -182,6 +185,23 @@ class SelfEvolvingLearner:
                     f"{len(self.memory.bullets)} bullets ===",
                     file=sys.stderr,
                 )
+
+        if self.memory.bullets:
+            self.memory.inferred = infer_memory(
+                self.model,
+                self.memory,
+                max_tokens=cfg.role_max_tokens,
+            )
+            if log and self.memory.inferred is None:
+                print(
+                    "warning: final memory inference returned no usable insights; "
+                    "keeping detailed memory output",
+                    file=sys.stderr,
+                )
+
+        if state_path:
+            state_path.write_text(json.dumps(self.memory.to_json(), indent=2))
+            md_path.write_text(self.memory.render(with_ids=False) + "\n")
 
         if log_fh:
             log_fh.close()

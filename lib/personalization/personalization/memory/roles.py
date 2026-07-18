@@ -1,10 +1,11 @@
-"""The three self-evolving roles.
+"""The four self-evolving roles.
 
 Generator — predict need_support on a labeled moment under the CURRENT memory,
             using the observer prompt shape with user_profile withheld.
 Reflector — compare the prediction to the ground-truth label and distill durable,
             reusable lessons about the user (text-only).
 Curator   — turn a batch of reflections into incremental delta ops on the memory.
+Inference — compress detailed evolved rules into unified user insights.
 """
 
 from __future__ import annotations
@@ -19,11 +20,13 @@ from personalization.memory.prompts import (
     CURATOR_SYSTEM,
     CURATOR_TEMPLATE,
     GENERATOR_SYSTEM,
+    INFERENCE_SYSTEM,
+    INFERENCE_TEMPLATE,
     MEMORY_BLOCK,
     REFLECTOR_SYSTEM,
     REFLECTOR_TEMPLATE,
 )
-from personalization.memory.state import SectionedMemory
+from personalization.memory.state import InferredMemory, SectionedMemory
 from personalization.memory.utils import norm_need, parse_json_obj, sample_frames
 from personalization.schemas import LabeledMoment
 
@@ -150,6 +153,39 @@ def curate(
     )
     ops = parsed.get("ops") if parsed else None
     return ops if isinstance(ops, list) else []
+
+
+def infer_memory(
+    model: str,
+    memory: SectionedMemory,
+    *,
+    max_tokens: int = 20480,
+    temperature: float = 0.2,
+) -> InferredMemory | None:
+    """Infer a compact user model from the detailed evolved memory."""
+    prompt = INFERENCE_TEMPLATE.format(memory=memory.render_evolved(with_ids=True))
+    messages = [
+        {
+            "role": "system",
+            "content": INFERENCE_SYSTEM,
+        },
+        {"role": "user", "content": prompt},
+    ]
+    parsed = parse_json_obj(
+        _complete_role(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            operation="self_evolving_memory.infer",
+        )
+    )
+    if not parsed:
+        return None
+    return InferredMemory.from_dict(
+        parsed,
+        valid_bullet_ids=set(memory.bullets),
+    )
 
 
 def _complete_role(

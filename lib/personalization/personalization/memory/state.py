@@ -57,11 +57,84 @@ class MemoryOp:
         )
 
 
+@dataclass(slots=True)
+class InferredInsight:
+    section: str
+    content: str
+    example_bullet_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class InferredMemory:
+    """Compact user model inferred from detailed evolved memory bullets."""
+
+    insights: list[InferredInsight] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: JsonDict,
+        *,
+        valid_bullet_ids: set[str],
+    ) -> InferredMemory | None:
+        raw_insights = data.get("insights", [])
+        if not isinstance(raw_insights, list):
+            return None
+
+        insights: list[InferredInsight] = []
+        for raw in raw_insights:
+            if not isinstance(raw, dict):
+                continue
+            content = str(raw.get("content", "")).strip()
+            if not content:
+                continue
+            raw_ids = raw.get("example_bullet_ids", [])
+            example_ids = (
+                [str(item) for item in raw_ids if str(item) in valid_bullet_ids]
+                if isinstance(raw_ids, list)
+                else []
+            )
+            example_ids = list(dict.fromkeys(example_ids))
+            if not example_ids:
+                continue
+            insights.append(
+                InferredInsight(
+                    section=(
+                        str(raw.get("section"))
+                        if raw.get("section") in SECTIONS
+                        else "general"
+                    ),
+                    content=content,
+                    example_bullet_ids=example_ids,
+                )
+            )
+        if not insights:
+            return None
+        return cls(insights=insights)
+
+    def to_json(self) -> JsonDict:
+        return {
+            "insights": [
+                {
+                    "section": insight.section,
+                    "content": insight.content,
+                    "example_bullet_ids": list(insight.example_bullet_ids),
+                }
+                for insight in self.insights
+            ],
+        }
+
+
 class SectionedMemory:
     """Sectioned bullet memory with helpful/harmful counters and delta ops."""
 
-    def __init__(self, bullets: dict[str, MemoryBullet] | None = None) -> None:
+    def __init__(
+        self,
+        bullets: dict[str, MemoryBullet] | None = None,
+        inferred: InferredMemory | None = None,
+    ) -> None:
         self.bullets = bullets or {}
+        self.inferred = inferred
         self._next = _next_id_number(self.bullets)
         self._age = max((b.born for b in self.bullets.values()), default=0)
 
@@ -154,6 +227,12 @@ class SectionedMemory:
         return stale
 
     def render(self, *, with_ids: bool = True) -> str:
+        if self.inferred is not None:
+            return self._render_inferred(with_ids=with_ids)
+        return self.render_evolved(with_ids=with_ids)
+
+    def render_evolved(self, *, with_ids: bool = True) -> str:
+        """Render the detailed case-level bullets used by the learning roles."""
         if not self.bullets:
             return "(no entries yet — you have not learned anything about this user so far)"
         lines: list[str] = []
@@ -165,6 +244,31 @@ class SectionedMemory:
             for bullet in sorted(items, key=lambda b: b.born):
                 prefix = f"[{bullet.id}] " if with_ids else ""
                 lines.append(f"- {prefix}{bullet.content}")
+            lines.append("")
+        return "\n".join(lines).strip()
+
+    def _render_inferred(self, *, with_ids: bool) -> str:
+        assert self.inferred is not None
+        lines = ["## Inferred user model"]
+        for section in SECTIONS:
+            insights = [
+                item for item in self.inferred.insights if item.section == section
+            ]
+            if not insights:
+                continue
+            lines.append(f"### {SECTION_TITLES[section]}")
+            for insight in insights:
+                lines.append(f"- {insight.content}")
+                examples = [
+                    self.bullets[bid]
+                    for bid in insight.example_bullet_ids
+                    if bid in self.bullets
+                ]
+                if examples:
+                    lines.append("  - Examples:")
+                for example in examples:
+                    prefix = f"[{example.id}] " if with_ids else ""
+                    lines.append(f"    - {prefix}{example.content}")
             lines.append("")
         return "\n".join(lines).strip()
 
@@ -186,6 +290,7 @@ class SectionedMemory:
                 }
                 for bid, bullet in self.bullets.items()
             },
+            "inferred": self.inferred.to_json() if self.inferred else None,
         }
 
     @classmethod
@@ -201,16 +306,43 @@ class SectionedMemory:
                 except TypeError:
                     continue
                 bullets[str(bid)] = bullet
-        memory = cls(bullets)
+        raw_inferred = data.get("inferred")
+        inferred = (
+            InferredMemory.from_dict(raw_inferred, valid_bullet_ids=set(bullets))
+            if isinstance(raw_inferred, dict)
+            else None
+        )
+        memory = cls(bullets, inferred=inferred)
         if isinstance(data.get("next"), int):
             memory._next = int(data["next"])
         if isinstance(data.get("age"), int):
             memory._age = int(data["age"])
         return memory
 
+    @classmethod
+    def from_markdown(cls, text: str) -> SectionedMemory:
+        """Load the controlled sectioned Markdown emitted by ``render_evolved``."""
+        title_to_section = {title: section for section, title in SECTION_TITLES.items()}
+        memory = cls()
+        section: str | None = None
+        for line in text.splitlines():
+            if line.startswith("## "):
+                section = title_to_section.get(line[3:].strip())
+                continue
+            if section is None or not line.startswith("- "):
+                continue
+            content = re.sub(r"^\[m-\d+\]\s+", "", line[2:].strip())
+            memory.apply_ops(
+                [MemoryOp(op="add", section=section, content=content)],
+                max_ops=1,
+            )
+        return memory
+
     def to_learned_preferences(
         self, *, status: str = "draft"
     ) -> list[LearnedPreference]:
+        if self.inferred is not None and self.inferred.insights:
+            return self._inferred_learned_preferences(status=status)
         prefs: list[LearnedPreference] = []
         for bullet in self.bullets.values():
             confidence = _confidence_from_votes(bullet.helpful, bullet.harmful)
@@ -227,6 +359,43 @@ class SectionedMemory:
                     last_evidence_at=bullet.updated_at or bullet.created_at,
                     status=status,
                     evidence_moment_ids=list(bullet.evidence_moment_ids),
+                )
+            )
+        return prefs
+
+    def _inferred_learned_preferences(self, *, status: str) -> list[LearnedPreference]:
+        assert self.inferred is not None
+        prefs: list[LearnedPreference] = []
+        for insight in self.inferred.insights:
+            examples = [
+                self.bullets[bid]
+                for bid in insight.example_bullet_ids
+                if bid in self.bullets
+            ]
+            helpful = sum(item.helpful for item in examples)
+            harmful = sum(item.harmful for item in examples)
+            created_at = min((item.created_at for item in examples), default=0.0)
+            updated_at = max((item.updated_at for item in examples), default=0.0)
+            evidence_ids = sorted(
+                {
+                    moment_id
+                    for item in examples
+                    for moment_id in item.evidence_moment_ids
+                }
+            )
+            prefs.append(
+                LearnedPreference(
+                    id=stable_id("lp", insight.section, insight.content),
+                    section=insight.section,
+                    content=insight.content,
+                    confidence=_confidence_from_votes(helpful, harmful),
+                    helpful=helpful,
+                    harmful=harmful,
+                    created_at=created_at,
+                    updated_at=updated_at,
+                    last_evidence_at=updated_at or created_at,
+                    status=status,
+                    evidence_moment_ids=evidence_ids,
                 )
             )
         return prefs
