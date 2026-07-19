@@ -30,6 +30,9 @@ class EvolveConfig:
     """Hyper-parameters for the loop; defaults match the personalization baseline."""
 
     epochs: int = 1
+    target_utility: float | None = None
+    false_positive_cost: float = 2.0
+    false_negative_cost: float = 1.0
     batch_size: int = 16  # generator calls per curator update
     max_bullets: int = 60
     max_ops_per_batch: int = 8
@@ -40,24 +43,108 @@ class EvolveConfig:
     concurrency: int = 8
     seed: int = 42
 
+    def __post_init__(self) -> None:
+        if self.target_utility is not None and self.target_utility > 1.0:
+            raise ValueError("target_utility cannot exceed the maximum utility of 1.0")
+        if self.false_positive_cost < 0 or self.false_negative_cost < 0:
+            raise ValueError("utility error costs must be non-negative")
+
+
+@dataclass(slots=True)
+class UtilityStats:
+    """Confusion counts and cost-sensitive utility for generator predictions."""
+
+    true_positive: int = 0
+    true_negative: int = 0
+    false_positive: int = 0
+    false_negative: int = 0
+    invalid: int = 0
+
+    def add(self, results: list[dict]) -> None:
+        for result in results:
+            prediction = result.get("pred")
+            ground_truth = result.get("gt")
+            if prediction not in ("yes", "no") or ground_truth not in ("yes", "no"):
+                self.invalid += 1
+            elif prediction == "yes" and ground_truth == "yes":
+                self.true_positive += 1
+            elif prediction == "no" and ground_truth == "no":
+                self.true_negative += 1
+            elif prediction == "yes":
+                self.false_positive += 1
+            else:
+                self.false_negative += 1
+
+    @property
+    def total(self) -> int:
+        return (
+            self.true_positive
+            + self.true_negative
+            + self.false_positive
+            + self.false_negative
+            + self.invalid
+        )
+
+    def utility(
+        self, *, false_positive_cost: float, false_negative_cost: float
+    ) -> float:
+        if not self.total:
+            return 0.0
+        invalid_cost = max(false_positive_cost, false_negative_cost)
+        score = (
+            self.true_positive
+            + self.true_negative
+            - false_positive_cost * self.false_positive
+            - false_negative_cost * self.false_negative
+            - invalid_cost * self.invalid
+        )
+        return round(score / self.total, 4)
+
+    def to_json(self) -> dict:
+        return {
+            "true_positive": self.true_positive,
+            "true_negative": self.true_negative,
+            "false_positive": self.false_positive,
+            "false_negative": self.false_negative,
+            "invalid": self.invalid,
+            "total": self.total,
+        }
+
 
 class SelfEvolvingLearner:
-    """Evolve a ``SectionedMemory`` from labeled examples via a served model."""
+    """Evolve memory with independently configurable prediction/evolution models."""
 
     def __init__(
         self,
-        model: str,
         *,
+        prediction_model: str,
+        evolution_model: str | None = None,
         image_root: str | Path | None = None,
         config: EvolveConfig | None = None,
         memory: SectionedMemory | None = None,
     ) -> None:
-        self.model = model
+        """
+        Evolve memory based on user interaction data.
+
+        Args:
+            prediction_model: The model to use for prediction.
+            evolution_model: The model to use for evolution.
+            image_root: The root directory of the image files.
+            config: The configuration for the loop.
+            memory: The memory to evolve.
+        """
+        if not prediction_model:
+            raise ValueError("prediction_model is required")
+        self.prediction_model = prediction_model
+        self.evolution_model = evolution_model or prediction_model
         self.image_root = (
             Path(image_root).expanduser() if image_root is not None else None
         )
         self.cfg = config or EvolveConfig()
         self.memory = memory or SectionedMemory()
+        self.epochs_completed = 0
+        self.last_utility: float | None = None
+        self.target_reached = False
 
     # -- roles ------------------------------------------------------------- #
 
@@ -68,7 +155,7 @@ class SelfEvolvingLearner:
             return list(
                 pool.map(
                     lambda moment: generate(
-                        self.model,
+                        self.prediction_model,
                         moment,
                         memory_text,
                         image_root=self.image_root,
@@ -83,7 +170,7 @@ class SelfEvolvingLearner:
         with ThreadPoolExecutor(max_workers=self.cfg.concurrency) as pool:
             reflections = pool.map(
                 lambda res: reflect(
-                    self.model,
+                    self.evolution_model,
                     res,
                     memory_text,
                     max_tokens=self.cfg.role_max_tokens,
@@ -91,6 +178,18 @@ class SelfEvolvingLearner:
                 results,
             )
         return [r for r in reflections if r]
+
+    def _evaluate_current_utility(self, moments: list[LabeledMoment]) -> UtilityStats:
+        """Evaluate the current completed memory without applying more updates."""
+        stats = UtilityStats()
+        memory_text = self.memory.render_evolved(with_ids=True)
+        for start in range(0, len(moments), self.cfg.batch_size):
+            stats.add(
+                self._generate_batch(
+                    moments[start : start + self.cfg.batch_size], memory_text
+                )
+            )
+        return stats
 
     # -- learning loop ----------------------------------------------------- #
 
@@ -116,11 +215,15 @@ class SelfEvolvingLearner:
             order = list(range(len(moments)))
             rng.shuffle(order)
             n_correct = n_seen = 0
+            epoch_stats = UtilityStats()
             for start in range(0, len(order), cfg.batch_size):
                 batch = [moments[i] for i in order[start : start + cfg.batch_size]]
                 memory_text = self.memory.render_evolved(with_ids=True)
 
                 results = self._generate_batch(batch, memory_text)
+                batch_stats = UtilityStats()
+                batch_stats.add(results)
+                epoch_stats.add(results)
                 n_seen += len(results)
                 n_correct += sum(r["correct"] for r in results)
 
@@ -135,7 +238,7 @@ class SelfEvolvingLearner:
                 n_applied = (
                     self.memory.apply_ops(
                         curate(
-                            self.model,
+                            self.evolution_model,
                             self.memory,
                             reflections,
                             max_ops=cfg.max_ops_per_batch,
@@ -156,6 +259,15 @@ class SelfEvolvingLearner:
                         sum(r["correct"] for r in results) / len(results), 4
                     ),
                     "running_acc": round(n_correct / n_seen, 4),
+                    "batch_utility": batch_stats.utility(
+                        false_positive_cost=cfg.false_positive_cost,
+                        false_negative_cost=cfg.false_negative_cost,
+                    ),
+                    "running_utility": epoch_stats.utility(
+                        false_positive_cost=cfg.false_positive_cost,
+                        false_negative_cost=cfg.false_negative_cost,
+                    ),
+                    "running_confusion": epoch_stats.to_json(),
                     "n_wrong": len(wrong),
                     "n_reflections": len(reflections),
                     "ops_applied": n_applied,
@@ -168,7 +280,8 @@ class SelfEvolvingLearner:
                 if log:
                     print(
                         f"[epoch {epoch} batch {batch_no}] acc={rec['batch_acc']:.2f} "
-                        f"(running {rec['running_acc']:.2f}) wrong={len(wrong)} "
+                        f"utility={rec['batch_utility']:.2f} "
+                        f"(running {rec['running_utility']:.2f}) wrong={len(wrong)} "
                         f"ops={n_applied} bullets={len(self.memory.bullets)}",
                         file=sys.stderr,
                     )
@@ -179,16 +292,57 @@ class SelfEvolvingLearner:
                         self.memory.render_evolved(with_ids=False) + "\n"
                     )
 
+            self.epochs_completed = epoch
+            online_utility = epoch_stats.utility(
+                false_positive_cost=cfg.false_positive_cost,
+                false_negative_cost=cfg.false_negative_cost,
+            )
+            measured_stats = (
+                self._evaluate_current_utility(moments)
+                if cfg.target_utility is not None
+                else epoch_stats
+            )
+            self.last_utility = measured_stats.utility(
+                false_positive_cost=cfg.false_positive_cost,
+                false_negative_cost=cfg.false_negative_cost,
+            )
+            self.target_reached = (
+                cfg.target_utility is not None
+                and measured_stats.total > 0
+                and self.last_utility >= cfg.target_utility
+            )
+            epoch_rec = {
+                "event": "epoch_end",
+                "epoch": epoch,
+                "online_utility": online_utility,
+                "measured_utility": self.last_utility,
+                "utility_confusion": measured_stats.to_json(),
+                "target_utility": cfg.target_utility,
+                "target_reached": self.target_reached,
+            }
+            if log_fh:
+                log_fh.write(json.dumps(epoch_rec) + "\n")
+                log_fh.flush()
             if log:
                 print(
                     f"=== epoch {epoch} done: train acc {n_correct / max(n_seen, 1):.4f}, "
+                    f"online utility {online_utility:.4f}, "
+                    f"measured utility {self.last_utility:.4f}, "
                     f"{len(self.memory.bullets)} bullets ===",
                     file=sys.stderr,
                 )
+            if self.target_reached:
+                if log:
+                    print(
+                        f"=== target utility {cfg.target_utility:.4f} reached; "
+                        "stopping evolution ===",
+                        file=sys.stderr,
+                    )
+                break
 
         if self.memory.bullets:
             self.memory.inferred = infer_memory(
-                self.model,
+                self.evolution_model,
                 self.memory,
                 max_tokens=cfg.role_max_tokens,
             )

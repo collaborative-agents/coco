@@ -1,5 +1,9 @@
 from personalization.memory.evaluate import evaluate_memory_accuracy
-from personalization.memory.evolve import EvolveConfig, SelfEvolvingLearner
+from personalization.memory.evolve import (
+    EvolveConfig,
+    SelfEvolvingLearner,
+    UtilityStats,
+)
 from personalization.memory.roles import curate, generate, infer_memory, reflect
 from personalization.memory.state import (
     InferredInsight,
@@ -19,6 +23,7 @@ __all__ = [
     "MemoryOp",
     "SectionedMemory",
     "SelfEvolvingLearner",
+    "UtilityStats",
     "curate",
     "evaluate_memory_accuracy",
     "generate",
