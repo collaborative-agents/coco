@@ -1,0 +1,459 @@
+import json
+
+from personalization.dataset_builder import build_sft_examples
+from personalization.memory import (
+    EvolveConfig,
+    InferredInsight,
+    InferredMemory,
+    MemoryOp,
+    SectionedMemory,
+    SelfEvolvingLearner,
+    UtilityStats,
+)
+from personalization.memory import evaluate as memory_evaluate
+from personalization.memory import evolve as memory_evolve
+from personalization.memory import roles as memory_roles
+from personalization.prompt_context import render_personalization_context
+from personalization.schemas import (
+    LabeledMoment,
+    LearnedPreference,
+    ShortWindowSignal,
+    UserMemory,
+)
+
+
+def test_prompt_context_renders_personalization_layers():
+    context = render_personalization_context(
+        user_memory=UserMemory.from_text("Always prefer concise suggestions.", now=1.0),
+        short_window_signals=[
+            ShortWindowSignal(
+                signal_id="sig-1",
+                session_id="s1",
+                observation_id="obs-1",
+                ts=10.0,
+                kind="dismiss",
+                polarity="negative",
+                scope="task",
+                expires_at=100.0,
+                confidence=1.0,
+                evidence="dismissed same lookup suggestion",
+            )
+        ],
+        learned_preferences=[
+            LearnedPreference.new(
+                section="when_to_support",
+                content="Support repetitive research lookups.",
+                status="active",
+                now=1.0,
+            )
+        ],
+        now=20.0,
+    )
+
+    assert context.index("<user_memory") < context.index("<recent_user_signals")
+    assert context.index("<recent_user_signals") < context.index("<learned_preferences")
+    assert "Always prefer concise suggestions." in context
+    assert "dismissed same lookup suggestion" in context
+    assert "Support repetitive research lookups." in context
+
+
+def test_sectioned_memory_applies_ops_votes_and_exports_preferences():
+    memory = SectionedMemory()
+    assert (
+        memory.apply_ops(
+            [
+                MemoryOp(
+                    op="add",
+                    section="when_to_support",
+                    content="Support repeated citation lookup tasks.",
+                    evidence_moment_ids=["m1"],
+                )
+            ]
+        )
+        == 1
+    )
+    assert (
+        memory.apply_ops(
+            [
+                MemoryOp(
+                    op="add",
+                    section="when_to_support",
+                    content="Support repeated citation lookup tasks.",
+                )
+            ]
+        )
+        == 0
+    )
+    bid = next(iter(memory.bullets))
+    memory.vote([bid], [])
+    prefs = memory.to_learned_preferences()
+    assert prefs[0].section == "when_to_support"
+    assert prefs[0].confidence == 0.95
+    assert prefs[0].evidence_moment_ids == ["m1"]
+
+
+def test_inferred_memory_groups_detailed_bullets_as_examples():
+    memory = SectionedMemory()
+    memory.apply_ops(
+        [
+            MemoryOp(
+                op="add",
+                section="when_to_support",
+                content="Offer help after repeated failed test runs.",
+                evidence_moment_ids=["moment-1"],
+            ),
+            MemoryOp(
+                op="add",
+                section="when_to_stay_silent",
+                content="Stay silent while the user is making visible progress.",
+                evidence_moment_ids=["moment-2"],
+            ),
+        ]
+    )
+    support_id, silent_id = memory.bullets
+    memory.vote([support_id], [])
+    memory.inferred = InferredMemory.from_dict(
+        {
+            "insights": [
+                {
+                    "section": "when_to_support",
+                    "content": (
+                        "To maintain momentum, the user prefers intervention at a "
+                        "demonstrated impasse, not merely risk."
+                    ),
+                    "example_bullet_ids": [support_id, "invented-id"],
+                },
+                {
+                    "section": "when_to_stay_silent",
+                    "content": (
+                        "To protect focus, the user prefers silence during visible "
+                        "progress."
+                    ),
+                    "example_bullet_ids": [silent_id],
+                },
+            ],
+        },
+        valid_bullet_ids=set(memory.bullets),
+    )
+
+    rendered = memory.render(with_ids=False)
+    assert "## Inferred user model" in rendered
+    assert "To maintain momentum" in rendered
+    assert "intervention at a demonstrated impasse" in rendered
+    assert "Offer help after repeated failed test runs." in rendered
+    assert "invented-id" not in rendered
+    assert memory.render_evolved(with_ids=True).startswith(
+        "## When to proactively support"
+    )
+
+    restored = SectionedMemory.from_json(memory.to_json())
+    assert restored.render(with_ids=False) == rendered
+    preferences = restored.to_learned_preferences()
+    assert [item.content for item in preferences] == [
+        (
+            "To maintain momentum, the user prefers intervention at a demonstrated "
+            "impasse, not merely risk."
+        ),
+        "To protect focus, the user prefers silence during visible progress.",
+    ]
+    assert preferences[0].evidence_moment_ids == ["moment-1"]
+
+
+def test_sectioned_memory_loads_evolved_markdown():
+    memory = SectionedMemory.from_markdown(
+        """\
+## When to proactively support
+- [m-041] Help after repeated failures.
+
+## When to stay silent
+- Stay silent while the user is making progress.
+
+## Unknown section
+- Ignore bullets outside the evolved taxonomy.
+"""
+    )
+
+    assert [item.id for item in memory.bullets.values()] == ["m-001", "m-002"]
+    assert [item.content for item in memory.bullets.values()] == [
+        "Help after repeated failures.",
+        "Stay silent while the user is making progress.",
+    ]
+    assert [item.section for item in memory.bullets.values()] == [
+        "when_to_support",
+        "when_to_stay_silent",
+    ]
+
+
+def test_inferred_memory_requires_insights_with_valid_examples():
+    inferred = InferredMemory.from_dict(
+        {
+            "insights": [
+                {
+                    "section": "general",
+                    "content": "An unsupported insight.",
+                    "example_bullet_ids": ["invented-id"],
+                }
+            ],
+        },
+        valid_bullet_ids={"m-001"},
+    )
+    assert inferred is None
+
+
+def test_inference_role_selects_existing_bullets_without_count_limits(monkeypatch):
+    memory = SectionedMemory()
+    memory.apply_ops(
+        [
+            MemoryOp(
+                op="add",
+                section="when_to_support",
+                content="Help after repeated failures.",
+            )
+        ]
+    )
+    bullet_id = next(iter(memory.bullets))
+
+    def fake_complete(messages, **kwargs):
+        assert f"[{bullet_id}] Help after repeated failures." in messages[1]["content"]
+        assert kwargs["operation"] == "self_evolving_memory.infer"
+        assert "predetermined count" in messages[0]["content"]
+        return json.dumps(
+            {
+                "insights": [
+                    {
+                        "section": "when_to_support",
+                        "content": (
+                            "To recover momentum, the user prefers help at a "
+                            "demonstrated impasse."
+                        ),
+                        "example_bullet_ids": [bullet_id, "invented-id"],
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(memory_roles, "_complete_role", fake_complete)
+    inferred = memory_roles.infer_memory("test-model", memory)
+
+    assert inferred is not None
+    assert inferred.insights[0].example_bullet_ids == [bullet_id]
+
+
+def test_learner_writes_inferred_memory_as_final_output(monkeypatch, tmp_path):
+    memory = SectionedMemory()
+    memory.apply_ops(
+        [
+            MemoryOp(
+                op="add",
+                section="when_to_support",
+                content="Help after repeated failures.",
+            )
+        ]
+    )
+    bullet_id = next(iter(memory.bullets))
+
+    def fake_infer(model, evolved_memory, **kwargs):
+        assert evolved_memory.render_evolved(with_ids=True).startswith(
+            "## When to proactively support"
+        )
+        return InferredMemory(
+            insights=[
+                InferredInsight(
+                    section="when_to_support",
+                    content=(
+                        "To recover momentum, the user prefers help at a "
+                        "demonstrated impasse."
+                    ),
+                    example_bullet_ids=[bullet_id],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(memory_evolve, "infer_memory", fake_infer)
+    learner = SelfEvolvingLearner(prediction_model="test-model", memory=memory)
+    learner.learn([], out_dir=tmp_path, log=False)
+
+    memory_md = (tmp_path / "memory.md").read_text()
+    assert "## Inferred user model" in memory_md
+    assert "user prefers help at a demonstrated impasse." in memory_md
+    assert "Examples:" in memory_md
+    state = json.loads((tmp_path / "memory_state.json").read_text())
+    assert state["inferred"]["insights"][0]["example_bullet_ids"] == [bullet_id]
+
+
+def test_cost_sensitive_utility_penalizes_false_alarms_and_invalid_outputs():
+    stats = UtilityStats()
+    stats.add(
+        [
+            {"pred": "yes", "gt": "yes"},
+            {"pred": "no", "gt": "no"},
+            {"pred": "yes", "gt": "no"},
+            {"pred": "no", "gt": "yes"},
+            {"pred": None, "gt": "yes"},
+        ]
+    )
+
+    assert stats.to_json() == {
+        "true_positive": 1,
+        "true_negative": 1,
+        "false_positive": 1,
+        "false_negative": 1,
+        "invalid": 1,
+        "total": 5,
+    }
+    assert stats.utility(false_positive_cost=2.0, false_negative_cost=1.0) == -0.6
+
+
+def test_learner_stops_when_target_utility_is_reached(monkeypatch):
+    calls = 0
+
+    def fake_generate_batch(self, batch, memory_text):
+        nonlocal calls
+        calls += 1
+        return [{"pred": "yes", "gt": "yes", "correct": True} for _moment in batch]
+
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_generate_batch",
+        fake_generate_batch,
+    )
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_reflect_batch",
+        lambda self, results, memory_text: [],
+    )
+    learner = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=EvolveConfig(epochs=5, batch_size=2, target_utility=0.8),
+    )
+
+    learner.learn([object(), object()], log=False)
+
+    assert calls == 2  # one training batch plus one fixed post-epoch evaluation
+    assert learner.epochs_completed == 1
+    assert learner.last_utility == 1.0
+    assert learner.target_reached is True
+
+
+def test_learner_uses_separate_prediction_and_evolution_models(monkeypatch):
+    calls = []
+
+    def fake_generate(model, moment, memory_text, **kwargs):
+        calls.append(("generate", model))
+        return {"pred": "no", "gt": "yes", "correct": False}
+
+    def fake_reflect(model, result, memory_text, **kwargs):
+        calls.append(("reflect", model))
+        return {
+            "verdict": "wrong",
+            "reflection": "The assistant should have helped.",
+            "helpful_bullet_ids": [],
+            "harmful_bullet_ids": [],
+            "proposed_insights": [],
+        }
+
+    def fake_curate(model, memory, reflections, **kwargs):
+        calls.append(("curate", model))
+        return [{"op": "add", "section": "general", "content": "Test insight."}]
+
+    def fake_infer(model, memory, **kwargs):
+        calls.append(("infer", model))
+        return None
+
+    monkeypatch.setattr(memory_evolve, "generate", fake_generate)
+    monkeypatch.setattr(memory_evolve, "reflect", fake_reflect)
+    monkeypatch.setattr(memory_evolve, "curate", fake_curate)
+    monkeypatch.setattr(memory_evolve, "infer_memory", fake_infer)
+    learner = SelfEvolvingLearner(
+        prediction_model="prediction-model",
+        evolution_model="evolution-model",
+        config=EvolveConfig(epochs=1, batch_size=1, concurrency=1),
+    )
+
+    learner.learn([object()], log=False)
+
+    assert calls == [
+        ("generate", "prediction-model"),
+        ("reflect", "evolution-model"),
+        ("curate", "evolution-model"),
+        ("infer", "evolution-model"),
+    ]
+
+
+def test_inference_evaluation_counts_invalid_predictions_as_incorrect(monkeypatch):
+    moments = [
+        "true_positive",
+        "false_positive",
+        "false_negative",
+        "true_negative",
+        "invalid",
+    ]
+
+    def fake_generate(model, moment, memory_text, **kwargs):
+        predictions = {
+            "true_positive": ("yes", "yes"),
+            "false_positive": ("yes", "no"),
+            "false_negative": ("no", "yes"),
+            "true_negative": ("no", "no"),
+            "invalid": (None, "yes"),
+        }
+        prediction, ground_truth = predictions[moment]
+        return {
+            "correct": prediction == ground_truth and prediction is not None,
+            "pred": prediction,
+            "gt": ground_truth,
+        }
+
+    monkeypatch.setattr(memory_evaluate, "generate", fake_generate)
+    result = memory_evaluate.evaluate_memory_accuracy(
+        "test-model",
+        moments,
+        "test memory",
+        image_root=None,
+        max_images=1,
+        max_tokens=100,
+        concurrency=2,
+    )
+
+    assert result == {
+        "accuracy": 0.4,
+        "precision": 0.5,
+        "recall": 0.5,
+        "f1": 0.5,
+        "false_alarm_rate": 0.5,
+        "correct": 2,
+        "total": 5,
+        "valid_predictions": 4,
+        "invalid_predictions": 1,
+        "confusion_matrix": {
+            "true_positive": 1,
+            "false_positive": 1,
+            "false_negative": 1,
+            "true_negative": 1,
+        },
+    }
+
+
+def test_build_sft_from_labeled_moments():
+    labeled = LabeledMoment(
+        moment_id="moment-1",
+        observation_id="obs-1",
+        session_id="s1",
+        ts=1.0,
+        need_support="yes",
+        label_confidence=0.9,
+        label_sources=["feedback:engage"],
+        label_rationale="User engaged.",
+        observer_input="screen context",
+        observer_output="{}",
+        image_paths=["img.png"],
+        target_observation="The user repeats a task.",
+        target_user_intent="Finish the task.",
+        target_suggestion_type="direct_message",
+        target_suggestion="Try batching this.",
+    )
+    examples = build_sft_examples([labeled])
+    assert examples[0].images == ["img.png"]
+    assistant = json.loads(examples[0].messages[2]["content"])
+    assert assistant["need_support"] == "yes"
+    assert assistant["suggestion"] == "Try batching this."

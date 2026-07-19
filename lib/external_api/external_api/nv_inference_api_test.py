@@ -8,6 +8,7 @@ uv run pytest lib/external_api/external_api/nv_inference_api_test.py -v
 import os
 
 import pytest
+from dotenv import load_dotenv
 from external_api.nv_inference_api import (
     ImageURL,
     ImageURLContent,
@@ -15,7 +16,6 @@ from external_api.nv_inference_api import (
     TextContent,
     get_nv_inference_completion,
 )
-from dotenv import load_dotenv
 
 load_dotenv()
 

@@ -134,6 +134,10 @@ class SessionConfigRequest(BaseModel):
     # Scenario: "everyday_support" (default) or "student_learning".
     # Controls which prompt directory is used by the observer and judge.
     scenario: str = "everyday_support"
+    # Caller intent for this configuration update. "settings" updates are
+    # explicit user changes and may switch back to the default scenario; ordinary
+    # session-start updates are guarded against stale duplicate default writes.
+    config_source: str = "session_start"
     # Optional user-customized OBSERVER prompt (the "Custom" onboarding mode).
     # When set, it overrides the scenario observer prompt (written to a new file
     # in the user-data dir). The judge/tutor still use the base `scenario`.
@@ -164,6 +168,32 @@ _progress_log_path: str = "logs/progress_judgments.jsonl"
 _judge_enabled: bool = False
 # Always-on, time-driven observation tick (decoupled from action accumulation).
 observer_ticker_task: asyncio.Task | None = None
+_session_config_lock = asyncio.Lock()
+_active_session_id: str | None = None
+_active_session_scenario: str | None = None
+_DEFAULT_SCENARIO = "everyday_support"
+_SETTINGS_CONFIG_SOURCE = "settings"
+
+
+def _is_stale_default_session_config(request: SessionConfigRequest) -> bool:
+    """Return True for a duplicate startup config that would downgrade scenario.
+
+    The desktop app can fire two /session updates close together for the same
+    local session. If the first one already activated a non-default mode, a
+    later default-valued startup update is stale and should not reset tutor
+    state or switch prompts. Explicit Settings changes remain allowed.
+    """
+    if request.config_source == _SETTINGS_CONFIG_SOURCE:
+        return False
+    if request.custom_observer_prompt:
+        return False
+    if request.scenario != _DEFAULT_SCENARIO:
+        return False
+    return (
+        _active_session_id == request.node_uuid
+        and _active_session_scenario is not None
+        and _active_session_scenario != _DEFAULT_SCENARIO
+    )
 
 
 @app.get("/health", response_model=StatusResponse)
@@ -407,39 +437,56 @@ async def configure_session(request: SessionConfigRequest):
     if streamer is None:
         raise HTTPException(status_code=503, detail="Streamer not initialized")
     try:
-        await streamer.configure_session()
-        # Apply the user-chosen idle timeout to the screen instance
-        if screen is not None:
-            screen.set_idle_timeout(request.struggle_detection_seconds)
-            logger.info(
-                f"Screen idle timeout set to {request.struggle_detection_seconds}s"
-            )
-        logger.info(
-            f"Streamer configured for node_uuid={request.node_uuid}, "
-            f"scenario={request.scenario}"
-        )
-
-        # Apply scenario to the AiTutoringProcessor (updates observer prompt)
-        # and forward it to the tutor server (updates diagnostic/tutor prompts).
-        for proc in streamer._segment_processors:
-            if isinstance(proc, AiTutoringProcessor):
-                await proc.set_scenario(
-                    request.scenario, request.custom_observer_prompt
+        global _active_session_id, _active_session_scenario
+        async with _session_config_lock:
+            if _is_stale_default_session_config(request):
+                logger.warning(
+                    "Ignoring stale default /session config for "
+                    f"node_uuid={request.node_uuid}; active scenario is "
+                    f"{_active_session_scenario!r}"
                 )
-                proc.set_session_active(True)
-                logger.info(f"AiTutoringProcessor scenario set to {request.scenario!r}")
-                # Key training rows on this session and stamp the manifest.
-                if proc._recorder is not None:
-                    proc._recorder.set_session(
-                        request.node_uuid,
-                        scenario=request.scenario,
-                        struggle_detection_seconds=request.struggle_detection_seconds,
-                        started_at=time.time(),
-                    )
-                break
+                return StatusResponse(
+                    status="ok", total_actions=await streamer.get_total_stored_actions()
+                )
 
-        # Start / restart the progress (struggle) detector for this session
-        await _start_progress_detector(request)
+            await streamer.configure_session()
+            # Apply the user-chosen idle timeout to the screen instance
+            if screen is not None:
+                screen.set_idle_timeout(request.struggle_detection_seconds)
+                logger.info(
+                    f"Screen idle timeout set to {request.struggle_detection_seconds}s"
+                )
+            logger.info(
+                f"Streamer configured for node_uuid={request.node_uuid}, "
+                f"scenario={request.scenario}, source={request.config_source}"
+            )
+
+            # Apply scenario to the AiTutoringProcessor (updates observer prompt)
+            # and forward it to the tutor server (updates diagnostic/tutor prompts).
+            for proc in streamer._segment_processors:
+                if isinstance(proc, AiTutoringProcessor):
+                    await proc.set_scenario(
+                        request.scenario, request.custom_observer_prompt
+                    )
+                    proc.set_session_active(True)
+                    logger.info(
+                        f"AiTutoringProcessor scenario set to {request.scenario!r}"
+                    )
+                    # Key training rows on this session and stamp the manifest.
+                    if proc._recorder is not None:
+                        proc._recorder.set_session(
+                            request.node_uuid,
+                            scenario=request.scenario,
+                            struggle_detection_seconds=request.struggle_detection_seconds,
+                            started_at=time.time(),
+                        )
+                    break
+
+            _active_session_id = request.node_uuid
+            _active_session_scenario = request.scenario
+
+            # Start / restart the progress (struggle) detector for this session
+            await _start_progress_detector(request)
 
         return StatusResponse(
             status="ok", total_actions=await streamer.get_total_stored_actions()
@@ -461,6 +508,11 @@ async def end_session():
     if ai_proc is not None:
         ai_proc.set_session_active(False)
         logger.info("AiTutoringProcessor: session ended, reverted to pre-session mode")
+
+    global _active_session_id, _active_session_scenario
+    async with _session_config_lock:
+        _active_session_id = None
+        _active_session_scenario = None
 
     # Revert the still-running detector to pre-session (invite) mode.
     await _start_progress_detector(None)
