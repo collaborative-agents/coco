@@ -76,6 +76,16 @@ if platform.system() == "Darwin":
         "pynput.keyboard._darwin",
         "pynput.mouse._darwin",
     ]
+elif platform.system() == "Windows":
+    HIDDEN_IMPORTS += [
+        "pynput",
+        "pynput.keyboard",
+        "pynput.mouse",
+        "pynput.keyboard._win32",
+        "pynput.mouse._win32",
+        "ctypes",
+        "ctypes.wintypes",
+    ]
 elif platform.system() == "Linux":
     HIDDEN_IMPORTS += [
         "pynput",

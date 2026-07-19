@@ -43,7 +43,7 @@
     "test": "jest"
   },
   "browserslist": [
-    "extends browserslist-config-erb"
+    "chrome >= 134"
   ],
   "prettier": {
     "singleQuote": true,

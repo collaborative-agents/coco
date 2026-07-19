@@ -11,42 +11,40 @@ on:
         options:
           - macos
           - windows
-          - linux
           - all
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.result }}
+    steps:
+      - id: matrix
+        run: |
+          case "${{ github.event.inputs.platforms }}" in
+            macos)
+              echo 'result={"include":[{"os":"macos-latest","platform":"macos","arch":"arm64"},{"os":"macos-13","platform":"macos-x64","arch":"x64"}]}' >> $GITHUB_OUTPUT
+              ;;
+            windows)
+              echo 'result={"include":[{"os":"windows-latest","platform":"windows","arch":"x64"}]}' >> $GITHUB_OUTPUT
+              ;;
+            all)
+              echo 'result={"include":[{"os":"macos-latest","platform":"macos","arch":"arm64"},{"os":"macos-13","platform":"macos-x64","arch":"x64"},{"os":"windows-latest","platform":"windows","arch":"x64"}]}' >> $GITHUB_OUTPUT
+              ;;
+          esac
+
   package:
+    needs: prepare
     env:
       MAC_CERT: ${{ secrets.MAC_CERT }}
       MAC_CERT_PWD: ${{ secrets.MAC_CERT_PWD }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            platform: macos
-            arch: arm64
-            artifact_glob: "desktop/release/build/**/*.dmg"
-          - os: macos-13
-            platform: macos-x64
-            arch: x64
-            artifact_glob: "desktop/release/build/**/*.dmg"
-          - os: windows-latest
-            platform: windows
-            arch: x64
-            artifact_glob: "desktop/release/build/**/*.exe"
-          - os: ubuntu-latest
-            platform: linux
-            arch: x64
-            artifact_glob: "desktop/release/build/**/*.AppImage"
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    if: >-
-      github.event.inputs.platforms == 'all' ||
-      github.event.inputs.platforms == matrix.platform ||
-      (github.event.inputs.platforms == 'macos' && startsWith(matrix.platform, 'macos'))
 
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +83,7 @@ jobs:
         run: npm run build
 
       - name: Package Electron app (macOS signed)
-        if: ${{ startsWith(matrix.platform, 'macos') && env.MAC_CERT != '' && env.MAC_CERT_PWD != '' }}
+        if: startsWith(matrix.platform, 'macos') && env.MAC_CERT != '' && env.MAC_CERT_PWD != ''
         working-directory: ./desktop
         run: npx electron-builder build --publish never --${{ matrix.arch }}
         env:
@@ -93,13 +91,13 @@ jobs:
           CSC_KEY_PASSWORD: ${{ env.MAC_CERT_PWD }}
 
       - name: Package Electron app (macOS unsigned)
-        if: ${{ startsWith(matrix.platform, 'macos') && (env.MAC_CERT == '' || env.MAC_CERT_PWD == '') }}
+        if: startsWith(matrix.platform, 'macos') && (env.MAC_CERT == '' || env.MAC_CERT_PWD == '')
         working-directory: ./desktop
         run: npx electron-builder build --publish never --${{ matrix.arch }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Package Electron app (Windows / Linux)
+      - name: Package Electron app (Windows)
         if: ${{ !startsWith(matrix.platform, 'macos') }}
         working-directory: ./desktop
         run: npx electron-builder build --publish never
@@ -113,7 +111,6 @@ jobs:
             desktop/release/build/**/*.dmg
             desktop/release/build/**/*.zip
             desktop/release/build/**/*.exe
-            desktop/release/build/**/*.AppImage
           retention-days: 7
           compression-level: 6
           if-no-files-found: error

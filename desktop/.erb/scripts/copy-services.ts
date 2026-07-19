@@ -100,7 +100,9 @@ function transformServiceToProduction(service: DevServiceConfig): ProdServiceCon
   if (isPythonService) {
     // Python service: use PyInstaller-bundled executable.
     // The binary name matches the service id (e.g. "sensing-server").
-    base.command = '${SERVICE_DIST_ROOT}/' + service.id + '/' + service.id;
+    // On Windows, PyInstaller produces .exe; on macOS/Linux, no extension.
+    const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+    base.command = '${SERVICE_DIST_ROOT}/' + service.id + '/' + service.id + exeSuffix;
     // Strip the "uv run python -m <module>" prefix from args, keep only CLI flags.
     const rawArgs = service.args || [];
     const cliArgs: string[] = [];
