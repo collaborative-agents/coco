@@ -2,21 +2,19 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-const projectRoot = path.resolve(__dirname, '../../../../');
+const projectRoot = path.resolve(__dirname, '../../../');
 const buildSensingServerScript = path.join(projectRoot, 'build_sensing_server.py');
-const buildBrowserUseAgentScript = path.join(projectRoot, 'build_browser_use_agent.py');
+const buildTutorServerScript = path.join(projectRoot, 'build_tutor_server.py');
 
 console.log(`🐍 Building Python services...`);
 
-// Build function for a Python service
 function buildPythonService(scriptPath, serviceName) {
   console.log(`\n📦 Building ${serviceName}...`);
   console.log(`   Script: ${scriptPath}`);
 
-  // Check if script exists
   if (!fs.existsSync(scriptPath)) {
-    console.error(`❌ Python build script not found at: ${scriptPath}`);
-    process.exit(1);
+    console.warn(`⚠️  Build script not found, skipping ${serviceName} (services will run from source via uv)`);
+    return;
   }
 
   console.log(`   Using uv run to execute with correct Python version`);
@@ -39,8 +37,7 @@ function buildPythonService(scriptPath, serviceName) {
   console.log(`✅ ${serviceName} built successfully.`);
 }
 
-// Build all Python services
 buildPythonService(buildSensingServerScript, 'Sensing Server');
-buildPythonService(buildBrowserUseAgentScript, 'Browser Use Agent');
+buildPythonService(buildTutorServerScript, 'Tutor Server');
 
-console.log('\n✨ All Python services built successfully.');
+console.log('\n✨ Python services build step completed.');
