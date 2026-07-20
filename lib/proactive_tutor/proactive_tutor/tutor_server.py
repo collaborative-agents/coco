@@ -62,6 +62,7 @@ class GuidanceResponse(BaseModel):
 
 class InstantSuggestionRequest(BaseModel):
     observation: str
+    image_paths: list[str] | None = None
     task_label: str | None = None
     scenario: str = "everyday_support"
     ai_tools: list[str] = []
@@ -444,6 +445,8 @@ async def suggestion_instant(req: InstantSuggestionRequest):
             req.scenario,
             req.ai_tools,
             configured_model_name,
+            tutor.memory if tutor is not None else TutorSystem._load_memory(),
+            req.image_paths,
         )
         result["llm_metrics"] = llm_metrics
         return InstantSuggestionResponse(**result)

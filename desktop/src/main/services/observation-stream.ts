@@ -25,6 +25,8 @@ export interface ObservationEvent {
   task_label?: string;
   /** Stable id for this observation; used to key the instant-suggestion cache and feedback joins. */
   observation_id?: string;
+  /** Screenshot paths associated with this observation, when retained by sensing. */
+  image_paths?: string[];
   /** "yes"/"no" — whether the user is applying AI output (discernment opportunities). */
   applying_ai_output?: string;
   llm_metrics?: LLMCallMetrics;

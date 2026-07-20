@@ -62,12 +62,25 @@ def _ai_tools_context_block(ai_tools: list[str]) -> str:
 
 
 def _build_user_prompt(
-    observation: str, task_label: str | None, ai_tools: list[str]
+    observation: str,
+    task_label: str | None,
+    ai_tools: list[str],
+    memory: str = "",
+    has_screenshots: bool = False,
 ) -> str:
     parts: list[str] = []
     if task_label:
         parts.append(f"<task_label>\n{task_label}\n</task_label>")
     parts.append(f"<observation>\n{observation}\n</observation>")
+    if memory:
+        parts.append(f"<memory>\n{memory}\n</memory>")
+    if has_screenshots:
+        parts.append(
+            "<screenshots>\n"
+            "Screenshot image(s) of the user's current screen are attached to "
+            "this message. Use them as the primary visual context.\n"
+            "</screenshots>"
+        )
     tools_block = _ai_tools_context_block(ai_tools)
     if tools_block:
         parts.append(tools_block)
@@ -140,9 +153,11 @@ def generate_instant_suggestion(
     scenario: str,
     ai_tools: list[str],
     model: str,
+    memory: str = "",
+    image_paths: list[str] | None = None,
 ) -> dict:
     suggestion, _ = generate_instant_suggestion_with_metrics(
-        observation, task_label, scenario, ai_tools, model
+        observation, task_label, scenario, ai_tools, model, memory, image_paths
     )
     return suggestion
 
@@ -153,6 +168,8 @@ def generate_instant_suggestion_with_metrics(
     scenario: str,
     ai_tools: list[str],
     model: str,
+    memory: str = "",
+    image_paths: list[str] | None = None,
 ) -> tuple[dict, LLMCallMetrics]:
     """Generate a single ready-to-use suggestion for *observation*.
 
@@ -161,11 +178,18 @@ def generate_instant_suggestion_with_metrics(
     ``scenario`` is accepted for parity with the observation event and future
     scenario-specific prompts; the current prompt is scenario-agnostic.
     """
-    user_prompt = _build_user_prompt(observation, task_label, ai_tools or [])
+    user_prompt = _build_user_prompt(
+        observation,
+        task_label,
+        ai_tools or [],
+        memory=memory,
+        has_screenshots=bool(image_paths),
+    )
     raw, metrics = prompt_to_text_with_metrics(
         model,
         INSTANT_SYSTEM_PROMPT,
         user_prompt,
+        image_paths=image_paths,
         operation="instant_suggestion",
     )
     return _parse_instant_suggestion(raw), metrics

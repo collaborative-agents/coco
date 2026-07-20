@@ -224,8 +224,17 @@ def _extract_json_block(text: str) -> str | None:
 # Sentinel strings the observer prompts emit when nothing's wrong. Compared
 # case-insensitively against the field value after stripping punctuation.
 _STUCK_NEGATIVE = {"not stuck", ""}
-_MISTAKE_NEGATIVE = {"no mistake so far", "no mistake", ""}
-_INEFFICIENCY_NEGATIVE = {"no inefficiency detected", ""}
+_MISTAKE_NEGATIVE = {
+    "no mistake so far",
+    "no mistake",
+    "no human mistake detected",
+    "",
+}
+_INEFFICIENCY_NEGATIVE = {
+    "no inefficiency detected",
+    "no delegation opportunity",
+    "",
+}
 _AI_NEGATIVE = {"no ai interaction problem", ""}
 
 # How long to suppress repeated pre-session task-suggestion events (seconds).
@@ -255,6 +264,7 @@ def _extract_task_label(observation: str) -> str | None:
 
 _EXPLICIT_STATUS_VALUES = {
     "progress",
+    "mistake",
     "inefficient",
     "ai_struggle",
     "stuck",
@@ -272,14 +282,14 @@ def _classify_observation_status(
         "stuck"          — student-learning ``stuck`` field reported being stuck
         "mistake"        — student-learning ``mistakes`` field reported a mistake
         "inefficient"    — worker-upskilling inefficiency pattern detected
-        "ai_struggle"    — worker-upskilling AI-tool interaction problem detected
+        "ai_struggle"    — legacy worker-upskilling AI-tool problem detected
         "task_complete"  — observer judged the task to be finished (session active only)
         "observing"      — couldn't parse / no scenario fields recognized
 
     For the worker scenario the observer now emits an explicit ``status`` field
-    (one of "progress", "inefficient", "ai_struggle", "stuck", "observing").
+    (one of "progress", "mistake", "inefficient", "stuck", "observing").
     We use that directly when present so we don't have to re-infer from
-    ``inefficiency_patterns`` / ``ai_interaction_problems``. The inference path
+    ``inefficiency_patterns`` / ``mistake_made_by_human``. The inference path
     is kept as a fallback for older observer outputs without the field.
 
     The renderer uses this to pick a friendly phrase from a pool — the raw
@@ -324,13 +334,21 @@ def _classify_observation_status(
         return explicit
 
     # 2. Legacy inference path — kept for backward-compat with older observer outputs.
+    human_mistake = _norm(obj.get("mistake_made_by_human"))
+    if human_mistake and human_mistake not in _MISTAKE_NEGATIVE:
+        return "mistake"
+    # Compatibility with observations recorded before the field was renamed.
     ai_problems = _norm(obj.get("ai_interaction_problems"))
     if ai_problems and ai_problems not in _AI_NEGATIVE:
         return "ai_struggle"
     inefficiency = _norm(obj.get("inefficiency_patterns"))
     if inefficiency and inefficiency not in _INEFFICIENCY_NEGATIVE:
         return "inefficient"
-    if not (obj.get("inefficiency_patterns") or obj.get("ai_interaction_problems")):
+    if not (
+        obj.get("inefficiency_patterns")
+        or obj.get("mistake_made_by_human")
+        or obj.get("ai_interaction_problems")
+    ):
         return "observing"
     return "progress"
 
@@ -569,6 +587,8 @@ class AiTutoringProcessor(SegmentProcessor):
         # observation_id of the most recent observer call, so the judge can
         # reference the fresh "progress_check" observation it just triggered.
         self._last_observation_id: str | None = None
+        # Screenshot retained briefly for the eager instant-suggestion request.
+        self._last_observation_image_paths: list[str] = []
         # observation_id -> user reaction ("shown" | "engage" | "dismiss" |
         # "thumbs_up" | "thumbs_down"), updated from POST /feedback. Injected
         # back into the observer prompt so it doesn't re-raise a suggestion the
@@ -702,6 +722,7 @@ class AiTutoringProcessor(SegmentProcessor):
         observation: str,
         observation_id: str | None = None,
         llm_metrics: dict | None = None,
+        image_paths: list[str] | None = None,
     ) -> None:
         if not self._obs_subscribers:
             return
@@ -738,6 +759,8 @@ class AiTutoringProcessor(SegmentProcessor):
         }
         if observation_id:
             event["observation_id"] = observation_id
+        if image_paths:
+            event["image_paths"] = image_paths
         if llm_metrics is not None:
             event["llm_metrics"] = llm_metrics
         if task_label:
@@ -756,7 +779,12 @@ class AiTutoringProcessor(SegmentProcessor):
                 except (asyncio.QueueEmpty, asyncio.QueueFull):
                     pass
 
-    def broadcast_invite(self, observation: str, task_label: str) -> None:
+    def broadcast_invite(
+        self,
+        observation: str,
+        task_label: str,
+        image_paths: list[str] | None = None,
+    ) -> None:
         """Emit a pre-session invite as a ``task_suggested`` observation event.
 
         Called by the ProgressDetector when the judge decides to proactively
@@ -772,6 +800,8 @@ class AiTutoringProcessor(SegmentProcessor):
             "scenario": self._scenario,
             "task_label": task_label,
         }
+        if image_paths:
+            event["image_paths"] = image_paths
         for q in self._obs_subscribers:
             try:
                 q.put_nowait(event)
@@ -1065,10 +1095,28 @@ class AiTutoringProcessor(SegmentProcessor):
                 llm_metrics=metrics,
             )
 
+        # Keep the newest rolling screenshot alive briefly so the desktop can
+        # forward it to the eager instant-suggestion VLM call. Other rolling
+        # screenshots can be removed immediately; hot-key screenshots already
+        # have session-managed lifetimes.
+        suggestion_image_paths = (
+            snapshot_image_paths[-1:] if snapshot_image_paths else hk_paths[-1:]
+        )
+        self._last_observation_image_paths = suggestion_image_paths
+        deferred_cleanup = set(suggestion_image_paths) & set(snapshot_image_paths)
+
         # Delete only the rolling snapshot files — the observer has already
         # base64-encoded them and they are no longer needed.
         # Hot-key screenshots are intentionally excluded from cleanup.
-        self._cleanup_consumed_screenshots(snapshot_image_paths)
+        self._cleanup_consumed_screenshots(
+            [path for path in snapshot_image_paths if path not in deferred_cleanup]
+        )
+        if deferred_cleanup:
+            asyncio.get_running_loop().call_later(
+                60,
+                self._cleanup_consumed_screenshots,
+                list(deferred_cleanup),
+            )
 
         # Record for the progress judge's rolling history. Skip "pause" and
         # "progress_check" events — "pause" is triggered by the judge itself
@@ -1092,6 +1140,7 @@ class AiTutoringProcessor(SegmentProcessor):
             obs,
             observation_id=observation_id,
             llm_metrics=metrics,
+            image_paths=suggestion_image_paths,
         )
         return obs, text, metrics
 
@@ -1167,7 +1216,7 @@ class AiTutoringProcessor(SegmentProcessor):
             "one triggered. Do NOT re-raise a suggestion the user just DISMISSED "
             "unless the situation has materially changed — for the same ongoing "
             'activity, prefer a calmer status ("progress"/"observing") instead of '
-            'repeating an "inefficient"/"ai_struggle"/"stuck" flag.',
+            'repeating an "inefficient"/"mistake"/"stuck" flag.',
         ]
         for i, entry in enumerate(recent, start=1):
             age = max(0.0, now - float(entry.get("ts", now)))
