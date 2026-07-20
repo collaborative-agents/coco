@@ -34,7 +34,7 @@ class TutorSystem:
         self._scenario = scenario
         prompts_dir = self._prompts_dir(scenario)
         self.tutor_agent = TutorAgent(
-            model_name, (prompts_dir / "tutor.txt").read_text()
+            model_name, (prompts_dir / "tutor.txt").read_text(encoding="utf-8")
         )
 
         self.problem_statement: str = ""
@@ -191,7 +191,7 @@ class TutorSystem:
         logger.info(f"[SET MODEL] {model_name}")
         prompts_dir = self._prompts_dir(self._scenario)
         self.tutor_agent = TutorAgent(
-            model_name, (prompts_dir / "tutor.txt").read_text()
+            model_name, (prompts_dir / "tutor.txt").read_text(encoding="utf-8")
         )
 
     def set_ai_tools(self, tool_ids: list[str]) -> None:
@@ -211,7 +211,7 @@ class TutorSystem:
         prompts_dir = self._prompts_dir(scenario)
         model_name = self.tutor_agent.model
         self.tutor_agent = TutorAgent(
-            model_name, (prompts_dir / "tutor.txt").read_text()
+            model_name, (prompts_dir / "tutor.txt").read_text(encoding="utf-8")
         )
 
     @staticmethod
