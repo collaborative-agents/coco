@@ -144,7 +144,7 @@ def main() -> None:
         print("ERROR: PyInstaller build failed")
         sys.exit(result.returncode)
 
-    print(f"SUCCESS: sensing-server built → {DIST_DIR}")
+    print(f"SUCCESS: sensing-server built -> {DIST_DIR}")
 
 
 if __name__ == "__main__":
