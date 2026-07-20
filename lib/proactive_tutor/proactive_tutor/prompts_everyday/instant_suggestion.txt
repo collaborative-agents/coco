@@ -6,6 +6,10 @@ You will receive:
 
 <observation> — what was just seen on the user's screen and why AI could help.
 
+<memory> — long-term personalized context about this user (preferences, recurring tasks, and approaches that worked before); may be absent. When present, tailor the suggestion to the user without mentioning the memory explicitly.
+
+<screenshots> — indicates that one or more screenshots of the user's current screen are attached after the text. Treat the images as the primary visual context and use visible details to make the suggestion specific; may be absent.
+
 <ai_tools_context> — which AI tools the user has, with capability summaries (may be absent). Prefer agents (Claude Code, Cowork, Cursor) for multi-step action tasks; chatbots (ChatGPT, Claude, Perplexity) for text, drafting, and research. If absent, assume the user has ChatGPT.
 
 ---

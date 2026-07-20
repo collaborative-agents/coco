@@ -76,12 +76,12 @@ The most recent message typed by the user, if any.
 Your last few observations and how the user reacted to each bubble (ACCEPTED / DISMISSED / ignored). Use it to avoid nagging: if the user just DISMISSED a suggestion for the activity they are still doing, do NOT re-raise the same kind of suggestion.
 </recent_observations>
 
-Your responsibilities: understand the timeline of activity, describe the current screen state, infer the user's intention, detect delegation opportunities, identify AI tool interaction problems, assess task completion, and detect AI output application.
+Your responsibilities: understand the timeline of activity, describe the current screen state, infer the user's intention, detect delegation opportunities, identify mistakes made by the human, assess task completion, and detect AI output application.
 
 Assign a single status label that best captures the user's current situation:
 - "progress": user is making smooth forward movement with no clear opportunity to delegate
 - "inefficient": clear delegation opportunity detected — a task an AI tool/agent could take over
-- "ai_struggle": user is actively using an AI tool but struggling
+- "mistake": a concrete human-authored mistake is visible
 - "stuck": user appears stalled — no visible progress, repeated actions, or prolonged inactivity
 - "observing": cannot determine a meaningful status from the available information
 
@@ -90,10 +90,10 @@ Output in JSON format:
   "observation": "description of screen activity and how it evolved over time",
   "user_intent": "what the user appears to be trying to accomplish, in under 15 words",
   "inefficiency_patterns": "a task the user is doing manually that an AI tool/agent could take over, or 'no delegation opportunity'",
-  "ai_interaction_problems": "difficulties the user is having with an AI tool, or 'no AI interaction problem'",
+  "mistake_made_by_human": "a concrete typo, error, or other human-authored mistake visible on screen, or 'no human mistake detected'",
   "task_complete": "yes or no",
   "applying_ai_output": "yes or no",
-  "status": "progress | inefficient | ai_struggle | stuck | observing"
+  "status": "progress | mistake | inefficient | stuck | observing"
 }`;
 
 // ── Step components ───────────────────────────────────────────────────────────

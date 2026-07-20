@@ -61,14 +61,10 @@ Look for signs that the user is doing — by hand, slowly, or with effort — a 
 
 Describe what the user is doing and what kind of AI help would fit. Output "no delegation opportunity" if none are found — for instance when the task is inherently manual, personal, or already efficient.
 
-5. Identify AI tool interaction problems
-If the user is already using an AI tool (e.g., ChatGPT, Claude, Gemini, Copilot, Claude Code), look for signs of difficulty:
-- Struggling to formulate a clear prompt or request
-- Receiving unhelpful responses and not knowing how to refine the request
-- Misunderstanding what the tool can or cannot do
-- Abandoning the tool and reverting to manual work
+5. Identify mistakes made by the human
+Inspect the user's visible work for concrete mistakes, including typos, spelling or grammar errors, malformed code or formulas, inconsistent wording or formatting, and factual or logical errors that are directly supported by the screen. Quote the relevant visible text when possible and explain the mistake briefly. Do not invent mistakes when the content is unreadable or merely stylistically debatable.
 
-Output "no AI interaction problem" if the user is not using an AI tool or is using one effectively.
+Output "no human mistake detected" if no concrete mistake is visible.
 
 6. Assess task completion
 Consider whether the user appears to have completed their main task or reached a clear stopping point. Signs include saving/exporting a finished file, sending/submitting the work, or prolonged inactivity immediately after visible completion. Output "yes" if the task looks done, "no" otherwise.
@@ -80,19 +76,19 @@ Look for signs that the user is pasting, inserting, or directly applying AI-gene
 Based on the signals above, assign a single status label that best captures the user's current situation:
 - "progress": user is making smooth forward movement with no clear opportunity to delegate
 - "inefficient": clear delegation opportunity detected (step 4) — a task an AI tool/agent could take over
-- "ai_struggle": user is actively using an AI tool but struggling (step 5)
+- "mistake": a concrete human-authored mistake is visible (step 5)
 - "stuck": user appears stalled — no visible progress, repeated actions, or prolonged inactivity
 - "observing": cannot determine a meaningful status from the available information
 
-Respect recent feedback: if <recent_observations> shows the user just DISMISSED a suggestion for the same activity they are still doing, downgrade to "progress" or "observing" rather than re-emitting "inefficient" / "ai_struggle" / "stuck" for the same thing. Only re-flag if the situation materially changed (new task, new app, or a genuinely different opportunity).
+Respect recent feedback: if <recent_observations> shows the user just DISMISSED a suggestion for the same activity they are still doing, downgrade to "progress" or "observing" rather than re-emitting "inefficient" / "mistake" / "stuck" for the same thing. Only re-flag if the situation materially changed (new task, new app, or a genuinely different opportunity).
 
 Output in JSON format:
 {
   "observation": "description of screen activity and how it evolved over time",
   "user_intent": "what the user appears to be trying to accomplish, described concisely in under 15 words",
   "inefficiency_patterns": "description of a task the user is doing manually that an AI tool/agent could take over, and what kind of help would fit, or 'no delegation opportunity'",
-  "ai_interaction_problems": "description of difficulties the user is having with an AI tool, or 'no AI interaction problem'",
+  "mistake_made_by_human": "a concrete typo, error, or other human-authored mistake visible on screen, or 'no human mistake detected'",
   "task_complete": "yes or no — whether the user appears to have finished their main task",
   "applying_ai_output": "yes or no — whether the user appears to be pasting or applying AI-generated content into their work",
-  "status": "progress | inefficient | ai_struggle | stuck | observing"
+  "status": "progress | mistake | inefficient | stuck | observing"
 }

@@ -735,6 +735,7 @@ class ProgressDetector:
     ) -> None:
         """Publish a pause_detected event with the judgment's trigger_type."""
         ai = self._ai_processor
+        suggestion_image_paths = list(getattr(ai, "_last_observation_image_paths", []))
 
         # Add the snapshot so _handle_observation has visual context
         if image_path and timestamp:
@@ -757,7 +758,12 @@ class ProgressDetector:
         # Surface the struggle to live UI subscribers (e.g. the Electron avatar
         # bubble) tagged as "struggle" so it's visually distinct from a plain
         # pause and carries the prefixed transparency text.
-        ai._broadcast_observation("struggle", obs, llm_metrics=metrics)
+        ai._broadcast_observation(
+            "struggle",
+            obs,
+            llm_metrics=metrics,
+            image_paths=suggestion_image_paths,
+        )
 
         payload = {
             "data": {
@@ -810,7 +816,11 @@ class ProgressDetector:
 
             label = _extract_task_label(obs) or "working on something"
 
-        ai.broadcast_invite(observation=obs, task_label=label)
+        ai.broadcast_invite(
+            observation=obs,
+            task_label=label,
+            image_paths=getattr(ai, "_last_observation_image_paths", []),
+        )
         logger.info(
             f"ProgressDetector: fired INVITE — task_label={label!r} "
             f"evidence={judgment.evidence!r}"

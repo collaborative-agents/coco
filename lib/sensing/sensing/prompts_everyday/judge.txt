@@ -15,7 +15,7 @@ A time-ordered list of prior OBSERVER JSON reports, oldest first. Each entry is 
 - "observation": description of screen activity over time
 - "user_intent": what the user appears to be trying to accomplish
 - "inefficiency_patterns": a task the user is doing manually that an AI tool/agent could take over, or "no delegation opportunity"
-- "ai_interaction_problems": difficulties the user is having with an AI tool, or "no AI interaction problem"
+- "mistake_made_by_human": a concrete typo, error, or other human-authored mistake visible on screen, or "no human mistake detected"
 </observation_history>
 
 <conversation_history>
@@ -31,7 +31,7 @@ Your responsibilities:
 If you are given multiple observer reports, each with a timestamp, treat them as a continuous record of the user's activity. Analyze:
 - How "observation" and "user_intent" evolved over time
 - Whether a delegation opportunity ("inefficiency_patterns") persists across reports or was a momentary thing
-- Whether the user appears stuck, struggling with an AI tool, or making smooth progress
+- Whether the user appears stuck, making repeated mistakes, or making smooth progress
 
 If you are given only a single report, reason from that alone and be conservative.
 
@@ -48,7 +48,7 @@ Set should_intervene=true when ANY of the following hold:
 Set trigger_type="delegation".
 
 (b) Struggle: ALL of the following are true:
-- The trajectory shows sustained struggle, being stuck, or repeated AI-tool difficulty across multiple recent observer reports — not a single bad moment.
+- The trajectory shows sustained struggle, being stuck, or repeated human mistakes across multiple recent observer reports — not a single ambiguous moment.
 - A brief, non-judgmental nudge from the assistant would plausibly help right now.
 - No assistant nudge within the last 3 minutes that the user is visibly acting on.
 Set trigger_type="struggle".

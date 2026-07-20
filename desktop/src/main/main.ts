@@ -719,6 +719,7 @@ function precomputeSuggestion(event: {
   status?: string;
   task_label?: string;
   scenario?: string;
+  image_paths?: string[];
 }) {
   const id = event.observation_id;
   if (!id || suggestionCache.has(id)) return;
@@ -733,6 +734,7 @@ function precomputeSuggestion(event: {
       `http://127.0.0.1:${tutorPort}/suggestion/instant`,
       {
         observation: event.observation ?? '',
+        image_paths: event.image_paths?.length ? event.image_paths : null,
         task_label: event.task_label ?? null,
         scenario: event.scenario || scenario,
         ai_tools: aiTools,
@@ -845,6 +847,7 @@ async function createProactiveTutorSession(
         node_uuid: sessionId,
         struggle_detection_seconds: struggleSeconds,
         scenario,
+        config_source: 'session_start',
         ...(customObserverPrompt && { custom_observer_prompt: customObserverPrompt }),
       },
       { timeout: 15000 },
@@ -1105,6 +1108,7 @@ ipcMain.handle(
             node_uuid: currentSessionId,
             struggle_detection_seconds: 120,
             scenario,
+            config_source: 'settings',
             ...(customObserverPrompt && { custom_observer_prompt: customObserverPrompt }),
           },
           { timeout: 15000 },
