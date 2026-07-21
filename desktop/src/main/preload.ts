@@ -46,6 +46,8 @@ export type Channels =
   | 'toggle-observation-history'
   // Activity panel hydrates persisted history from main on open
   | 'get-activity-history'
+  // Persist an observation's proactive-support engagement + revealed content
+  | 'activity-support-engaged'
   // Renderer asks main to resize the avatar window to fit current content
   | 'resize-avatar-window'
   // Tier 3: tutor guidance routed to bubble when webapp is hidden

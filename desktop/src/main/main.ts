@@ -36,6 +36,7 @@ import {
 import {
   appendActivity,
   readActivity,
+  recordSupportEngagement,
   pruneActivity,
 } from './activity-store';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
@@ -1054,6 +1055,20 @@ ipcMain.handle('get-activity-history', async (_event, sinceTs?: number) => {
   return readActivity(typeof sinceTs === 'number' ? sinceTs : defaultSince);
 });
 
+ipcMain.removeAllListeners('activity-support-engaged');
+ipcMain.on('activity-support-engaged', (_event, payload) => {
+  const observationId = String(payload?.observationId ?? '');
+  if (!observationId) return;
+  recordSupportEngagement(observationId, {
+    engagedAt:
+      typeof payload?.engagedAt === 'number'
+        ? payload.engagedAt
+        : Math.floor(Date.now() / 1000),
+    suggestion: payload?.suggestion,
+    destination: payload?.destination === 'inline' ? 'inline' : 'conversation',
+  });
+});
+
 // Update the agent mode + AI tools live from the chat's Settings panel.
 // Persists to the profile and applies the change to the running servers so the
 // current session picks it up without a restart or re-onboarding.
@@ -1277,6 +1292,16 @@ const startObserver = () => {
     process.env.COCO_USER_DATA_DIR = app.getPath('userData');
     log.info(`[Profile] COCO_USER_DATA_DIR=${process.env.COCO_USER_DATA_DIR}`);
   }
+  // Unlike per-launch training records, GUM memory is intentionally shared
+  // across sessions so the tutor can retrieve older context.
+  if (!process.env.COCO_MEMORY_DB_PATH) {
+    process.env.COCO_MEMORY_DB_PATH = path.join(
+      app.getPath('userData'),
+      'memory',
+      'memory.db',
+    );
+    log.info(`[Memory] COCO_MEMORY_DB_PATH=${process.env.COCO_MEMORY_DB_PATH}`);
+  }
 
   // Pass the resolved models to the services. config.json references
   // ${TUTOR_MODEL}/${OBSERVER_MODEL}, which the service manager expands from env.
@@ -1324,6 +1349,10 @@ const startObserver = () => {
           ts: event.ts ?? Math.floor(Date.now() / 1000),
           status: status as ObservationStatus,
           observation: cleanObservation(event.observation),
+          observation_id: event.observation_id,
+          proactive_support: PRECOMPUTE_STATUSES.has(status)
+            ? { engaged: false }
+            : undefined,
           llm_metrics: event.llm_metrics,
         });
       }

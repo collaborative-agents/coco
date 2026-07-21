@@ -13,6 +13,7 @@ import { app } from 'electron';
 import log from 'electron-log';
 import type {
   ActivityRecord,
+  InstantSuggestion,
   ObservationStatus,
 } from '../renderer/components/observation-types';
 
@@ -75,6 +76,46 @@ export function readActivity(sinceTs = 0): ActivityRecord[] {
     }
   }
   return out;
+}
+
+/**
+ * Mark previously offered support as engaged and optionally persist the inline
+ * content. Rewriting is acceptable here: this runs only on an explicit click
+ * and the history file is capped to 30 days.
+ */
+export function recordSupportEngagement(
+  observationId: string,
+  engagement: {
+    engagedAt: number;
+    suggestion?: InstantSuggestion;
+    destination: 'inline' | 'conversation';
+  },
+): void {
+  if (!observationId) return;
+  const records = readActivity();
+  const reverseIndex = [...records]
+    .reverse()
+    .findIndex((record) => record.observation_id === observationId);
+  if (reverseIndex < 0) return;
+  const index = records.length - reverseIndex - 1;
+
+  records[index] = {
+    ...records[index],
+    proactive_support: {
+      engaged: true,
+      engaged_at: engagement.engagedAt,
+      suggestion: engagement.suggestion,
+      destination: engagement.destination,
+    },
+  };
+  try {
+    fs.writeFileSync(
+      historyPath(),
+      `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
+    );
+  } catch (err) {
+    log.warn('[activity-store] support engagement update failed:', err);
+  }
 }
 
 /**

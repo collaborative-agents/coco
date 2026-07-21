@@ -753,6 +753,46 @@ body,
   flex-shrink: 0;
 }
 
+.obs-support-badge {
+  flex-shrink: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #9ca3af;
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.obs-support-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 2px 0 3px;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+button.obs-support-badge {
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.obs-support-badge.is-engaged {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.obs-support-badge.is-engaged:hover {
+  border-color: #86efac;
+  background: #dcfce7;
+}
+
 .obs-history-time {
   font-size: 12px;
   color: #b0b5c3;
@@ -833,6 +873,48 @@ body,
 .obs-history-chevron.is-open {
   transform: rotate(90deg);
   color: #6366f1;
+}
+
+.obs-support-content {
+  margin-top: 5px;
+  padding: 8px 9px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8faff;
+  color: #374151;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.obs-support-content strong {
+  display: block;
+  margin-bottom: 3px;
+  color: #4338ca;
+  font-size: 11px;
+}
+
+.obs-support-content p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.obs-support-content--conversation {
+  color: #6366f1;
+  font-style: italic;
+}
+
+.obs-support-content--conversation button {
+  margin-top: 5px;
+  border: none;
+  background: transparent;
+  color: #4f46e5;
+  padding: 0;
+  font: inherit;
+  font-style: normal;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 /* ── Toast notification (top-right, screen-pinned) ─────────────────────────── */

@@ -337,6 +337,18 @@ export interface ActivityRecord {
   status: ObservationStatus;
   /** Cleaned, human-readable observation text. */
   observation: string;
+  /** Stable join key for updating this record when the user reacts later. */
+  observation_id?: string;
+  /** Present when this observation offered actionable proactive support. */
+  proactive_support?: {
+    engaged: boolean;
+    /** Unix timestamp (seconds) of the user's "Help me with this" click. */
+    engaged_at?: number;
+    /** Inline support can be reopened directly from History. */
+    suggestion?: InstantSuggestion;
+    /** Cache misses route support into the persistent chat conversation. */
+    destination?: 'inline' | 'conversation';
+  };
   llm_metrics?: LLMCallMetrics;
 }
 
