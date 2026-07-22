@@ -217,6 +217,9 @@ const S: Record<string, React.CSSProperties> = {
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   // Settings panel (mirrors the onboarding toolkit step)
   settings: { borderBottom: `1px solid ${BORDER}`, background: '#ffffff', padding: '14px', maxHeight: 360, overflowY: 'auto' },
+  toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
+  toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
+  toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
   groupLabel: { fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: ACCENT, marginBottom: 6 },
   chips: { display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 14 },
   chip: { fontSize: 13, fontWeight: 500, padding: '6px 14px', borderRadius: 999, background: '#fff', border: '1.5px solid #d1d5db', color: '#4b5563', cursor: 'pointer', fontFamily: FONT },
@@ -323,13 +326,16 @@ export default function SessionChatView() {
   const [profile, setProfile] = useState<{
     scenario: string;
     aiTools: string[];
+    hideAvatar: boolean;
   }>({
     scenario: 'everyday_support',
     aiTools: [],
+    hideAvatar: false,
   });
   // Editable draft of the settings, synced from the loaded profile.
   const [editScenario, setEditScenario] = useState('everyday_support');
   const [editTools, setEditTools] = useState<string[]>([]);
+  const [editHideAvatar, setEditHideAvatar] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   // "+ Custom" tool forms (mirrors the onboarding toolkit step).
   const [showAddChatbot, setShowAddChatbot] = useState(false);
@@ -435,10 +441,12 @@ export default function SessionChatView() {
         const next = {
           scenario: typeof p.tutorScenario === 'string' ? p.tutorScenario : 'everyday_support',
           aiTools: Array.isArray(p.aiTools) ? p.aiTools : [],
+          hideAvatar: p.hideAvatar === true,
         };
         setProfile(next);
         setEditScenario(next.scenario);
         setEditTools(next.aiTools);
+        setEditHideAvatar(next.hideAvatar);
       })
       .catch(() => {});
   }, []);
@@ -472,9 +480,14 @@ export default function SessionChatView() {
     const res = await window.electron?.ipcRenderer.invoke('update-settings', {
       scenario: editScenario,
       aiTools: editTools,
+      hideAvatar: editHideAvatar,
     });
     if ((res as { success?: boolean })?.success) {
-      setProfile({ scenario: editScenario, aiTools: editTools });
+      setProfile({
+        scenario: editScenario,
+        aiTools: editTools,
+        hideAvatar: editHideAvatar,
+      });
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     }
@@ -482,6 +495,7 @@ export default function SessionChatView() {
 
   const dirty =
     editScenario !== profile.scenario ||
+    editHideAvatar !== profile.hideAvatar ||
     editTools.length !== profile.aiTools.length ||
     editTools.some((t) => !profile.aiTools.includes(t));
 
@@ -598,6 +612,25 @@ export default function SessionChatView() {
 
       {showSettings && (
         <div style={S.settings}>
+          <div style={S.groupLabel}>Desktop</div>
+          <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
+            <input
+              id="hide-desktop-avatar"
+              type="checkbox"
+              checked={editHideAvatar}
+              onChange={(e) => setEditHideAvatar(e.target.checked)}
+            />
+            <span>
+              <strong style={S.toggleTitle}>Hide desktop avatar</strong>
+              <span style={S.toggleHelp}>
+                Keep Coco in the system tray and show proactive suggestions as
+                notifications.
+              </span>
+            </span>
+          </label>
+
+          <div style={S.sectionDivider} />
+
           <div style={S.groupLabel}>Agent mode</div>
           <div style={S.chips}>
             {MODE_OPTIONS.map((m) => (

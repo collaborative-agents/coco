@@ -1034,9 +1034,10 @@ body,
 }
 
 .toast-message {
-  font-size: 16px;
+  /* Match the app's standard chat, input, and button body text. */
+  font-size: 13px;
   color: #1f2937;
-  line-height: 1.55;
+  line-height: 1.5;
   white-space: normal;
   word-break: break-word;
   overflow-wrap: break-word;
