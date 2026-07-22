@@ -78,6 +78,40 @@ export function readActivity(sinceTs = 0): ActivityRecord[] {
   return out;
 }
 
+function writeActivity(records: ActivityRecord[], operation: string): void {
+  try {
+    fs.writeFileSync(
+      historyPath(),
+      `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
+    );
+  } catch (err) {
+    log.warn(`[activity-store] ${operation} failed:`, err);
+  }
+}
+
+function updateLatestSupport(
+  observationId: string,
+  patch: Partial<NonNullable<ActivityRecord['proactive_support']>>,
+  operation: string,
+): void {
+  if (!observationId) return;
+  const records = readActivity();
+  const reverseIndex = [...records]
+    .reverse()
+    .findIndex((record) => record.observation_id === observationId);
+  if (reverseIndex < 0) return;
+  const index = records.length - reverseIndex - 1;
+  records[index] = {
+    ...records[index],
+    proactive_support: {
+      engaged: records[index].proactive_support?.engaged ?? false,
+      ...records[index].proactive_support,
+      ...patch,
+    },
+  };
+  writeActivity(records, operation);
+}
+
 /**
  * Mark previously offered support as engaged and optionally persist the inline
  * content. Rewriting is acceptable here: this runs only on an explicit click
@@ -102,20 +136,45 @@ export function recordSupportEngagement(
   records[index] = {
     ...records[index],
     proactive_support: {
+      ...records[index].proactive_support,
       engaged: true,
       engaged_at: engagement.engagedAt,
-      suggestion: engagement.suggestion,
+      suggestion:
+        engagement.suggestion ?? records[index].proactive_support?.suggestion,
       destination: engagement.destination,
     },
   };
-  try {
-    fs.writeFileSync(
-      historyPath(),
-      `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
-    );
-  } catch (err) {
-    log.warn('[activity-store] support engagement update failed:', err);
-  }
+  writeActivity(records, 'support engagement update');
+}
+
+/** Persist eager/on-demand support content even if the user never engaged. */
+export function recordSupportSuggestion(
+  observationId: string,
+  suggestion: InstantSuggestion,
+): void {
+  updateLatestSupport(
+    observationId,
+    {
+      suggestion,
+    },
+    'support suggestion update',
+  );
+}
+
+/** Persist a usefulness rating so History reflects feedback across restarts. */
+export function recordSupportRating(
+  observationId: string,
+  rating: 'up' | 'down',
+  ratedAt: number,
+): void {
+  updateLatestSupport(
+    observationId,
+    {
+      rating,
+      rated_at: ratedAt,
+    },
+    'support rating update',
+  );
 }
 
 /**

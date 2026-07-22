@@ -48,6 +48,8 @@ export type Channels =
   | 'get-activity-history'
   // Persist an observation's proactive-support engagement + revealed content
   | 'activity-support-engaged'
+  // Persist support content/rating independently of initial engagement
+  | 'activity-support-rated'
   // Renderer asks main to resize the avatar window to fit current content
   | 'resize-avatar-window'
   // Tier 3: tutor guidance routed to bubble when webapp is hidden
