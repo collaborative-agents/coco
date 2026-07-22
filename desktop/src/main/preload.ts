@@ -11,6 +11,7 @@ export type Channels =
   | 'open-main-window'
   | 'close-main-window'
   | 'notification'
+  | 'notification-hover-state'
   | 'observation-update'
   | 'shell-show-item-in-finder'
   | 'download-benchmark-file'
@@ -44,6 +45,9 @@ export type Channels =
   | 'save-memory'
   // Observation history
   | 'toggle-observation-history'
+  | 'open-observation-history'
+  | 'activity-history-visibility'
+  | 'avatar-renderer-ready'
   // Activity panel hydrates persisted history from main on open
   | 'get-activity-history'
   // Persist an observation's proactive-support engagement + revealed content
@@ -56,6 +60,7 @@ export type Channels =
   | 'tutor-notification'
   // Tier 2: user clicked "Help me with this" in the bubble
   | 'help-me-with-this'
+  | 'open-notification-suggestion'
   // Instant suggestion: fetch the precomputed suggestion for an observation
   | 'get-instant-suggestion'
   // Instant suggestion: act on a revealed suggestion (copy / open tool)

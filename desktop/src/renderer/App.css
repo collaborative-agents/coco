@@ -1034,9 +1034,10 @@ body,
 }
 
 .toast-message {
-  font-size: 16px;
+  /* Match the app's standard chat, input, and button body text. */
+  font-size: 13px;
   color: #1f2937;
-  line-height: 1.55;
+  line-height: 1.5;
   white-space: normal;
   word-break: break-word;
   overflow-wrap: break-word;
@@ -1156,6 +1157,17 @@ body,
   justify-content: flex-end;
   gap: 8px;
   padding: 8px 14px 12px;
+}
+
+.toast-tool-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.toast-tool-action {
+  color: #204a79;
+  border-color: #bcd0fc;
+  background: #e9efff;
 }
 
 .toast-cancel {
