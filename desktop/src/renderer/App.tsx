@@ -499,12 +499,26 @@ function PetView() {
 
   // Cmd/Ctrl+Shift+H toggles the history panel from anywhere on the system.
   useEffect(() => {
-    const cleanup = window.electron?.ipcRenderer.on(
+    const cleanupToggle = window.electron?.ipcRenderer.on(
       'toggle-observation-history',
       () => setShowHistory((v) => !v),
     );
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    const cleanupOpen = window.electron?.ipcRenderer.on(
+      'open-observation-history',
+      () => setShowHistory(true),
+    );
+    window.electron?.ipcRenderer.sendMessage('avatar-renderer-ready');
+    return () => {
+      if (typeof cleanupToggle === 'function') cleanupToggle();
+      if (typeof cleanupOpen === 'function') cleanupOpen();
+    };
   }, []);
+
+  useEffect(() => {
+    window.electron?.ipcRenderer.sendMessage('activity-history-visibility', {
+      visible: showHistory,
+    });
+  }, [showHistory]);
 
   // Refresh from persisted activity whenever History opens. Engagement is
   // written by the main process after the original observation, so a one-time
