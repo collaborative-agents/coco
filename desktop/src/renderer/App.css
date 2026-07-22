@@ -1159,6 +1159,17 @@ body,
   padding: 8px 14px 12px;
 }
 
+.toast-tool-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.toast-tool-action {
+  color: #204a79;
+  border-color: #bcd0fc;
+  background: #e9efff;
+}
+
 .toast-cancel {
   padding: 5px 12px;
   font-size: 13px;

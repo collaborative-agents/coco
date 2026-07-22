@@ -189,6 +189,8 @@ export function NotificationBubble({
   onCancel,
   onDismiss,
   onHoverChange,
+  suggestion,
+  onSuggestionAction,
 }: {
   message: string;
   actionLabel?: string;
@@ -198,6 +200,8 @@ export function NotificationBubble({
   onCancel?: () => void;
   onDismiss?: () => void;
   onHoverChange?: (hovered: boolean) => void;
+  suggestion?: InstantSuggestion;
+  onSuggestionAction?: (toolId: string | null) => void;
 }) {
   const isPrompt =
     notifType === 'session-start-prompt' || notifType === 'session-end-prompt';
@@ -256,6 +260,26 @@ export function NotificationBubble({
               {actionLabel}
             </button>
           )}
+        </div>
+      ) : suggestion?.kind === 'delegate' ? (
+        <div className="toast-footer toast-tool-actions">
+          <button
+            type="button"
+            className="toast-action"
+            onClick={() => onSuggestionAction?.(null)}
+          >
+            Copy prompt
+          </button>
+          {(suggestion.availableTools ?? []).map((tool) => (
+            <button
+              key={tool.id}
+              type="button"
+              className="toast-action toast-tool-action"
+              onClick={() => onSuggestionAction?.(tool.id)}
+            >
+              Open {tool.label}
+            </button>
+          ))}
         </div>
       ) : (
         actionLabel && (
@@ -339,7 +363,7 @@ export default function NotificationView() {
         setPayload({
           ...payload,
           message: `**${suggestion.title}**\n\n${detail ?? suggestion.copyText}`,
-          actionLabel: 'Copy suggestion',
+          actionLabel: suggestion.kind === 'content' ? 'Copy' : undefined,
           notifType: 'instant-suggestion',
           suggestion,
         });
@@ -419,6 +443,15 @@ export default function NotificationView() {
     ipc?.sendMessage('notification-hover-state', { hovered });
   };
 
+  const handleSuggestionAction = (toolId: string | null) => {
+    ipc?.sendMessage('suggestion-action', {
+      toolId,
+      copyText: payload.suggestion?.copyText,
+    });
+    setVisible(false);
+    window.close();
+  };
+
   return (
     <div className="notification-root">
       <NotificationBubble
@@ -430,6 +463,8 @@ export default function NotificationView() {
         onCancel={handleCancel}
         onDismiss={handleDismiss}
         onHoverChange={handleHoverChange}
+        suggestion={payload.suggestion}
+        onSuggestionAction={handleSuggestionAction}
       />
     </div>
   );
