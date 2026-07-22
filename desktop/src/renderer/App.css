@@ -753,19 +753,6 @@ body,
   flex-shrink: 0;
 }
 
-.obs-support-badge {
-  flex-shrink: 0;
-  border: 1px solid #e5e7eb;
-  border-radius: 999px;
-  background: #f9fafb;
-  color: #9ca3af;
-  padding: 1px 6px;
-  font: inherit;
-  font-size: 10px;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
 .obs-support-status {
   display: flex;
   align-items: center;
@@ -777,20 +764,54 @@ body,
   font-weight: 600;
 }
 
-button.obs-support-badge {
+.obs-support-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.obs-support-view,
+.obs-support-rating {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #6b7280;
+  font: inherit;
   cursor: pointer;
   -webkit-app-region: no-drag;
 }
 
-.obs-support-badge.is-engaged {
-  border-color: #bbf7d0;
-  background: #f0fdf4;
-  color: #15803d;
+.obs-support-view {
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
-.obs-support-badge.is-engaged:hover {
-  border-color: #86efac;
-  background: #dcfce7;
+.obs-support-rating {
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 21px;
+}
+
+.obs-support-view:hover,
+.obs-support-rating:hover:not(:disabled) {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+}
+
+.obs-support-rating:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.obs-support-rating.is-rated {
+  border-color: #a5b4fc;
+  background: #e0e7ff;
+  opacity: 1;
 }
 
 .obs-history-time {

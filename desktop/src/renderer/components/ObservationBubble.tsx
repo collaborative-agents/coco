@@ -142,6 +142,11 @@ export default function ObservationBubble({
       latency_s: (Date.now() - suggestionShownAt.current) / 1000,
       text: suggestion.copyText ?? null,
     });
+    window.electron?.ipcRenderer.sendMessage('activity-support-rated', {
+      observationId: bubble?.observationId ?? null,
+      rating: dir,
+      ratedAt: Math.floor(Date.now() / 1000),
+    });
     showToast('Thanks for the feedback');
   };
 

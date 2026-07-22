@@ -346,8 +346,14 @@ export interface ActivityRecord {
     engaged_at?: number;
     /** Inline support can be reopened directly from History. */
     suggestion?: InstantSuggestion;
+    /** Transient renderer hint that an in-flight/cached suggestion can be opened. */
+    available?: boolean;
     /** Cache misses route support into the persistent chat conversation. */
     destination?: 'inline' | 'conversation';
+    /** Explicit usefulness rating, whether given in the bubble or History. */
+    rating?: 'up' | 'down';
+    /** Unix timestamp (seconds) of the usefulness rating. */
+    rated_at?: number;
   };
   llm_metrics?: LLMCallMetrics;
 }

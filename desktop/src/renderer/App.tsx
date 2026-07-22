@@ -105,50 +105,81 @@ function LlmMetricChips({ record }: { record: ActivityRecord }) {
   );
 }
 
-function SupportEngagementBadge({
+function SupportControls({
   record,
   isOpen,
   onToggle,
+  onRate,
 }: {
   record: ActivityRecord;
   isOpen: boolean;
   onToggle: () => void;
+  onRate: (rating: 'up' | 'down') => void;
 }) {
   const support = record.proactive_support;
   if (!support) return null;
-  if (!support.engaged) {
-    return <span className="obs-support-badge">Not engaged</span>;
-  }
+  const canView = support.suggestion != null || support.available === true;
   return (
-    <button
-      type="button"
-      className="obs-support-badge is-engaged"
-      onClick={onToggle}
-      aria-expanded={isOpen}
-      title="View proactive support"
-    >
-      ✓ Engaged · View
-    </button>
+    <div className="obs-support-controls">
+      {canView && (
+        <button
+          type="button"
+          className="obs-support-view"
+          onClick={onToggle}
+          aria-expanded={isOpen}
+        >
+          {isOpen ? 'Hide' : 'View support'}
+        </button>
+      )}
+      {(['up', 'down'] as const).map((rating) => (
+        <button
+          key={rating}
+          type="button"
+          className={`obs-support-rating${
+            support.rating === rating ? ' is-rated' : ''
+          }`}
+          aria-label={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
+          title={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
+          disabled={support.rating != null}
+          onClick={() => onRate(rating)}
+        >
+          {rating === 'up' ? '👍' : '👎'}
+        </button>
+      ))}
+    </div>
   );
 }
 
 function HistoricalSupport({
   record,
   onViewConversation,
+  loading,
+  error,
 }: {
   record: ActivityRecord;
   onViewConversation: () => void;
+  loading: boolean;
+  error: boolean;
 }) {
   const support = record.proactive_support;
-  if (!support?.engaged) return null;
+  if (!support) return null;
   const { suggestion } = support;
+  if (loading) {
+    return <div className="obs-support-content">Preparing suggestion…</div>;
+  }
   if (!suggestion) {
     return (
       <div className="obs-support-content obs-support-content--conversation">
-        <p>This support continued in the conversation.</p>
-        <button type="button" onClick={onViewConversation}>
-          View conversation →
-        </button>
+        <p>
+          {error
+            ? 'The suggestion could not be loaded.'
+            : 'This support continued in the conversation.'}
+        </p>
+        {support.engaged && (
+          <button type="button" onClick={onViewConversation}>
+            View conversation →
+          </button>
+        )}
       </div>
     );
   }
@@ -199,16 +230,24 @@ function ActivityPanel({
   records,
   onClose,
   onViewConversation,
+  onLoadSuggestion,
+  onRateSupport,
 }: {
   records: ActivityRecord[];
   onClose: () => void;
   onViewConversation: () => void;
+  onLoadSuggestion: (
+    record: ActivityRecord,
+  ) => Promise<InstantSuggestion | null>;
+  onRateSupport: (record: ActivityRecord, rating: 'up' | 'down') => void;
 }) {
   const nowSec = Math.floor(Date.now() / 1000);
   const todayStart = dayStartOf(nowSec);
   const [selectedDay, setSelectedDay] = useState(todayStart);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [openSupport, setOpenSupport] = useState<Set<number>>(new Set());
+  const [loadingSupport, setLoadingSupport] = useState<Set<string>>(new Set());
+  const [supportErrors, setSupportErrors] = useState<Set<string>>(new Set());
 
   const buckets = dailyBuckets(records, 14, nowSec);
   const summary = summarizeDay(records, selectedDay, nowSec);
@@ -233,13 +272,29 @@ function ActivityPanel({
     setOpenSupport(new Set());
   }
 
-  function toggleSupport(i: number) {
+  async function toggleSupport(i: number, record: ActivityRecord) {
+    const opening = !openSupport.has(i);
     setOpenSupport((prev) => {
       const next = new Set(prev);
       if (next.has(i)) next.delete(i);
       else next.add(i);
       return next;
     });
+    if (!opening || record.proactive_support?.suggestion) return;
+    const key = record.observation_id ?? `${record.ts}-${i}`;
+    setLoadingSupport((prev) => new Set(prev).add(key));
+    setSupportErrors((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    const suggestion = await onLoadSuggestion(record);
+    setLoadingSupport((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    if (!suggestion) setSupportErrors((prev) => new Set(prev).add(key));
   }
 
   return (
@@ -308,6 +363,7 @@ function ActivityPanel({
             const lane = laneOf(e.status);
             const label = STATUS_LABEL[e.status] ?? STATUS_LABEL.observing;
             const supportOpen = openSupport.has(i);
+            const supportKey = e.observation_id ?? `${e.ts}-${i}`;
             return (
               // eslint-disable-next-line react/no-array-index-key
               <li key={i} className="obs-history-entry">
@@ -322,16 +378,19 @@ function ActivityPanel({
                       {formatClockTime(e.ts)}
                     </span>
                   </div>
-                  {e.proactive_support && (
-                    <div className="obs-support-status">
-                      <span>Proactive support</span>
-                      <SupportEngagementBadge
-                        record={e}
-                        isOpen={supportOpen}
-                        onToggle={() => toggleSupport(i)}
-                      />
-                    </div>
-                  )}
+                  {e.proactive_support &&
+                    (e.proactive_support.suggestion ||
+                      e.proactive_support.available) && (
+                      <div className="obs-support-status">
+                        <span>Proactive support</span>
+                        <SupportControls
+                          record={e}
+                          isOpen={supportOpen}
+                          onToggle={() => toggleSupport(i, e)}
+                          onRate={(rating) => onRateSupport(e, rating)}
+                        />
+                      </div>
+                    )}
                   <LlmMetricChips record={e} />
                   <button
                     type="button"
@@ -353,6 +412,8 @@ function ActivityPanel({
                     <HistoricalSupport
                       record={e}
                       onViewConversation={onViewConversation}
+                      loading={loadingSupport.has(supportKey)}
+                      error={supportErrors.has(supportKey)}
                     />
                   )}
                 </div>
@@ -536,7 +597,9 @@ function PetView() {
           observation: cleanObservation(event.observation),
           ts: event.ts ?? Math.floor(Date.now() / 1000),
           observation_id: event.observation_id,
-          proactive_support: showHelpButton ? { engaged: false } : undefined,
+          proactive_support: showHelpButton
+            ? { engaged: false, available: true }
+            : undefined,
           llm_metrics: event.llm_metrics,
         };
         // Prepend so the list is newest-first.
@@ -724,6 +787,76 @@ function PetView() {
     window.electron?.ipcRenderer.sendMessage('open-main-window');
   };
 
+  const loadHistoricalSuggestion = async (
+    record: ActivityRecord,
+  ): Promise<InstantSuggestion | null> => {
+    let res;
+    try {
+      res = await window.electron?.ipcRenderer.invoke(
+        'get-instant-suggestion',
+        {
+          observationId: record.observation_id ?? null,
+        },
+      );
+    } catch {
+      return null;
+    }
+    const suggestion = res?.status === 'ready' ? res.suggestion : null;
+    if (!suggestion) return null;
+    setRecords((prev) =>
+      prev.map((item) =>
+        item.observation_id === record.observation_id
+          ? {
+              ...item,
+              proactive_support: {
+                engaged: item.proactive_support?.engaged ?? false,
+                ...item.proactive_support,
+                suggestion,
+                available: true,
+              },
+            }
+          : item,
+      ),
+    );
+    return suggestion;
+  };
+
+  const rateHistoricalSupport = (
+    record: ActivityRecord,
+    rating: 'up' | 'down',
+  ) => {
+    if (!record.observation_id || record.proactive_support?.rating) return;
+    const ratedAt = Math.floor(Date.now() / 1000);
+    setRecords((prev) =>
+      prev.map((item) =>
+        item.observation_id === record.observation_id
+          ? {
+              ...item,
+              proactive_support: {
+                engaged: item.proactive_support?.engaged ?? false,
+                ...item.proactive_support,
+                rating,
+                rated_at: ratedAt,
+              },
+            }
+          : item,
+      ),
+    );
+    window.electron?.ipcRenderer.sendMessage('training-feedback', {
+      kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
+      surface: 'history',
+      observation_id: record.observation_id,
+      status: record.status,
+      text:
+        record.proactive_support?.suggestion?.copyText ?? record.observation,
+    });
+    window.electron?.ipcRenderer.sendMessage('activity-support-rated', {
+      observationId: record.observation_id,
+      rating,
+      ratedAt,
+    });
+  };
+
   const bubbleVisible = bubble != null;
   const suggestionVisible = bubble?.suggestion != null;
   const historyVisible = showHistory;
@@ -756,6 +889,8 @@ function PetView() {
           records={records}
           onClose={() => setShowHistory(false)}
           onViewConversation={handleViewConversation}
+          onLoadSuggestion={loadHistoricalSuggestion}
+          onRateSupport={rateHistoricalSupport}
         />
       )}
 

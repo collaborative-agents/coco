@@ -37,6 +37,8 @@ import {
   appendActivity,
   readActivity,
   recordSupportEngagement,
+  recordSupportRating,
+  recordSupportSuggestion,
   pruneActivity,
 } from './activity-store';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
@@ -744,6 +746,7 @@ function precomputeSuggestion(event: {
     )
     .then((resp) => {
       const data = resp.data as InstantSuggestion;
+      recordSupportSuggestion(id, data);
       log.info(`[InstantSuggestion] precompute ready id=${id} kind=${data?.kind} in ${Date.now() - startedAt}ms`);
       return data;
     })
@@ -758,28 +761,40 @@ function precomputeSuggestion(event: {
 // Returns a status the renderer uses to decide between instant reveal and the
 // fallback chat flow. Awaits the in-flight promise if it isn't ready yet.
 ipcMain.removeHandler('get-instant-suggestion');
-ipcMain.handle('get-instant-suggestion', async (_event, { observationId }: { observationId?: string }) => {
-  const entry = observationId ? suggestionCache.get(observationId) : undefined;
-  if (!entry) {
-    log.info(`[InstantSuggestion] click: cache MISS id=${observationId ?? '(none)'} — falling back to chat`);
-    return { status: 'missing' };
-  }
-  if (Date.now() - entry.ts > SUGGESTION_TTL_MS) {
-    suggestionCache.delete(observationId!);
-    return { status: 'stale' };
-  }
-  const waitStart = Date.now();
-  const value = await entry.promise;
-  log.info(`[InstantSuggestion] click: cache HIT id=${observationId} (waited ${Date.now() - waitStart}ms for in-flight) -> ${value ? 'ready' : 'error'}`);
-  if (!value) return { status: 'error' };
-  // Attach the user's own tools so a delegate bubble can offer one Open button
-  // per available chatbot/agent (recommended tool first).
-  const suggestion: InstantSuggestion =
-    value.kind === 'delegate'
-      ? { ...value, availableTools: buildAvailableTools(value.targetTool) }
-      : value;
-  return { status: 'ready', suggestion };
-});
+ipcMain.handle(
+  'get-instant-suggestion',
+  async (_event, { observationId }: { observationId?: string }) => {
+    const entry = observationId
+      ? suggestionCache.get(observationId)
+      : undefined;
+    if (!entry) {
+      log.info(
+        `[InstantSuggestion] click: cache MISS id=${observationId ?? '(none)'} — falling back to chat`,
+      );
+      return { status: 'missing' };
+    }
+    if (Date.now() - entry.ts > SUGGESTION_TTL_MS) {
+      suggestionCache.delete(observationId!);
+      return { status: 'stale' };
+    }
+    const waitStart = Date.now();
+    const value = await entry.promise;
+    log.info(
+      `[InstantSuggestion] click: cache HIT id=${observationId} (waited ${Date.now() - waitStart}ms for in-flight) -> ${value ? 'ready' : 'error'}`,
+    );
+    if (!value) {
+      suggestionCache.delete(observationId!);
+      return { status: 'error' };
+    }
+    // Attach the user's own tools so a delegate bubble can offer one Open button
+    // per available chatbot/agent (recommended tool first).
+    const suggestion: InstantSuggestion =
+      value.kind === 'delegate'
+        ? { ...value, availableTools: buildAvailableTools(value.targetTool) }
+        : value;
+    return { status: 'ready', suggestion };
+  },
+);
 
 // Renderer acts on a revealed suggestion: always copy the prompt/content to the
 // clipboard, and — when the user picked a specific tool — launch it (website,
@@ -1052,7 +1067,18 @@ ipcMain.handle('get-benchmark-files', async (event, { apiUrl, taskId }) => {
 // 14 days so the contribution strip and today's timeline can both render.
 ipcMain.handle('get-activity-history', async (_event, sinceTs?: number) => {
   const defaultSince = Math.floor(Date.now() / 1000) - 14 * 24 * 3600;
-  return readActivity(typeof sinceTs === 'number' ? sinceTs : defaultSince);
+  return readActivity(typeof sinceTs === 'number' ? sinceTs : defaultSince).map(
+    (record) => {
+      const support = record.proactive_support;
+      if (support?.suggestion || !record.observation_id) return record;
+      const cached = suggestionCache.get(record.observation_id);
+      if (!cached || Date.now() - cached.ts > SUGGESTION_TTL_MS) return record;
+      return {
+        ...record,
+        proactive_support: { ...support, available: true },
+      };
+    },
+  );
 });
 
 ipcMain.removeAllListeners('activity-support-engaged');
@@ -1067,6 +1093,23 @@ ipcMain.on('activity-support-engaged', (_event, payload) => {
     suggestion: payload?.suggestion,
     destination: payload?.destination === 'inline' ? 'inline' : 'conversation',
   });
+});
+
+ipcMain.removeAllListeners('activity-support-rated');
+ipcMain.on('activity-support-rated', (_event, payload) => {
+  const observationId = String(payload?.observationId ?? '');
+  let rating: 'up' | 'down' | null = null;
+  if (payload?.rating === 'up' || payload?.rating === 'down') {
+    rating = payload.rating;
+  }
+  if (!observationId || !rating) return;
+  recordSupportRating(
+    observationId,
+    rating,
+    typeof payload?.ratedAt === 'number'
+      ? payload.ratedAt
+      : Math.floor(Date.now() / 1000),
+  );
 });
 
 // Update the agent mode + AI tools live from the chat's Settings panel.
