@@ -11,6 +11,8 @@ dependencies = [
     "proactive_tutor",
     "external_api",
     "py_utils",
+    "memory",
+    "memory-mcp",
 ]
 
 # The workspace root is a virtual project: it exists only to tie the member
@@ -23,6 +25,9 @@ sensing = { workspace = true }
 proactive_tutor = { workspace = true }
 external_api = { workspace = true }
 py_utils = { workspace = true }
+personalization = { workspace = true }
+memory = { workspace = true }
+memory-mcp = { workspace = true }
 
 [tool.uv.workspace]
 members = [
@@ -30,6 +35,9 @@ members = [
     "lib/proactive_tutor",
     "lib/external_api",
     "lib/py_utils",
+    "lib/personalization",
+    "lib/memory",
+    "lib/memory_mcp",
 ]
 
 [dependency-groups]

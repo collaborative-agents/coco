@@ -32,6 +32,7 @@ from pathlib import Path
 import httpx
 from external_api.llm import chat_completion
 from external_api.types import LLMCallMetrics
+from memory import MemoryEngine, ObservationInput
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 from sensing.language import ActionNode, SequenceNode, annotate_high_level_nodes
@@ -567,6 +568,7 @@ class AiTutoringProcessor(SegmentProcessor):
         *,
         observer_model: str,
         scenario: str = "everyday_support",
+        memory_engine: MemoryEngine | None = None,
     ) -> None:
         self._http_client = http_client
         self.tutor_url = tutor_url.rstrip("/")
@@ -575,6 +577,8 @@ class AiTutoringProcessor(SegmentProcessor):
         self._image_num: int = 0
         self._observer_model = observer_model
         self._scenario = scenario
+        self._memory_engine = memory_engine
+        self._memory_session_id: str | None = None
         # Per-session observer prompt (can be updated via set_scenario).
         self._observer_prompt: str = _load_observer_prompt(scenario)
         # Ring buffer of recent observer outputs for the text-only progress
@@ -621,6 +625,7 @@ class AiTutoringProcessor(SegmentProcessor):
         *,
         observer_model: str,
         scenario: str = "everyday_support",
+        memory_engine: MemoryEngine | None = None,
     ) -> AiTutoringProcessor:
         """Build an ``AiTutoringProcessor`` from high-level config values.
 
@@ -637,7 +642,11 @@ class AiTutoringProcessor(SegmentProcessor):
             snapshot_buffer_max_size=snapshot_buffer_max_size,
             observer_model=observer_model,
             scenario=scenario,
+            memory_engine=memory_engine,
         )
+
+    def set_memory_session(self, session_id: str | None) -> None:
+        self._memory_session_id = session_id
 
     async def set_scenario(
         self, scenario: str, custom_observer_prompt: str | None = None
@@ -1094,6 +1103,24 @@ class AiTutoringProcessor(SegmentProcessor):
                 screenshot_paths=all_image_paths,
                 llm_metrics=metrics,
             )
+
+        # The observer's semantic output is the raw observation for long-term
+        # GUM memory. Persist quickly; proposition work runs on MemoryEngine's
+        # background task and never delays the live tutor path.
+        if self._memory_engine is not None:
+            try:
+                await self._memory_engine.add_observation(
+                    ObservationInput(
+                        id=observation_id,
+                        content=obs,
+                        created_at=time.time(),
+                        observation_type=type or "unknown",
+                        session_id=self._memory_session_id,
+                        scenario=self._scenario,
+                    )
+                )
+            except Exception as exc:
+                logger.warning(f"Could not persist observation to memory: {exc}")
 
         # Keep the newest rolling screenshot alive briefly so the desktop can
         # forward it to the eager instant-suggestion VLM call. Other rolling
