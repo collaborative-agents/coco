@@ -35,8 +35,8 @@ The helper. Diagnoses each observation and decides whether to offer a hint, nudg
 
 | | |
 |---|---|
-| **Input** | Observation text from the sensing service (relayed by the desktop app), your chat messages, and your context settings (scenario, AI tools, memory). |
-| **Output** | Calls the **tutor LLM** with a *text-only* prompt — observation, conversation history, and memory. Images are included **only** when you explicitly attach a screenshot (hotkey capture or paste into chat). Returns guidance text to the desktop app. Optional visualizations are rendered by locally executed, safety-checked code. |
+| **Input** | Observation text from the sensing service (relayed by the desktop app), your chat messages, relevant propositions retrieved from local episodic memory, and your context settings (scenario, AI tools, memory). |
+| **Output** | Calls the **tutor LLM** with a *text-only* prompt — observation, conversation history, relevant retrieved propositions, and memory. Images are included **only** when you explicitly attach a screenshot (hotkey capture or paste into chat). Returns guidance text to the desktop app. Optional visualizations are rendered by locally executed, safety-checked code. |
 
 ## What is sent to the VLM
 
@@ -67,7 +67,8 @@ Everything Coco stores lives in the app's user-data folder — delete it and eve
 |---|---|---|---|
 | `coco-profile.json` | JSON | Onboarding settings: scenario, your AI-tool list, custom observer prompt | Until you change or delete it |
 | `coco-memory.txt` | Plain text | Coco's long-term memory about you — free text you can view and edit in-app | Until you edit or clear it |
-| `activity-history.jsonl` | JSON Lines: `{ts, status, observation}` | Timeline of observation summaries shown in the activity view | **Auto-pruned to 30 days** |
+| `activity-history.jsonl` | JSON Lines: observation summaries plus proactive-support engagement and revealed support content | Timeline shown in the activity view, including whether you opened an offered support and the content needed to revisit it | **Auto-pruned to 30 days** |
+| `memory/memory.db` | SQLite with FTS5 | Semantic observer outputs, GUM-style propositions inferred from them, and links to supporting observations. Queried locally to add relevant past context to tutor prompts. | Until you delete the database |
 | `custom_prompts/observer.txt` | Plain text | Your custom observer prompt, if you set one | Until you change it |
 | `coco-records/session_<ts>/` | Folder per session | See below | Until you delete the folder |
 
