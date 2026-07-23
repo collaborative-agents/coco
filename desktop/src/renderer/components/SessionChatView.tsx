@@ -10,7 +10,7 @@ import {
   encodeCustomChatbot,
   encodeCustomAgent,
 } from './observation-types';
-import type { LLMCallMetrics } from './observation-types';
+import type { LLMCallMetrics, TutorToolCall } from './observation-types';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -135,6 +135,10 @@ interface ChatMessage {
   ts?: number;
   observerMetrics?: LLMCallMetrics | null;
   tutorMetrics?: LLMCallMetrics | null;
+  toolCalls?: TutorToolCall[];
+  /** Correlates incremental main-process events with this pending reply. */
+  requestId?: string;
+  isStreaming?: boolean;
 }
 
 // crypto.randomUUID needs a secure context; fall back for safety.
@@ -213,6 +217,15 @@ const S: Record<string, React.CSSProperties> = {
   feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
   metricRow: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, color: '#6b7280', fontSize: 10.5 },
   metricChip: { border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 6, padding: '1px 5px', lineHeight: 1.35 },
+  toolStack: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 7 },
+  toolCard: { border: `1px solid ${ACCENT_BORDER}`, background: '#f8faff', borderRadius: 10, padding: '7px 9px', color: '#4b5563', fontSize: 11.5, lineHeight: 1.4 },
+  toolHeader: { display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: ACCENT },
+  toolIcon: { width: 18, height: 18, borderRadius: 5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: ACCENT_BG, fontSize: 11 },
+  toolStatus: { marginLeft: 'auto', color: '#16a34a', fontWeight: 600, fontSize: 10.5 },
+  toolStatusError: { color: '#b91c1c' },
+  toolArgs: { marginTop: 3, color: '#6b7280' },
+  toolDetails: { marginTop: 5 },
+  toolObservation: { borderTop: `1px solid ${BORDER}`, marginTop: 5, paddingTop: 5 },
   feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
   feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
   feedbackBtnLocked: { opacity: 0.25, cursor: 'default' },
@@ -278,6 +291,66 @@ function TutorMessage({ text }: { text: string }) {
             </button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+export function ToolCallCard({ call }: { call: TutorToolCall }) {
+  const query = call.arguments?.query?.trim();
+  const start = call.arguments?.start_hh_mm_ago;
+  const end = call.arguments?.end_hh_mm_ago;
+  const results = call.result?.results ?? [];
+  const count = call.result?.count ?? results.length;
+  const windowLabel = start || end
+    ? `${start ?? 'any'} → ${end ?? 'now'} ago`
+    : 'most recent';
+
+  return (
+    <div style={S.toolCard}>
+      <div style={S.toolHeader}>
+        <span style={S.toolIcon}>⌕</span>
+        <span>{call.name}</span>
+        <span
+          style={{
+            ...S.toolStatus,
+            ...(call.status === 'error' ? S.toolStatusError : {}),
+          }}
+        >
+          {call.status === 'running'
+            ? 'Searching…'
+            : call.status === 'error'
+              ? 'Failed'
+              : `${count} found`}
+        </span>
+      </div>
+      <div style={S.toolArgs}>
+        {query ? `“${query}”` : 'Recent memory'} · {windowLabel} · limit{' '}
+        {call.arguments?.limit ?? 3} · evidence {call.arguments?.evidence_limit ?? 1}
+      </div>
+      {call.result?.error && <div style={S.toolArgs}>{call.result.error}</div>}
+      {results.length > 0 && (
+        <details style={S.toolDetails}>
+          <summary>View retrieved memory</summary>
+          {results.map((result, index) => (
+            <div key={result.id ?? `${call.id}-${index}`} style={S.toolObservation}>
+              {result.updated_at && (
+                <div style={{ color: '#9ca3af', fontSize: 10.5 }}>
+                  {new Date(result.updated_at).toLocaleString()}
+                </div>
+              )}
+              <div>{result.text}</div>
+              {result.evidence?.map((observation, evidenceIndex) => (
+                <div
+                  key={observation.id ?? `${call.id}-${index}-${evidenceIndex}`}
+                  style={{ color: '#6b7280', marginTop: 4 }}
+                >
+                  Evidence: {observation.content}
+                </div>
+              ))}
+            </div>
+          ))}
+        </details>
       )}
     </div>
   );
@@ -380,13 +453,94 @@ export default function SessionChatView() {
     });
   }, []);
 
-  // Core send: appends the user turn, calls the local tutor via IPC, appends
-  // the tutor's reply. Text and/or pasted images are both optional.
+  // Main relays SSE events from the tutor service. Keep one pending tutor
+  // message and update it in place so text and tool activity appear in order.
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on('chat-stream-event', (data: any) => {
+      const event = (data ?? {}) as {
+        requestId?: string;
+        type?: string;
+        text?: string;
+        call?: TutorToolCall;
+        guidance?: string;
+        error?: string;
+        observerMetrics?: LLMCallMetrics | null;
+        llm_metrics?: LLMCallMetrics | null;
+        tool_calls?: TutorToolCall[];
+      };
+      if (!event.requestId) return;
+      setMessages((current) =>
+        current.map((message) => {
+          if (message.requestId !== event.requestId) return message;
+          if (event.type === 'text_delta') {
+            return { ...message, text: message.text + (event.text ?? '') };
+          }
+          if (event.type === 'tool_call_started' && event.call) {
+            return {
+              ...message,
+              toolCalls: [
+                ...(message.toolCalls ?? []).filter((call) => call.id !== event.call?.id),
+                event.call,
+              ],
+            };
+          }
+          if (event.type === 'tool_call_completed' && event.call) {
+            return {
+              ...message,
+              toolCalls: (message.toolCalls ?? []).some((call) => call.id === event.call?.id)
+                ? (message.toolCalls ?? []).map((call) =>
+                    call.id === event.call?.id ? event.call as TutorToolCall : call,
+                  )
+                : [...(message.toolCalls ?? []), event.call],
+            };
+          }
+          if (event.type === 'done') {
+            return {
+              ...message,
+              text: event.guidance ?? message.text,
+              id: message.id ?? makeMessageId(),
+              ts: Date.now(),
+              observerMetrics: event.observerMetrics ?? null,
+              tutorMetrics: event.llm_metrics ?? null,
+              toolCalls: event.tool_calls ?? message.toolCalls ?? [],
+              isStreaming: false,
+            };
+          }
+          if (event.type === 'error') {
+            return {
+              ...message,
+              text: event.error ?? 'The tutor could not generate a response.',
+              isError: true,
+              isStreaming: false,
+            };
+          }
+          return message;
+        }),
+      );
+      if (event.type === 'done' || event.type === 'error') setSending(false);
+      scrollToBottom();
+    });
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, [scrollToBottom]);
+
+  // Core send: append the user turn and an empty tutor turn immediately. The
+  // latter is filled by chat-stream-event updates while the IPC request runs.
   const sendMessage = useCallback(
     async (text: string, images: string[]) => {
       const trimmed = text.trim();
       if (!trimmed && images.length === 0) return;
-      setMessages((m) => [...m, { role: 'user', text: trimmed, images }]);
+      const requestId = makeMessageId();
+      setMessages((m) => [
+        ...m,
+        { role: 'user', text: trimmed, images },
+        {
+          role: 'tutor',
+          text: '',
+          requestId,
+          isStreaming: true,
+          toolCalls: [],
+        },
+      ]);
       const pendingContext = pendingContextRef.current;
       const userText = pendingContext
         ? `${pendingContext}\n\nThe user now says:\n${trimmed}`
@@ -396,30 +550,39 @@ export default function SessionChatView() {
       setSending(true);
       scrollToBottom();
       const res = await window.electron?.ipcRenderer.invoke('send-chat-message', {
+        requestId,
         userText,
         images,
       });
-      setSending(false);
       const r = res as {
+        streamed?: boolean;
         guidance?: string;
         error?: string;
         observerMetrics?: LLMCallMetrics | null;
         tutorMetrics?: LLMCallMetrics | null;
+        toolCalls?: TutorToolCall[];
       } | undefined;
-      if (r?.error) {
-        setMessages((m) => [...m, { role: 'tutor', text: r.error as string, isError: true }]);
-      } else {
-        setMessages((m) => [
-          ...m,
-          {
-            role: 'tutor',
-            text: r?.guidance ?? '',
-            id: makeMessageId(),
-            ts: Date.now(),
-            observerMetrics: r?.observerMetrics ?? null,
-            tutorMetrics: r?.tutorMetrics ?? null,
-          },
-        ]);
+      // Compatibility with older main processes and a fallback if IPC fails
+      // before a stream event can be delivered.
+      if (!r?.streamed && (r?.guidance !== undefined || r?.error)) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.requestId === requestId
+              ? {
+                  ...message,
+                  text: r.error ?? r.guidance ?? '',
+                  isError: Boolean(r.error),
+                  isStreaming: false,
+                  id: r.error ? undefined : makeMessageId(),
+                  ts: r.error ? undefined : Date.now(),
+                  observerMetrics: r.observerMetrics ?? null,
+                  tutorMetrics: r.tutorMetrics ?? null,
+                  toolCalls: r.toolCalls ?? [],
+                }
+              : message,
+          ),
+        );
+        setSending(false);
       }
       scrollToBottom();
     },
@@ -823,9 +986,18 @@ export default function SessionChatView() {
               <>
                 <div style={S.tutorAvatar}>C</div>
                 <div>
-                  <div style={m.isError ? S.errBubble : S.tutorBubble}>
-                    {m.isError ? m.text : <TutorMessage text={m.text} />}
-                  </div>
+                  {m.toolCalls && m.toolCalls.length > 0 && (
+                    <div style={S.toolStack}>
+                      {m.toolCalls.map((call) => (
+                        <ToolCallCard key={call.id} call={call} />
+                      ))}
+                    </div>
+                  )}
+                  {(m.text || m.isError) && (
+                    <div style={m.isError ? S.errBubble : S.tutorBubble}>
+                      {m.isError ? m.text : <TutorMessage text={m.text} />}
+                    </div>
+                  )}
                   {!m.isError && (
                     <ChatMetrics
                       observerMetrics={m.observerMetrics}

@@ -33,6 +33,45 @@ export interface LLMCallMetrics {
   error?: string | null;
 }
 
+export interface TutorObservation {
+  id?: string;
+  content: string;
+  created_at?: string;
+  observation_type?: string;
+  session_id?: string | null;
+  scenario?: string | null;
+}
+
+export interface TutorMemoryResult {
+  id?: string;
+  text: string;
+  reasoning?: string;
+  confidence?: number;
+  durability?: number;
+  score?: number;
+  created_at?: string;
+  updated_at?: string;
+  evidence?: TutorObservation[];
+}
+
+export interface TutorToolCall {
+  id: string;
+  name: string;
+  arguments: {
+    query?: string;
+    start_hh_mm_ago?: string | null;
+    end_hh_mm_ago?: string | null;
+    limit?: number;
+    evidence_limit?: number;
+  };
+  status: 'running' | 'completed' | 'error';
+  result?: {
+    count?: number;
+    results?: TutorMemoryResult[];
+    error?: string;
+  };
+}
+
 export interface ObservationEvent {
   type: string;
   observation?: string;
