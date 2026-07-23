@@ -17,6 +17,7 @@ import chz
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from memory import MemoryEngine, MemoryStore, default_memory_db_path
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder, default_records_dir
 from pydantic import BaseModel
@@ -31,6 +32,35 @@ from sensing.segment_processor import (
 from sensing.streamer import Streamer
 
 logger = init_logger(__name__)
+
+
+def _positive_int_from_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1")
+    return value
+
+
+def _build_memory_engine(observer_model: str) -> MemoryEngine:
+    """Build the shared proposition-memory worker from environment settings."""
+    memory_model = (os.environ.get("MEMORY_MODEL") or observer_model).strip()
+    if not memory_model:
+        raise ValueError("MEMORY_MODEL or --observer_model is required")
+
+    store = MemoryStore(default_memory_db_path())
+    return MemoryEngine(
+        store,
+        user_name=(os.environ.get("COCO_USER_NAME") or "the user").strip(),
+        model=memory_model,
+        min_batch_size=_positive_int_from_env("MEMORY_MIN_BATCH_SIZE", 20),
+        max_batch_size=_positive_int_from_env("MEMORY_MAX_BATCH_SIZE", 20),
+    )
 
 
 def _notify_hotkey_captured(index: int) -> None:
@@ -134,6 +164,10 @@ class SessionConfigRequest(BaseModel):
     # Scenario: "everyday_support" (default) or "student_learning".
     # Controls which prompt directory is used by the observer and judge.
     scenario: str = "everyday_support"
+    # Caller intent for this configuration update. "settings" updates are
+    # explicit user changes and may switch back to the default scenario; ordinary
+    # session-start updates are guarded against stale duplicate default writes.
+    config_source: str = "session_start"
     # Optional user-customized OBSERVER prompt (the "Custom" onboarding mode).
     # When set, it overrides the scenario observer prompt (written to a new file
     # in the user-data dir). The judge/tutor still use the base `scenario`.
@@ -164,6 +198,32 @@ _progress_log_path: str = "logs/progress_judgments.jsonl"
 _judge_enabled: bool = False
 # Always-on, time-driven observation tick (decoupled from action accumulation).
 observer_ticker_task: asyncio.Task | None = None
+_session_config_lock = asyncio.Lock()
+_active_session_id: str | None = None
+_active_session_scenario: str | None = None
+_DEFAULT_SCENARIO = "everyday_support"
+_SETTINGS_CONFIG_SOURCE = "settings"
+
+
+def _is_stale_default_session_config(request: SessionConfigRequest) -> bool:
+    """Return True for a duplicate startup config that would downgrade scenario.
+
+    The desktop app can fire two /session updates close together for the same
+    local session. If the first one already activated a non-default mode, a
+    later default-valued startup update is stale and should not reset tutor
+    state or switch prompts. Explicit Settings changes remain allowed.
+    """
+    if request.config_source == _SETTINGS_CONFIG_SOURCE:
+        return False
+    if request.custom_observer_prompt:
+        return False
+    if request.scenario != _DEFAULT_SCENARIO:
+        return False
+    return (
+        _active_session_id == request.node_uuid
+        and _active_session_scenario is not None
+        and _active_session_scenario != _DEFAULT_SCENARIO
+    )
 
 
 @app.get("/health", response_model=StatusResponse)
@@ -407,39 +467,56 @@ async def configure_session(request: SessionConfigRequest):
     if streamer is None:
         raise HTTPException(status_code=503, detail="Streamer not initialized")
     try:
-        await streamer.configure_session()
-        # Apply the user-chosen idle timeout to the screen instance
-        if screen is not None:
-            screen.set_idle_timeout(request.struggle_detection_seconds)
-            logger.info(
-                f"Screen idle timeout set to {request.struggle_detection_seconds}s"
-            )
-        logger.info(
-            f"Streamer configured for node_uuid={request.node_uuid}, "
-            f"scenario={request.scenario}"
-        )
-
-        # Apply scenario to the AiTutoringProcessor (updates observer prompt)
-        # and forward it to the tutor server (updates diagnostic/tutor prompts).
-        for proc in streamer._segment_processors:
-            if isinstance(proc, AiTutoringProcessor):
-                await proc.set_scenario(
-                    request.scenario, request.custom_observer_prompt
+        global _active_session_id, _active_session_scenario
+        async with _session_config_lock:
+            if _is_stale_default_session_config(request):
+                logger.warning(
+                    "Ignoring stale default /session config for "
+                    f"node_uuid={request.node_uuid}; active scenario is "
+                    f"{_active_session_scenario!r}"
                 )
-                proc.set_session_active(True)
-                logger.info(f"AiTutoringProcessor scenario set to {request.scenario!r}")
-                # Key training rows on this session and stamp the manifest.
-                if proc._recorder is not None:
-                    proc._recorder.set_session(
-                        request.node_uuid,
-                        scenario=request.scenario,
-                        struggle_detection_seconds=request.struggle_detection_seconds,
-                        started_at=time.time(),
-                    )
-                break
+                return StatusResponse(
+                    status="ok", total_actions=await streamer.get_total_stored_actions()
+                )
 
-        # Start / restart the progress (struggle) detector for this session
-        await _start_progress_detector(request)
+            await streamer.configure_session()
+            # Apply the user-chosen idle timeout to the screen instance
+            if screen is not None:
+                screen.set_idle_timeout(request.struggle_detection_seconds)
+                logger.info(
+                    f"Screen idle timeout set to {request.struggle_detection_seconds}s"
+                )
+            logger.info(
+                f"Streamer configured for node_uuid={request.node_uuid}, "
+                f"scenario={request.scenario}, source={request.config_source}"
+            )
+
+            # Apply scenario to the AiTutoringProcessor (updates observer prompt)
+            # and forward it to the tutor server (updates diagnostic/tutor prompts).
+            for proc in streamer._segment_processors:
+                if isinstance(proc, AiTutoringProcessor):
+                    await proc.set_scenario(
+                        request.scenario, request.custom_observer_prompt
+                    )
+                    proc.set_session_active(True)
+                    logger.info(
+                        f"AiTutoringProcessor scenario set to {request.scenario!r}"
+                    )
+                    # Key training rows on this session and stamp the manifest.
+                    if proc._recorder is not None:
+                        proc._recorder.set_session(
+                            request.node_uuid,
+                            scenario=request.scenario,
+                            struggle_detection_seconds=request.struggle_detection_seconds,
+                            started_at=time.time(),
+                        )
+                    break
+
+            _active_session_id = request.node_uuid
+            _active_session_scenario = request.scenario
+
+            # Start / restart the progress (struggle) detector for this session
+            await _start_progress_detector(request)
 
         return StatusResponse(
             status="ok", total_actions=await streamer.get_total_stored_actions()
@@ -461,6 +538,11 @@ async def end_session():
     if ai_proc is not None:
         ai_proc.set_session_active(False)
         logger.info("AiTutoringProcessor: session ended, reverted to pre-session mode")
+
+    global _active_session_id, _active_session_scenario
+    async with _session_config_lock:
+        _active_session_id = None
+        _active_session_scenario = None
 
     # Revert the still-running detector to pre-session (invite) mode.
     await _start_progress_detector(None)
@@ -814,13 +896,16 @@ async def main_async(
         sensing_log_dir, "ai_tutor_streamer" + time.strftime("_%Y%m%d_%H%M%S.log")
     )
     processors = []
+    memory_engine: MemoryEngine | None = None
     if workflow_induction:
         processors.append(WorkflowInductionProcessor())
     if ai_tutoring:
+        memory_engine = _build_memory_engine(observer_model)
         ai_processor = AiTutoringProcessor.from_config(
             tutor_url=tutor_url,
             ai_tutor_output_log=ai_tutor_output_log,
             observer_model=observer_model,
+            memory_engine=memory_engine,
             # node_uuid and redis_url are configured later via POST /session
         )
         processors.append(ai_processor)
@@ -870,6 +955,11 @@ async def main_async(
     )
 
     try:
+        if memory_engine is not None:
+            memory_engine.start()
+            logger.info(
+                f"Memory engine started with database {memory_engine.store.db_path}"
+            )
         logger.info("Starting GUM context, streamer, and FastAPI server...")
         # Pause detection: screen idle → streamer generates observation → publishes to Redis
         screen.register_on_idle(streamer._process_actions_pause)
@@ -915,6 +1005,8 @@ async def main_async(
             except Exception as e:
                 logger.warning(f"ProgressDetector stop failed: {e}")
         await streamer.stop()
+        if memory_engine is not None:
+            await memory_engine.stop()
         await screen.stop()
         logger.info("Stopped cleanly.")
 
