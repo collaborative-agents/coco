@@ -8,6 +8,9 @@ switch backends — no separate flag plumbing is required:
 - ``lm_studio/<model>`` -> a local LM Studio server (e.g.
   ``lm_studio/nvidia/nemotron-3-nano-omni``). Host defaults to
   ``localhost:1234``; override with ``LM_STUDIO_HOST``.
+- ``nv_inference/<model>`` -> NVIDIA InferenceHub (e.g.
+  ``nv_inference/nvcf/meta/llama-3.1-70b-instruct``). Requires
+  ``NV_INFERENCE_API_KEY``; override the endpoint with ``NV_INFERENCE_BASE_URL``.
 - ``oa/<model>`` -> The Open Anonymity Project unlinkable inference (e.g.
   ``oa/openai/gpt-5.2-chat``). Reuses an unlinkable key until it's used up, then
   re-mints from a local ticket pool (``OA_TICKET_FILE``, which must be set).
@@ -35,7 +38,7 @@ import base64
 import os
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -55,6 +58,19 @@ from external_api.lm_studio_api import (
 )
 from external_api.lm_studio_api import (
     TextContent as LMSTextContent,
+)
+from external_api.nv_inference_api import (
+    ImageURL as NVImageURL,
+)
+from external_api.nv_inference_api import (
+    ImageURLContent as NVImageURLContent,
+)
+from external_api.nv_inference_api import (
+    NVInferenceMessage,
+    get_nv_inference_completion,
+)
+from external_api.nv_inference_api import (
+    TextContent as NVTextContent,
 )
 from external_api.oa_api import (
     ImageURL as OAImageURL,
@@ -85,6 +101,7 @@ from external_api.tinfoil_api import (
 from external_api.types import LLMCallMetrics, TokenUsage
 
 LM_STUDIO_PREFIX = "lm_studio/"
+NV_INFERENCE_PREFIX = "nv_inference/"
 OA_PREFIX = "oa/"
 TINFOIL_PREFIX = "tinfoil/"
 
@@ -222,6 +239,49 @@ def _lms_to_litellm(output: LMStudioMessage) -> LiteLLMMessage:
     return LiteLLMMessage(role=output.role, content=converted)
 
 
+def _to_nv_inference_messages(
+    messages: Sequence[LiteLLMMessage | dict],
+) -> list[NVInferenceMessage]:
+    out: list[NVInferenceMessage] = []
+    for m in messages:
+        if isinstance(m, LiteLLMMessage):
+            role = m.role
+            content: Any = m.content
+        else:
+            role = m["role"]
+            content = m["content"]
+
+        if role not in ("system", "user", "assistant"):
+            raise ValueError(f"Unsupported role for NV InferenceHub: {role}")
+
+        blocks: list[NVTextContent | NVImageURLContent] = []
+        for kind, value in _iter_content_blocks(content):
+            if kind == "text":
+                if value:
+                    blocks.append(NVTextContent(text=value))
+            else:
+                blocks.append(NVImageURLContent(image_url=NVImageURL(url=value)))
+
+        if not blocks:
+            continue
+        out.append(NVInferenceMessage(role=role, content=blocks))  # type: ignore[arg-type]
+    return out
+
+
+def _nv_to_litellm(output: NVInferenceMessage) -> LiteLLMMessage:
+    """Re-shape an NV InferenceHub assistant reply as a ``LiteLLMMessage``.
+
+    Lets call sites assume ``response.content[0].text`` regardless of backend.
+    """
+    converted: list[TextContent | ImageURLContent] = []
+    for block in output.content:
+        if isinstance(block, NVTextContent):
+            converted.append(TextContent(text=block.text))
+    if not converted:
+        converted.append(TextContent(text=""))
+    return LiteLLMMessage(role=output.role, content=converted)
+
+
 def _to_oa_messages(
     messages: Sequence[LiteLLMMessage | dict],
 ) -> list[OAMessage]:
@@ -318,8 +378,10 @@ def _chat_completion_provider(
     top_p: float | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
     | None = None,
+    extra_body: dict[str, Any] | None = None,
+    on_chunk: Callable[[str], None] | None = None,
 ) -> tuple[LiteLLMMessage, TokenUsage]:
-    """Run a completion, dispatching by ``model`` prefix (LM Studio, OA,
+    """Run a completion, dispatching by ``model`` prefix (LM Studio, NV, OA,
     Tinfoil, LiteLLM)."""
     if model.startswith(LM_STUDIO_PREFIX):
         lms_model = model[len(LM_STUDIO_PREFIX) :]
@@ -332,7 +394,30 @@ def _chat_completion_provider(
             max_tokens=max_tokens,
             top_p=top_p,
         )
-        return _lms_to_litellm(output), usage
+        converted = _lms_to_litellm(output)
+        if on_chunk is not None:
+            on_chunk(_response_text(converted))
+        return converted, usage
+
+    if model.startswith(NV_INFERENCE_PREFIX):
+        nv_model = model[len(NV_INFERENCE_PREFIX) :]
+        # Only override the endpoint when the env var is set so the API's own
+        # InferenceHub default applies otherwise.
+        nv_kwargs: dict = {}
+        base_url = os.environ.get("NV_INFERENCE_BASE_URL")
+        if base_url:
+            nv_kwargs["base_url"] = base_url
+        output, usage = get_nv_inference_completion(
+            _to_nv_inference_messages(messages),
+            model=nv_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            stream=on_chunk is not None,
+            on_chunk=on_chunk,
+            **nv_kwargs,
+        )
+        return _nv_to_litellm(output), usage
 
     if model.startswith(OA_PREFIX):
         oa_model = model[len(OA_PREFIX) :]
@@ -353,7 +438,10 @@ def _chat_completion_provider(
             top_p=top_p,
             **oa_kwargs,
         )
-        return _oa_to_litellm(output), usage
+        converted = _oa_to_litellm(output)
+        if on_chunk is not None:
+            on_chunk(_response_text(converted))
+        return converted, usage
 
     if model.startswith(TINFOIL_PREFIX):
         tinfoil_model = model[len(TINFOIL_PREFIX) :]
@@ -364,7 +452,10 @@ def _chat_completion_provider(
             max_tokens=max_tokens,
             top_p=top_p,
         )
-        return _tinfoil_to_litellm(output), usage
+        converted = _tinfoil_to_litellm(output)
+        if on_chunk is not None:
+            on_chunk(_response_text(converted))
+        return converted, usage
 
     return get_litellm_completion(
         messages,
@@ -373,6 +464,9 @@ def _chat_completion_provider(
         max_tokens=max_tokens,
         top_p=top_p,
         reasoning_effort=reasoning_effort,
+        extra_body=extra_body,
+        stream=on_chunk is not None,
+        on_chunk=on_chunk,
     )
 
 
@@ -384,7 +478,9 @@ def chat_completion(
     top_p: float | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
     | None = None,
+    extra_body: dict[str, Any] | None = None,
     operation: str | None = None,
+    on_chunk: Callable[[str], None] | None = None,
 ) -> tuple[LiteLLMMessage, LLMCallMetrics]:
     """Run a completion and return a normalized response plus call metrics."""
     provider = _provider_for_model(model)
@@ -399,6 +495,8 @@ def chat_completion(
             max_tokens=max_tokens,
             top_p=top_p,
             reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
+            on_chunk=on_chunk,
         )
     except Exception:
         # Preserve existing failure semantics. Callers only receive metrics for
@@ -425,7 +523,13 @@ def _build_prompt_messages(
     system_prompt: str,
     user_prompt: str,
     image_paths: list[str] | None = None,
-) -> list[LiteLLMMessage]:
+) -> str:
+    """Convenience wrapper: system + user prompt (+ optional images) -> reply text.
+
+    Builds LiteLLM-shaped messages and dispatches through :func:`chat_completion`,
+    so every backend (LM Studio, NV InferenceHub, OA, Tinfoil, LiteLLM) is
+    available.
+    """
     user_content: list[TextContent | ImageURLContent] = []
 
     for path in image_paths or []:
@@ -458,6 +562,7 @@ def prompt_to_text_with_metrics(
     user_prompt: str,
     image_paths: list[str] | None = None,
     operation: str | None = None,
+    extra_body: dict | None = None,
 ) -> tuple[str, LLMCallMetrics]:
     """Convenience wrapper that also returns normalized call metrics."""
     messages = _build_prompt_messages(
@@ -470,6 +575,7 @@ def prompt_to_text_with_metrics(
         model=model,
         max_tokens=8192,
         operation=operation,
+        extra_body=extra_body,
     )
     return _response_text(response), metrics
 
@@ -479,6 +585,7 @@ def prompt_to_text(
     system_prompt: str,
     user_prompt: str,
     image_paths: list[str] | None = None,
+    extra_body: dict | None = None,
 ) -> str:
     """Convenience wrapper: system + user prompt (+ optional images) -> reply text.
 
@@ -490,5 +597,6 @@ def prompt_to_text(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         image_paths=image_paths,
+        extra_body=extra_body,
     )
     return response

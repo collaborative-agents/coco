@@ -119,6 +119,30 @@ def test_chat_completion_marks_image_requests_as_vlm(monkeypatch):
     assert metrics["duration_ms"] == 125.0
 
 
+def test_chat_completion_forwards_extra_body(monkeypatch):
+    _fake_clock(monkeypatch, start_time=8.0, end_time=8.1)
+    captured = {}
+
+    def fake_completion(*args, **kwargs):
+        captured.update(kwargs)
+        return (
+            LiteLLMMessage(role="assistant", content=[TextContent(text="done")]),
+            TokenUsage(prompt_tokens=1, completion_tokens=1),
+        )
+
+    monkeypatch.setattr(llm, "get_litellm_completion", fake_completion)
+
+    llm.chat_completion(
+        [{"role": "user", "content": "hello"}],
+        model="hosted_vllm/Qwen/Qwen3.5-35B-A3B",
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+
+    assert captured["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+
+
 def test_prompt_to_text_with_metrics_propagates_tokens_and_latency(monkeypatch):
     _fake_clock(monkeypatch, start_time=42.0, end_time=42.333)
 
