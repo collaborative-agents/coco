@@ -75,7 +75,7 @@ def _load_observer_prompt(scenario: str = "everyday_support") -> str:
     prompt_dir = {
         "student_learning": "prompts_problem_solving",
     }.get(scenario, "prompts_everyday")
-    return (Path(__file__).parent / prompt_dir / "observer.txt").read_text()
+    return (Path(__file__).parent / prompt_dir / "observer.txt").read_text(encoding="utf-8")
 
 
 def _custom_observer_prompt_path() -> Path:
@@ -96,9 +96,9 @@ def _install_custom_observer_prompt(prompt: str) -> str:
     return its contents. Never overwrites the packaged scenario prompts."""
     path = _custom_observer_prompt_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(prompt)
+    path.write_text(prompt, encoding="utf-8")
     logger.info(f"Custom observer prompt written to {path}")
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 _OBSERVER_PROMPT: str = _load_observer_prompt()

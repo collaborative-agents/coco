@@ -94,11 +94,11 @@ class TrainingRecorder:
             manifest_path = self._dir / "manifest.json"
             existing: dict = {}
             if manifest_path.exists():
-                existing = json.loads(manifest_path.read_text())
+                existing = json.loads(manifest_path.read_text(encoding="utf-8"))
             sessions = existing.get("sessions", {})
             sessions[session_id] = {**sessions.get(session_id, {}), **meta}
             existing["sessions"] = sessions
-            manifest_path.write_text(json.dumps(existing, indent=2))
+            manifest_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
         except Exception as e:
             logger.debug(f"TrainingRecorder: manifest write failed: {e}")
 

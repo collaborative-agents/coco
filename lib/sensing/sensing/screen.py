@@ -12,14 +12,21 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
+import platform
+import sys
+
 import mss
-import Quartz
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
 from pynput import keyboard, mouse  # still synchronous
 from sensing.observer import Observer
-from shapely.geometry import box
-from shapely.ops import unary_union
+
+_IS_MACOS = sys.platform == "darwin"
+
+if _IS_MACOS:
+    import Quartz
+    from shapely.geometry import box
+    from shapely.ops import unary_union
 
 
 class Update(BaseModel):
@@ -30,86 +37,92 @@ class Update(BaseModel):
 
 
 ###############################################################################
-# Window‑geometry helpers                                                     #
+# Window‑geometry helpers (macOS only via Quartz; no-op on other platforms)   #
 ###############################################################################
 
 
-def _get_global_bounds() -> tuple[float, float, float, float]:
-    """Return a bounding box enclosing **all** physical displays.
+if _IS_MACOS:
 
-    Returns
-    -------
-    (min_x, min_y, max_x, max_y) tuple in Quartz global coordinates.
-    """
-    err, ids, cnt = Quartz.CGGetActiveDisplayList(16, None, None)  # type: ignore
-    if err != Quartz.kCGErrorSuccess:  # type: ignore
-        raise OSError(f"CGGetActiveDisplayList failed: {err}")
+    def _get_global_bounds() -> tuple[float, float, float, float]:
+        """Return a bounding box enclosing **all** physical displays.
 
-    min_x = min_y = float("inf")
-    max_x = max_y = -float("inf")
-    for did in ids[:cnt]:
-        r = Quartz.CGDisplayBounds(did)  # type: ignore
-        x0, y0 = r.origin.x, r.origin.y
-        x1, y1 = x0 + r.size.width, y0 + r.size.height
-        min_x, min_y = min(min_x, x0), min(min_y, y0)
-        max_x, max_y = max(max_x, x1), max(max_y, y1)
-    return min_x, min_y, max_x, max_y
+        Returns
+        -------
+        (min_x, min_y, max_x, max_y) tuple in Quartz global coordinates.
+        """
+        err, ids, cnt = Quartz.CGGetActiveDisplayList(16, None, None)  # type: ignore
+        if err != Quartz.kCGErrorSuccess:  # type: ignore
+            raise OSError(f"CGGetActiveDisplayList failed: {err}")
 
+        min_x = min_y = float("inf")
+        max_x = max_y = -float("inf")
+        for did in ids[:cnt]:
+            r = Quartz.CGDisplayBounds(did)  # type: ignore
+            x0, y0 = r.origin.x, r.origin.y
+            x1, y1 = x0 + r.size.width, y0 + r.size.height
+            min_x, min_y = min(min_x, x0), min(min_y, y0)
+            max_x, max_y = max(max_x, x1), max(max_y, y1)
+        return min_x, min_y, max_x, max_y
 
-def _get_visible_windows() -> list[tuple[dict, float]]:
-    """List *onscreen* windows with their visible‑area ratio.
+    def _get_visible_windows() -> list[tuple[dict, float]]:
+        """List *onscreen* windows with their visible‑area ratio.
 
-    Each tuple is ``(window_info_dict, visible_ratio)`` where *visible_ratio*
-    is in ``[0.0, 1.0]``.  Internal system windows (Dock, WindowServer, …) are
-    ignored.
-    """
-    _, _, _, gmax_y = _get_global_bounds()
+        Each tuple is ``(window_info_dict, visible_ratio)`` where *visible_ratio*
+        is in ``[0.0, 1.0]``.  Internal system windows (Dock, WindowServer, …) are
+        ignored.
+        """
+        _, _, _, gmax_y = _get_global_bounds()
 
-    opts = (
-        Quartz.kCGWindowListOptionOnScreenOnly  # type: ignore
-        | Quartz.kCGWindowListOptionIncludingWindow  # type: ignore
-    )
-    wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)  # type: ignore
-
-    occupied = None  # running union of opaque regions above the current window
-    result: list[tuple[dict, float]] = []
-
-    for info in wins:
-        owner = info.get("kCGWindowOwnerName", "")
-        if owner in ("Dock", "WindowServer", "Window Server"):
-            continue
-
-        bounds = info.get("kCGWindowBounds", {})
-        x, y, w, h = (
-            bounds.get("X", 0),
-            bounds.get("Y", 0),
-            bounds.get("Width", 0),
-            bounds.get("Height", 0),
+        opts = (
+            Quartz.kCGWindowListOptionOnScreenOnly  # type: ignore
+            | Quartz.kCGWindowListOptionIncludingWindow  # type: ignore
         )
-        if w <= 0 or h <= 0:
-            continue  # hidden or minimised
+        wins = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID)  # type: ignore
 
-        inv_y = gmax_y - y - h  # Quartz→Shapely Y‑flip
-        poly = box(x, inv_y, x + w, inv_y + h)
-        if poly.is_empty:
-            continue
+        occupied = None  # running union of opaque regions above the current window
+        result: list[tuple[dict, float]] = []
 
-        visible = poly if occupied is None else poly.difference(occupied)
-        if not visible.is_empty:
-            ratio = visible.area / poly.area
-            result.append((info, ratio))
-            occupied = poly if occupied is None else unary_union([occupied, poly])
+        for info in wins:
+            owner = info.get("kCGWindowOwnerName", "")
+            if owner in ("Dock", "WindowServer", "Window Server"):
+                continue
 
-    return result
+            bounds = info.get("kCGWindowBounds", {})
+            x, y, w, h = (
+                bounds.get("X", 0),
+                bounds.get("Y", 0),
+                bounds.get("Width", 0),
+                bounds.get("Height", 0),
+            )
+            if w <= 0 or h <= 0:
+                continue  # hidden or minimised
 
+            inv_y = gmax_y - y - h  # Quartz→Shapely Y‑flip
+            poly = box(x, inv_y, x + w, inv_y + h)
+            if poly.is_empty:
+                continue
 
-def _is_app_visible(names: Iterable[str]) -> bool:
-    """Return *True* if **any** window from *names* is at least partially visible."""
-    targets = set(names)
-    return any(
-        info.get("kCGWindowOwnerName", "") in targets and ratio > 0
-        for info, ratio in _get_visible_windows()
-    )
+            visible = poly if occupied is None else poly.difference(occupied)
+            if not visible.is_empty:
+                ratio = visible.area / poly.area
+                result.append((info, ratio))
+                occupied = poly if occupied is None else unary_union([occupied, poly])
+
+        return result
+
+    def _is_app_visible(names: Iterable[str]) -> bool:
+        """Return *True* if **any** window from *names* is at least partially visible."""
+        targets = set(names)
+        return any(
+            info.get("kCGWindowOwnerName", "") in targets and ratio > 0
+            for info, ratio in _get_visible_windows()
+        )
+
+else:
+
+    def _is_app_visible(names: Iterable[str]) -> bool:  # type: ignore[misc]
+        """Non-macOS stub: window visibility detection not available."""
+        return False
 
 
 ###############################################################################
