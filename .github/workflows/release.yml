@@ -26,13 +26,13 @@ jobs:
         run: |
           case "${{ github.event.inputs.platforms }}" in
             macos)
-              echo 'result={"include":[{"os":"macos-latest","platform":"macos","arch":"arm64"},{"os":"macos-13","platform":"macos-x64","arch":"x64"}]}' >> $GITHUB_OUTPUT
+              echo 'result={"include":[{"os":"macos-15","platform":"macos","arch":"arm64"},{"os":"macos-15-intel","platform":"macos-x64","arch":"x64"}]}' >> $GITHUB_OUTPUT
               ;;
             windows)
               echo 'result={"include":[{"os":"windows-latest","platform":"windows","arch":"x64"}]}' >> $GITHUB_OUTPUT
               ;;
             all)
-              echo 'result={"include":[{"os":"macos-latest","platform":"macos","arch":"arm64"},{"os":"macos-13","platform":"macos-x64","arch":"x64"},{"os":"windows-latest","platform":"windows","arch":"x64"}]}' >> $GITHUB_OUTPUT
+              echo 'result={"include":[{"os":"macos-15","platform":"macos","arch":"arm64"},{"os":"macos-15-intel","platform":"macos-x64","arch":"x64"},{"os":"windows-latest","platform":"windows","arch":"x64"}]}' >> $GITHUB_OUTPUT
               ;;
           esac
 
@@ -117,7 +117,7 @@ jobs:
 
   release:
     needs: package
-    if: ${{ !cancelled() }}
+    if: ${{ success() }}
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
