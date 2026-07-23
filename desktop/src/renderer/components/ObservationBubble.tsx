@@ -61,6 +61,7 @@ export default function ObservationBubble({
   onHelpMe,
   onDismiss,
   onViewConversation,
+  onChatAboutSuggestion,
   onMouseEnter,
   onMouseLeave,
 }: {
@@ -68,6 +69,7 @@ export default function ObservationBubble({
   onHelpMe?: () => void;
   onDismiss?: () => void;
   onViewConversation?: () => void;
+  onChatAboutSuggestion?: () => void;
   /** Hovering pauses the auto-hide so the user can read / copy the bubble. */
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -230,14 +232,38 @@ export default function ObservationBubble({
           Copy prompt plus one Open button per the user's chatbots/agents so
           they pick where to hand the prompt. */}
       {suggestion && suggestion.kind === 'content' && (
-        <button type="button" className="bubble-action-btn" onClick={() => act(null)}>
-          Copy
-        </button>
+        <div className="bubble-tool-actions">
+          <button
+            type="button"
+            className="bubble-action-btn"
+            onClick={() => act(null)}
+          >
+            Copy
+          </button>
+          <button
+            type="button"
+            className="bubble-action-btn bubble-chat-action"
+            onClick={onChatAboutSuggestion}
+          >
+            Chat about it
+          </button>
+        </div>
       )}
       {suggestion && suggestion.kind === 'delegate' && (
         <div className="bubble-tool-actions">
-          <button type="button" className="bubble-action-btn" onClick={() => act(null)}>
+          <button
+            type="button"
+            className="bubble-action-btn"
+            onClick={() => act(null)}
+          >
             Copy prompt
+          </button>
+          <button
+            type="button"
+            className="bubble-action-btn bubble-chat-action"
+            onClick={onChatAboutSuggestion}
+          >
+            Chat about it
           </button>
           {(suggestion.availableTools ?? []).map((t) => (
             <button

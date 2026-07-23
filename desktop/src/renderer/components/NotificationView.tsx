@@ -191,6 +191,10 @@ export function NotificationBubble({
   onHoverChange,
   suggestion,
   onSuggestionAction,
+  onChatAboutSuggestion,
+  suggestionRating,
+  onRateSuggestion,
+  copyConfirmed,
 }: {
   message: string;
   actionLabel?: string;
@@ -202,6 +206,10 @@ export function NotificationBubble({
   onHoverChange?: (hovered: boolean) => void;
   suggestion?: InstantSuggestion;
   onSuggestionAction?: (toolId: string | null) => void;
+  onChatAboutSuggestion?: () => void;
+  suggestionRating?: 'up' | 'down' | null;
+  onRateSuggestion?: (rating: 'up' | 'down') => void;
+  copyConfirmed?: boolean;
 }) {
   const isPrompt =
     notifType === 'session-start-prompt' || notifType === 'session-end-prompt';
@@ -263,12 +271,36 @@ export function NotificationBubble({
         </div>
       ) : suggestion?.kind === 'delegate' ? (
         <div className="toast-footer toast-tool-actions">
+          <div className="toast-rating-actions">
+            {(['up', 'down'] as const).map((rating) => (
+              <button
+                key={rating}
+                type="button"
+                className={`toast-rating-btn${
+                  suggestionRating === rating ? ' is-rated' : ''
+                }`}
+                aria-label={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
+                disabled={suggestionRating != null}
+                onClick={() => onRateSuggestion?.(rating)}
+              >
+                {rating === 'up' ? '👍' : '👎'}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="toast-action"
             onClick={() => onSuggestionAction?.(null)}
+            disabled={copyConfirmed}
           >
-            Copy prompt
+            {copyConfirmed ? 'Copied ✓' : 'Copy prompt'}
+          </button>
+          <button
+            type="button"
+            className="toast-action toast-chat-action"
+            onClick={onChatAboutSuggestion}
+          >
+            Chat about it
           </button>
           {(suggestion.availableTools ?? []).map((tool) => (
             <button
@@ -284,6 +316,35 @@ export function NotificationBubble({
       ) : (
         actionLabel && (
           <div className="toast-footer">
+            {suggestion && (
+              <div className="toast-rating-actions">
+                {(['up', 'down'] as const).map((rating) => (
+                  <button
+                    key={rating}
+                    type="button"
+                    className={`toast-rating-btn${
+                      suggestionRating === rating ? ' is-rated' : ''
+                    }`}
+                    aria-label={
+                      rating === 'up' ? 'Good suggestion' : 'Not helpful'
+                    }
+                    disabled={suggestionRating != null}
+                    onClick={() => onRateSuggestion?.(rating)}
+                  >
+                    {rating === 'up' ? '👍' : '👎'}
+                  </button>
+                ))}
+              </div>
+            )}
+            {suggestion && (
+              <button
+                type="button"
+                className="toast-action toast-chat-action"
+                onClick={onChatAboutSuggestion}
+              >
+                Chat about it
+              </button>
+            )}
             <button type="button" className="toast-action" onClick={onAction}>
               {actionLabel} →
             </button>
@@ -298,6 +359,10 @@ export default function NotificationView() {
   const [visible, setVisible] = useState(false);
   const [payload, setPayload] = useState<NotificationPayload | null>(null);
   const [loadingSuggestion, setLoadingSuggestion] = useState(false);
+  const [suggestionRating, setSuggestionRating] = useState<
+    'up' | 'down' | null
+  >(null);
+  const [copyConfirmed, setCopyConfirmed] = useState(false);
 
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -321,6 +386,8 @@ export default function NotificationView() {
           status: incoming?.status,
           rawObservation: incoming?.rawObservation,
         });
+        setSuggestionRating(null);
+        setCopyConfirmed(false);
         setVisible(true);
       },
     );
@@ -332,6 +399,30 @@ export default function NotificationView() {
   if (!visible || !payload) return null;
 
   const ipc = window.electron?.ipcRenderer;
+
+  const rateInstantSuggestion = (rating: 'up' | 'down') => {
+    if (
+      suggestionRating ||
+      !payload.observationId ||
+      !payload.suggestion
+    ) {
+      return;
+    }
+    setSuggestionRating(rating);
+    const ratedAt = Math.floor(Date.now() / 1000);
+    ipc?.sendMessage('activity-support-rated', {
+      observationId: payload.observationId,
+      rating,
+      ratedAt,
+    });
+    ipc?.sendMessage('training-feedback', {
+      kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
+      surface: 'notification',
+      observation_id: payload.observationId,
+      status: payload.status,
+      text: payload.suggestion.copyText ?? null,
+    });
+  };
 
   const handleAction = async () => {
     if (payload.notifType === 'session-start-prompt') {
@@ -396,6 +487,7 @@ export default function NotificationView() {
       ipc?.sendMessage('suggestion-action', {
         copyText: payload.suggestion?.copyText,
       });
+      rateInstantSuggestion('up');
       setVisible(false);
       window.close();
       return;
@@ -448,6 +540,24 @@ export default function NotificationView() {
       toolId,
       copyText: payload.suggestion?.copyText,
     });
+    if (toolId === null) {
+      rateInstantSuggestion('up');
+      setCopyConfirmed(true);
+      return;
+    }
+    setVisible(false);
+    window.close();
+  };
+
+  const handleChatAboutSuggestion = () => {
+    if (!payload.suggestion) return;
+    ipc?.sendMessage('chat-about-suggestion', {
+      observationId: payload.observationId,
+      status: payload.status,
+      rawObservation: payload.rawObservation,
+      suggestion: payload.suggestion,
+      surface: 'notification',
+    });
     setVisible(false);
     window.close();
   };
@@ -465,6 +575,10 @@ export default function NotificationView() {
         onHoverChange={handleHoverChange}
         suggestion={payload.suggestion}
         onSuggestionAction={handleSuggestionAction}
+        onChatAboutSuggestion={handleChatAboutSuggestion}
+        suggestionRating={suggestionRating}
+        onRateSuggestion={rateInstantSuggestion}
+        copyConfirmed={copyConfirmed}
       />
     </div>
   );

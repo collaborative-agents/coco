@@ -198,6 +198,9 @@ const S: Record<string, React.CSSProperties> = {
   exampleBtn: { marginTop: 6, border: `1px solid ${ACCENT_BORDER}`, background: '#fff', borderRadius: 8, padding: '3px 9px', fontSize: 11, cursor: 'pointer', color: ACCENT },
   viz: { marginTop: 8, width: '100%', height: 280, border: `1px solid ${BORDER}`, borderRadius: 10, background: '#fff' },
   composer: { borderTop: `1px solid ${BORDER}`, padding: 10, background: '#fff' },
+  pendingContext: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '6px 8px', border: `1px solid ${ACCENT_BORDER}`, borderRadius: 8, background: ACCENT_BG, color: ACCENT, fontSize: 11.5 },
+  pendingContextText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  pendingContextX: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 2px', fontFamily: FONT, fontSize: 14, lineHeight: 1 },
   pending: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   pendingThumbWrap: { position: 'relative' },
   pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
@@ -319,6 +322,7 @@ export default function SessionChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
@@ -353,6 +357,7 @@ export default function SessionChatView() {
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const pendingContextRef = useRef<string | null>(null);
 
   // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
   // same pipeline as the bubble reactions.
@@ -382,10 +387,16 @@ export default function SessionChatView() {
       const trimmed = text.trim();
       if (!trimmed && images.length === 0) return;
       setMessages((m) => [...m, { role: 'user', text: trimmed, images }]);
+      const pendingContext = pendingContextRef.current;
+      const userText = pendingContext
+        ? `${pendingContext}\n\nThe user now says:\n${trimmed}`
+        : trimmed;
+      pendingContextRef.current = null;
+      setPendingContextLabel(null);
       setSending(true);
       scrollToBottom();
       const res = await window.electron?.ipcRenderer.invoke('send-chat-message', {
-        userText: trimmed,
+        userText,
         images,
       });
       setSending(false);
@@ -426,6 +437,8 @@ export default function SessionChatView() {
         sessionIdRef.current = sessionId;
         setMessages([]);
         setRatings({});
+        pendingContextRef.current = null;
+        setPendingContextLabel(null);
       }
       setProblem(problemStatement ?? '');
     });
@@ -522,11 +535,23 @@ export default function SessionChatView() {
   };
   const memoryDirty = memoryDraft !== memoryLoaded;
 
-  // "Help me with this" seed — auto-send the observation as the first message.
+  // Context from proactive support. Ordinary "Help me with this" requests are
+  // sent immediately; "Chat about it" only stages the context for the user's
+  // next message and therefore does not invoke the tutor yet.
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('help-request', (data: any) => {
-      const { rawObservation, phrase } = (data ?? {}) as { rawObservation?: string; phrase?: string };
+      const { rawObservation, phrase, label, deferUntilUserMessage } = (data ?? {}) as {
+        rawObservation?: string;
+        phrase?: string;
+        label?: string;
+        deferUntilUserMessage?: boolean;
+      };
       const seed = (rawObservation || phrase || '').trim();
+      if (seed && deferUntilUserMessage) {
+        pendingContextRef.current = seed;
+        setPendingContextLabel((phrase || label || 'Tutor suggestion').trim());
+        return;
+      }
       if (seed) sendMessage(seed, []);
     });
     return () => { if (typeof cleanup === 'function') cleanup(); };
@@ -840,6 +865,25 @@ export default function SessionChatView() {
       </div>
 
       <div style={S.composer}>
+        {pendingContextLabel && (
+          <div style={S.pendingContext}>
+            <span style={S.pendingContextText}>
+              Suggestion context attached: {pendingContextLabel}
+            </span>
+            <button
+              type="button"
+              style={S.pendingContextX}
+              aria-label="Remove suggestion context"
+              title="Remove suggestion context"
+              onClick={() => {
+                pendingContextRef.current = null;
+                setPendingContextLabel(null);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
         {pendingImages.length > 0 && (
           <div style={S.pending}>
             {pendingImages.map((src, i) => (

@@ -400,12 +400,20 @@ function applyAvatarVisibility(hidden: boolean): void {
   avatarWindow?.show();
 }
 
+interface ChatSeed {
+  phrase: string;
+  label: string;
+  rawObservation: string;
+  /** Attach context to the user's next turn instead of sending immediately. */
+  deferUntilUserMessage?: boolean;
+}
+
 // Open the chat panel for a session, pushing the session context (and an
-// optional observation to auto-send as the first message) once it's loaded.
+// optional observation to send now or attach to the user's next message).
 const openChatForSession = (
   sessionId: string,
   problemStatement: string,
-  seed?: { phrase: string; label: string; rawObservation: string },
+  seed?: ChatSeed,
 ) => {
   const alreadyLoaded = chatWindow && !chatWindow.isDestroyed();
   isFloatMode = true;
@@ -998,6 +1006,76 @@ ipcMain.on(
   },
 );
 
+// Continue a revealed instant suggestion in Coco's own conversation. Include
+// both the ready-made suggestion and the observation that prompted it so the
+// tutor can discuss, refine, or explain the advice without losing context.
+ipcMain.removeAllListeners('chat-about-suggestion');
+ipcMain.on(
+  'chat-about-suggestion',
+  async (
+    _event,
+    payload: {
+      observationId?: string;
+      status?: string;
+      rawObservation?: string;
+      suggestion?: InstantSuggestion;
+      surface?: 'bubble' | 'notification';
+    },
+  ) => {
+    if (payload?.surface === 'notification') notificationWindow?.destroy();
+
+    const suggestion = payload?.suggestion;
+    if (!suggestion) return;
+    const rawObservation = payload.rawObservation?.trim() || '';
+    const suggestionText =
+      suggestion.kind === 'delegate' ? suggestion.prompt : suggestion.body;
+    const chatSeed = [
+      'I’d like to chat about this suggestion:',
+      `**${suggestion.title}**`,
+      suggestionText || suggestion.copyText,
+      rawObservation ? `Context that prompted it:\n${rawObservation}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    const seed = {
+      phrase: suggestion.title,
+      label: payload.status?.replace(/_/g, ' ') || 'suggestion',
+      rawObservation: chatSeed,
+      deferUntilUserMessage: true,
+    };
+
+    if (payload.observationId) {
+      recordSupportEngagement(payload.observationId, {
+        engagedAt: Math.floor(Date.now() / 1000),
+        suggestion,
+        destination: 'conversation',
+      });
+    }
+    const sensingPort = process.env.SENSING_PORT || '8080';
+    axios
+      .post(
+        `http://127.0.0.1:${sensingPort}/feedback`,
+        {
+          kind: 'engage',
+          surface: payload.surface ?? 'bubble',
+          observation_id: payload.observationId ?? null,
+          status: payload.status ?? 'observing',
+          text: suggestion.copyText ?? suggestionText ?? null,
+        },
+        { timeout: 3000 },
+      )
+      .catch((err) => {
+        log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+      });
+
+    if (isSessionActive && currentSessionId) {
+      openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
+    } else {
+      await createProactiveTutorSession(suggestion.title, 120, seed);
+    }
+  },
+);
+
 // Create a tutor session entirely against the LOCAL servers (no backend). A
 // "session" here is just a fresh conversation on the tutor server plus a
 // configured struggle-detection window on the sensing server. Shared by the
@@ -1006,7 +1084,7 @@ ipcMain.on(
 async function createProactiveTutorSession(
   problemStatement: string,
   struggleSeconds: number,
-  seed?: { phrase: string; label: string; rawObservation: string },
+  seed?: ChatSeed,
 ): Promise<string | null> {
   // Read the user's onboarding profile to get their selected AI tools and mode.
   const { aiTools, scenario, customObserverPrompt } = readProfile();

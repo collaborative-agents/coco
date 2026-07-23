@@ -796,6 +796,23 @@ function PetView() {
     }, FADE_MS);
   };
 
+  const handleChatAboutSuggestion = () => {
+    if (!bubble?.suggestion) return;
+    const current = bubble;
+    window.electron?.ipcRenderer.sendMessage('chat-about-suggestion', {
+      observationId: current.observationId,
+      status: current.status,
+      rawObservation: current.rawObservation ?? '',
+      suggestion: current.suggestion,
+      surface: 'bubble',
+    });
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    bubblePinnedRef.current = false;
+    setBubble(null);
+    setMood('idle');
+  };
+
   // Tier 3: user wants to read the full tutor guidance — open main window.
   const handleViewConversation = () => {
     window.electron?.ipcRenderer.sendMessage('open-main-window');
@@ -913,6 +930,7 @@ function PetView() {
         onHelpMe={handleHelpMe}
         onDismiss={handleDismiss}
         onViewConversation={handleViewConversation}
+        onChatAboutSuggestion={handleChatAboutSuggestion}
         onMouseEnter={handleBubbleEnter}
         onMouseLeave={handleBubbleLeave}
       />
