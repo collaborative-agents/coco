@@ -10,11 +10,11 @@ import chz
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from proactive_tutor.html_executor import VIZ_ROOT, VizResult, save_html_visualization
 from proactive_tutor.tutor_system import TutorSystem
 from py_utils.logging import init_logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -58,6 +58,7 @@ class EventRequest(BaseModel):
 class GuidanceResponse(BaseModel):
     guidance: str
     llm_metrics: dict | None = None
+    tool_calls: list[dict] = Field(default_factory=list)
 
 
 class InstantSuggestionRequest(BaseModel):
@@ -470,10 +471,64 @@ async def handle_user_prompt(req: EventRequest):
         )
         # Execute visualization code (also blocking) and mutate the JSON.
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
-        return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
+        return GuidanceResponse(
+            guidance=guidance,
+            llm_metrics=llm_metrics,
+            tool_calls=llm_metrics.get("tool_calls", []),
+        )
     except Exception as e:
         logger.error(f"Error in handle_user_prompt: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/events/user_prompt/stream")
+async def handle_user_prompt_stream(req: EventRequest):
+    """Stream tutor tool activity and final-answer text as SSE events."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+
+    async def event_stream():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+
+        def publish(event: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                tutor.handle_user_prompt_with_metrics,
+                req.observation,
+                req.image_paths,
+                req.user_text,
+                publish,
+            )
+        )
+        try:
+            while not worker.done() or not queue.empty():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            raw_guidance, llm_metrics = await worker
+            while not queue.empty():
+                event = queue.get_nowait()
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
+            done = {
+                "type": "done",
+                "guidance": guidance,
+                "llm_metrics": llm_metrics,
+                "tool_calls": llm_metrics.get("tool_calls", []),
+            }
+            yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            logger.error("Error in streaming user prompt: %s", exc, exc_info=True)
+            error = {"type": "error", "error": str(exc)}
+            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/events/pause", response_model=GuidanceResponse)
@@ -490,7 +545,11 @@ async def handle_pause(req: EventRequest):
             req.teaching_depth,
         )
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
-        return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
+        return GuidanceResponse(
+            guidance=guidance,
+            llm_metrics=llm_metrics,
+            tool_calls=llm_metrics.get("tool_calls", []),
+        )
     except Exception as e:
         logger.error(f"Error in handle_pause: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e

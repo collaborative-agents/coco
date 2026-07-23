@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 Completion = Callable[[str, str], str]
 
 
+class InvalidModelResponseError(ValueError):
+    """Raised when a memory-model response has no parseable JSON object."""
+
+
 def _json_object(text: str) -> dict:
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     candidates = [fenced.group(1)] if fenced else []
@@ -39,7 +43,9 @@ def _json_object(text: str) -> dict:
                 return parsed
         except json.JSONDecodeError:
             continue
-    raise ValueError("model response did not contain a valid JSON object")
+    raise InvalidModelResponseError(
+        "model response did not contain a valid JSON object"
+    )
 
 
 def _score(value: object) -> int | None:
@@ -173,7 +179,17 @@ class MemoryEngine:
     def _complete(self, system: str, prompt: str) -> str:
         if not self.model:
             raise RuntimeError("MEMORY_MODEL is empty")
-        return prompt_to_text(self.model, system, prompt)
+        extra_body = (
+            {"chat_template_kwargs": {"enable_thinking": False}}
+            if self.model.startswith("hosted_vllm/")
+            else None
+        )
+        return prompt_to_text(
+            self.model,
+            system,
+            prompt,
+            extra_body=extra_body,
+        )
 
     async def add_observation(self, observation: ObservationInput) -> bool:
         inserted = await asyncio.to_thread(self.store.add_observation, observation)
@@ -218,15 +234,45 @@ class MemoryEngine:
         observations = self.store.pending_observations(self.max_batch_size)
         if not observations or (not force and len(observations) < self.min_batch_size):
             return 0
+        observations, drafts = self._generate_with_batch_backoff(observations)
         observation_ids = [item.id for item in observations]
-        try:
-            for draft in self._generate(observations):
+        for draft in drafts:
+            try:
                 self._merge_draft(draft, observations)
-        except Exception:
-            # Leave processed_at unset so the batch is retried after transient LLM errors.
-            raise
+            except InvalidModelResponseError:
+                evidence_ids = self._evidence_ids(draft, observations)
+                logger.warning(
+                    "memory merge returned invalid JSON; skipping proposition "
+                    "inference for observations %s while retaining their raw records",
+                    ", ".join(evidence_ids),
+                )
         self.store.mark_processed(observation_ids)
         return len(observations)
+
+    def _generate_with_batch_backoff(
+        self, observations: list[ObservationRecord]
+    ) -> tuple[list[ObservationRecord], list[PropositionDraft]]:
+        """Halve invalid batches, skipping an unparseable singleton."""
+        current = observations
+        while True:
+            try:
+                return current, self._generate(current)
+            except InvalidModelResponseError:
+                if len(current) == 1:
+                    logger.warning(
+                        "memory proposal still returned invalid JSON for observation "
+                        "%s; retaining the raw observation without a proposition",
+                        current[0].id,
+                    )
+                    return current, []
+                smaller_size = max(1, len(current) // 2)
+                logger.warning(
+                    "memory proposal returned invalid JSON; retrying batch "
+                    "with %d observations instead of %d",
+                    smaller_size,
+                    len(current),
+                )
+                current = current[:smaller_size]
 
     def _generate(
         self, observations: list[ObservationRecord]

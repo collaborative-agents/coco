@@ -30,7 +30,7 @@ The most recent message typed by the user, if any. The timestamp indicates when 
 </user_input>
 
 <recent_observations>
-Your last few observations and how the user reacted to the bubble each one triggered (ACCEPTED / DISMISSED / ignored / no feedback). May be absent at the start of a session. Use it to avoid nagging: if the user just DISMISSED a suggestion for the activity they are still doing, do NOT re-raise the same kind of suggestion — report a calmer status ("progress" or "observing") instead, unless the situation has materially changed (new task, new app, a genuinely different opportunity).
+Your last few observations and how the user reacted to the bubble each one triggered (ACCEPTED / DISMISSED / NEGATIVE rating / ignored / no feedback). May be absent at the start of a session. Use it to avoid nagging: if the user just DISMISSED a suggestion, do NOT re-raise the same kind of suggestion for the activity they are still doing. A NEGATIVE rating means the user rated the resulting help as negative; classify similar observations as "progress". Only re-flag after a dismissal or negative rating if the situation has materially changed (new task, new app, or a genuinely different issue or opportunity).
 </recent_observations>
 
 Your responsibilities:
@@ -80,7 +80,7 @@ Based on the signals above, assign a single status label that best captures the 
 - "stuck": user appears stalled — no visible progress, repeated actions, or prolonged inactivity
 - "observing": cannot determine a meaningful status from the available information
 
-Respect recent feedback: if <recent_observations> shows the user just DISMISSED a suggestion for the same activity they are still doing, downgrade to "progress" or "observing" rather than re-emitting "inefficient" / "mistake" / "stuck" for the same thing. Only re-flag if the situation materially changed (new task, new app, or a genuinely different opportunity).
+Respect recent feedback: if <recent_observations> shows the user just DISMISSED a suggestion for the same activity, downgrade to "progress" or "observing" rather than re-emitting "inefficient" / "mistake" / "stuck" for the same thing. If the user rated the resulting help as NEGATIVE, classify similar observations as "progress". Only re-flag after either reaction if the situation materially changed (new task, new app, or a genuinely different issue or opportunity).
 
 Output in JSON format:
 {

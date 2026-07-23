@@ -1,5 +1,6 @@
 import asyncio
 import os
+from collections.abc import Callable
 from typing import cast
 
 import cv2
@@ -384,6 +385,7 @@ class Streamer:
         max_stored_actions: int = 1000,
         periodic_delete: bool = False,
         segment_processors: list[SegmentProcessor] | None = None,
+        pause_predicate: Callable[[], bool] | None = None,
     ) -> None:
         """
         Initialize the Streamer.
@@ -400,6 +402,8 @@ class Streamer:
             segment_processors: Ordered list of processors to call after each
                 segmentation cycle.  Pass ``[]`` or omit to disable all
                 processing (useful for testing).
+            pause_predicate: Optional callback that suspends background database
+                polling while it returns True.
         """
         self.db_path = os.path.expanduser(db_path)
         self.screenshot_dir = os.path.expanduser(screenshot_dir)
@@ -410,6 +414,7 @@ class Streamer:
         self.max_stored_actions = max_stored_actions
         self.periodic_delete = periodic_delete
         self._segment_processors: list[SegmentProcessor] = segment_processors or []
+        self._pause_predicate = pause_predicate
 
         print(f"[INIT] db_path: {self.db_path}, screenshot_dir: {self.screenshot_dir}")
 
@@ -536,7 +541,8 @@ class Streamer:
         logger.info(f"Streamer started, checking every {self.check_interval}s")
         while self._running:
             try:
-                await self._process_actions()
+                if self._pause_predicate is None or not self._pause_predicate():
+                    await self._process_actions()
             except Exception as e:
                 logger.error(f"Error processing actions: {e}", exc_info=True)
             await asyncio.sleep(self.check_interval)

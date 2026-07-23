@@ -408,6 +408,10 @@ class ProgressDetector:
             f"since_last_fire={now - self._last_fire_ts:.0f}s)"
         )
 
+        if self._screen.is_sensing_paused():
+            logger.info("ProgressDetector: skipping tick — sensing is asleep")
+            return
+
         # 1. Grace period after session start
         elapsed = now - self._start_ts
         if elapsed < self._config.session_start_grace_seconds:

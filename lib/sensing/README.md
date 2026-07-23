@@ -51,6 +51,10 @@ CREATE TABLE observations (
   - `POST /session`: Configure streamer for a new session.
   - Also exposes streaming (`GET /events/pause/stream`, `GET /observations/stream`), feedback (`POST /feedback`), hotkey-capture (Ctrl/Command + Shift + Space), and session-end endpoints.
 
+Semantic observer outputs are also persisted to the shared local memory database.
+The everyday-support tutor can retrieve relevant long-term context and bounded
+observation evidence through the local `memory_mcp` server.
+
 
 ### Data Flow
 
@@ -87,12 +91,16 @@ The observer fires from three sources:
 - **Action-accumulation snapshot.** The streamer adds one snapshot per processing cycle; an observation fires only once the buffer reaches `snapshot_buffer_max_size`.
 - **Idle / user prompt.** The `pause` observation fires after the screen idle timeout; a `user_prompt` observation fires when the user sends a message.
 
+After `sensing_idle_timeout_seconds` without system-wide keyboard, mouse, or trackpad activity (5 minutes by default), sensing enters a dormant state: screen capture, database polling, observer ticks, and progress judgments pause. It also pauses immediately when the laptop reports that the display is asleep. The first user
+input wakes sensing; the wake-up event itself is discarded so it cannot be paired with a stale pre-sleep screenshot.
+
 ### Usage Example
 
 ```bash
 uv run python -m sensing.sensing_server \
   --observer_model=<provider/model> \
   --observer_interval_seconds=15.0 \
+  --sensing_idle_timeout_seconds=300 \
   --min_actions_threshold=2 \
   --port=8080 \
   --tutor_url="http://localhost:8081"

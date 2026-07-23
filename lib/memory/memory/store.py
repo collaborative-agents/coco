@@ -184,6 +184,35 @@ class MemoryStore:
             ).fetchall()
         return [self._observation(row) for row in rows]
 
+    def recent_observations(
+        self,
+        limit: int,
+        *,
+        start_time: float | None = None,
+        end_time: float | None = None,
+        session_id: str | None = None,
+        observation_type: str | None = None,
+    ) -> list[ObservationRecord]:
+        sql = "SELECT * FROM observations WHERE 1=1"
+        params: list[object] = []
+        if start_time is not None:
+            sql += " AND created_at >= ?"
+            params.append(start_time)
+        if end_time is not None:
+            sql += " AND created_at <= ?"
+            params.append(end_time)
+        if session_id is not None:
+            sql += " AND session_id = ?"
+            params.append(session_id)
+        if observation_type is not None:
+            sql += " AND observation_type = ?"
+            params.append(observation_type)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._observation(row) for row in rows]
+
     def mark_processed(self, observation_ids: Iterable[str]) -> None:
         ids = list(observation_ids)
         if not ids:

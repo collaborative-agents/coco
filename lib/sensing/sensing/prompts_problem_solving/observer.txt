@@ -29,7 +29,7 @@ The most recent message typed by the student, if any. The timestamp indicates wh
 </user_input>
 
 <recent_observations>
-Your last few observations and how the student reacted to the bubble each one triggered (ACCEPTED / DISMISSED / ignored / no feedback). May be absent at the start of a session. If the student just DISMISSED a suggestion for the same step they are still working on, do not keep reporting the same "stuck"/mistake unless the situation has materially changed (new step, new approach, a genuinely different error).
+Your last few observations and how the student reacted to the bubble each one triggered (ACCEPTED / DISMISSED / NEGATIVE rating / ignored / no feedback). May be absent at the start of a session. If the student just DISMISSED a suggestion for the same step they are still working on, do not keep reporting the same "stuck"/mistake unless the situation has materially changed. A NEGATIVE rating means the student rated the resulting help as negative; classify similar observations as "progress". Only re-flag after either reaction if there is a new step, new approach, or genuinely different error.
 </recent_observations>
 
 Your responsibilities:

@@ -1,33 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from memory.paths import default_memory_db_path
 from memory.store import MemoryStore
-
-
-def default_memory_db_path() -> Path:
-    configured = os.environ.get("COCO_MEMORY_DB_PATH")
-    if configured:
-        return Path(configured).expanduser()
-    if os.name == "nt":
-        user_data = Path(os.environ.get("APPDATA", Path.home())) / "coco"
-    elif sys.platform == "darwin":
-        user_data = Path.home() / "Library" / "Application Support" / "coco"
-    else:
-        user_data = (
-            Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "coco"
-        )
-    return user_data / "memory" / "memory.db"
 
 
 def _timestamp(value: float) -> str:
@@ -126,6 +109,56 @@ def query_user_context(
     }
 
 
+def query_recent_observations(
+    store: MemoryStore,
+    *,
+    limit: int = 10,
+    start_hh_mm_ago: str | None = None,
+    end_hh_mm_ago: str | None = None,
+    session_id: str | None = None,
+    observation_type: str | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Run and serialize one recent-observation query without MCP transport."""
+    if not 1 <= limit <= 50:
+        raise ValueError("limit must be between 1 and 50")
+    current_time = time.time() if now is None else now
+    start_time = _ago_timestamp(start_hh_mm_ago, now=current_time)
+    end_time = _ago_timestamp(end_hh_mm_ago, now=current_time)
+    if start_time is not None and end_time is not None and start_time > end_time:
+        raise ValueError(
+            "start_hh_mm_ago must describe an older time than end_hh_mm_ago"
+        )
+
+    observations = store.recent_observations(
+        limit,
+        start_time=start_time,
+        end_time=end_time,
+        session_id=session_id,
+        observation_type=observation_type,
+    )
+    return {
+        "start_hh_mm_ago": start_hh_mm_ago,
+        "end_hh_mm_ago": end_hh_mm_ago,
+        "session_id": session_id,
+        "observation_type": observation_type,
+        "count": len(observations),
+        "observations": [
+            {
+                "id": observation.id,
+                "observer_name": observation.observer_name,
+                "content": observation.content,
+                "content_type": observation.content_type,
+                "observation_type": observation.observation_type,
+                "session_id": observation.session_id,
+                "scenario": observation.scenario,
+                "created_at": _timestamp(observation.created_at),
+            }
+            for observation in observations
+        ],
+    }
+
+
 class AppContext:
     def __init__(self, store: MemoryStore):
         self.store = store
@@ -165,6 +198,33 @@ async def get_user_context(
         end_hh_mm_ago=end_hh_mm_ago,
         limit=limit,
         evidence_limit=evidence_limit,
+    )
+
+
+@mcp.tool()
+async def get_recent_observations(
+    limit: int = 10,
+    start_hh_mm_ago: str | None = None,
+    end_hh_mm_ago: str | None = None,
+    session_id: str | None = None,
+    observation_type: str | None = None,
+) -> dict[str, Any]:
+    """Retrieve Coco's newest raw observations in reverse chronological order.
+
+    Time offsets use HH:MM relative to now: start is the older boundary and end
+    is the newer boundary. Optional session and type filters require exact
+    matches. Raw observer output may be sensitive; request only what is needed.
+    """
+    context = mcp.get_context()
+    app_context = context.request_context.lifespan_context
+    return await asyncio.to_thread(
+        query_recent_observations,
+        app_context.store,
+        limit=limit,
+        start_hh_mm_ago=start_hh_mm_ago,
+        end_hh_mm_ago=end_hh_mm_ago,
+        session_id=session_id,
+        observation_type=observation_type,
     )
 
 
