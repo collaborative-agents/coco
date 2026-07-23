@@ -1,5 +1,7 @@
+import json
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -17,12 +19,12 @@ logger = init_logger(__name__)
 
 class TutorSystem:
     """
-    Two-stage tutoring pipeline: Diagnostic -> Tutor.
+    Conversation manager for everyday chat and structured learning support.
 
-    Observation is generated upstream by the Streamer's ObserverAgent and
-    passed in as a pre-computed string.  This class handles only diagnosis and
-    guidance generation, maintains conversation history, and exposes context
-    (including image_num) for the Streamer to read via GET /context.
+    Everyday support uses ordinary system/user/assistant messages and lets the
+    tutor retrieve long-term context through memory_mcp. Learning scenarios
+    retain their structured observation prompt. The class also exposes context
+    for the Streamer via GET /context.
 
     Exposed over HTTP by tutor_server.py.
     """
@@ -35,7 +37,9 @@ class TutorSystem:
         self._scenario = scenario
         prompts_dir = self._prompts_dir(scenario)
         self.tutor_agent = TutorAgent(
-            model_name, (prompts_dir / "tutor.txt").read_text()
+            model_name,
+            (prompts_dir / "tutor.txt").read_text(),
+            enable_memory_tool=scenario == "everyday_support",
         )
 
         self.problem_statement: str = ""
@@ -45,6 +49,10 @@ class TutorSystem:
         # restarts (see _memory_path / set_memory).
         self.memory: str = self._load_memory()
         self.conversation_history: list[str] = []
+        # Provider-ready chat history for everyday support. Unlike
+        # conversation_history (the legacy API/debug representation), this
+        # preserves normal user/assistant message boundaries.
+        self._chat_messages: list[dict[str, str]] = []
         self.image_num: int = 0
 
         # Training-data recorder — only active when the launcher set a shared
@@ -194,7 +202,9 @@ class TutorSystem:
         logger.info(f"[SET MODEL] {model_name}")
         prompts_dir = self._prompts_dir(self._scenario)
         self.tutor_agent = TutorAgent(
-            model_name, (prompts_dir / "tutor.txt").read_text()
+            model_name,
+            (prompts_dir / "tutor.txt").read_text(),
+            enable_memory_tool=self._scenario == "everyday_support",
         )
 
     def set_ai_tools(self, tool_ids: list[str]) -> None:
@@ -214,7 +224,9 @@ class TutorSystem:
         prompts_dir = self._prompts_dir(scenario)
         model_name = self.tutor_agent.model
         self.tutor_agent = TutorAgent(
-            model_name, (prompts_dir / "tutor.txt").read_text()
+            model_name,
+            (prompts_dir / "tutor.txt").read_text(),
+            enable_memory_tool=scenario == "everyday_support",
         )
 
     @staticmethod
@@ -251,6 +263,7 @@ class TutorSystem:
         """
         logger.info("[RESET] Clearing per-session state for new session")
         self.conversation_history = []
+        self._chat_messages = []
         self.problem_statement = ""
         self.image_num = 0
         self._ai_tools = []
@@ -362,6 +375,96 @@ class TutorSystem:
             parts.append(f'<user_input timestamp="{ts}">{user_text}</user_input>')
         return "\n\n".join(parts) + "\n"
 
+    def _everyday_chat_messages(
+        self, current_message: dict[str, str] | None = None
+    ) -> list[dict[str, str]]:
+        """Build normal chat messages with memory as separate system context."""
+        memory = self.memory.strip() or "(no saved user memory)"
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "User memory follows. Use it only when relevant and do not "
+                    f"mention this context explicitly.\n\n{memory}"
+                ),
+            },
+            *[dict(message) for message in self._chat_messages],
+        ]
+        if current_message is not None:
+            messages.append(current_message)
+        return messages
+
+    def _handle_everyday_user_prompt(
+        self,
+        *,
+        image_paths: list[str] | None,
+        user_text: str | None,
+        on_event: Callable[[dict], None] | None = None,
+    ) -> tuple[str, LLMCallMetrics]:
+        text = (user_text or "").strip() or "Help me with what I'm doing right now."
+        current_message = {"role": "user", "content": text}
+        messages = self._everyday_chat_messages(current_message)
+        if on_event is None:
+            response, metrics = self.tutor_agent.chat_with_metrics(
+                messages,
+                image_paths=image_paths,
+            )
+        else:
+            response, metrics = self.tutor_agent.chat_with_metrics(
+                messages,
+                image_paths=image_paths,
+                on_event=on_event,
+            )
+
+        self._chat_messages.extend(
+            [current_message, {"role": "assistant", "content": response}]
+        )
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversation_history.extend(
+            [f"[{ts}] [User]: {text}", f"[{ts}] [Tutor]: {response}"]
+        )
+        serialized_messages = json.dumps(messages, ensure_ascii=False)
+        self._log_tutor_call(
+            "user_prompt",
+            serialized_messages,
+            response,
+            image_paths,
+            llm_metrics=metrics,
+        )
+        return response, metrics
+
+    def _handle_everyday_pause(
+        self,
+        *,
+        trigger_reason: str,
+        evidence: str,
+    ) -> tuple[str, LLMCallMetrics]:
+        request = (
+            "The desktop app requested a brief proactive check-in with the user. "
+            f"Reason: {trigger_reason}."
+        )
+        if evidence:
+            request += f" Available evidence: {evidence}"
+        request += (
+            " Use get_user_context if more activity context is necessary, then "
+            "respond naturally and concisely to the user."
+        )
+        current_message = {"role": "user", "content": request}
+        messages = self._everyday_chat_messages(current_message)
+        response, metrics = self.tutor_agent.chat_with_metrics(messages)
+
+        self._chat_messages.append({"role": "assistant", "content": response})
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversation_history.append(f"[{ts}] [Tutor]: {response}")
+        self._log_tutor_call(
+            "pause",
+            json.dumps(messages, ensure_ascii=False),
+            response,
+            None,
+            llm_metrics=metrics,
+        )
+        return response, metrics
+
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
@@ -371,9 +474,13 @@ class TutorSystem:
         obs: str,
         image_paths: list[str] | None = None,
         user_text: str | None = None,
+        on_event: Callable[[dict], None] | None = None,
     ) -> str:
         guidance, _ = self.handle_user_prompt_with_metrics(
-            obs=obs, image_paths=image_paths, user_text=user_text
+            obs=obs,
+            image_paths=image_paths,
+            user_text=user_text,
+            on_event=on_event,
         )
         return guidance
 
@@ -382,12 +489,14 @@ class TutorSystem:
         obs: str,
         image_paths: list[str] | None = None,
         user_text: str | None = None,
+        on_event: Callable[[dict], None] | None = None,
     ) -> tuple[str, LLMCallMetrics]:
         """
         Process a user-prompt event.
 
         Args:
-            obs:         Observation generated by the Streamer's ObserverAgent.
+            obs:         Observer output used by structured learning scenarios;
+                         everyday chat retrieves observations only through its tool.
             image_paths: Optional screenshot file paths (e.g. a pinned hot-key
                          capture) to embed directly in the LLM call so the
                          tutor can reason about and annotate the image.
@@ -401,6 +510,15 @@ class TutorSystem:
             f"[USER_PROMPT] Handling user prompt event. "
             f"images={len(image_paths) if image_paths else 0}"
         )
+
+        if self._scenario == "everyday_support":
+            guidance, metrics = self._handle_everyday_user_prompt(
+                image_paths=image_paths,
+                user_text=user_text,
+                on_event=on_event,
+            )
+            logger.info(f"[TUTOR] {guidance}")
+            return guidance, metrics
 
         # Build context from internal state *before* recording the user message
         # so the current turn appears in <user_input>, not in <conversation_history>.
@@ -428,6 +546,8 @@ class TutorSystem:
         guidance, metrics = self.tutor_agent.tutor_with_metrics(
             text_prompt, image_paths=image_paths
         )
+        if on_event is not None:
+            on_event({"type": "text_delta", "text": guidance})
         logger.info(f"[TUTOR] {guidance}")
         self._log_tutor_call(
             "user_prompt", text_prompt, guidance, image_paths, llm_metrics=metrics
@@ -490,6 +610,14 @@ class TutorSystem:
             f"[PAUSE] Handling pause event. trigger_reason={trigger_reason} "
             f"teaching_depth={teaching_depth}"
         )
+
+        if self._scenario == "everyday_support":
+            guidance, metrics = self._handle_everyday_pause(
+                trigger_reason=trigger_reason,
+                evidence=evidence,
+            )
+            logger.info(f"[PAUSE][TUTOR] {guidance}")
+            return guidance, metrics
 
         _TRIGGER_FRAMING = {
             "struggle": (

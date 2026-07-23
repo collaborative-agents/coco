@@ -38,7 +38,7 @@ import base64
 import os
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -378,6 +378,8 @@ def _chat_completion_provider(
     top_p: float | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
     | None = None,
+    extra_body: dict[str, Any] | None = None,
+    on_chunk: Callable[[str], None] | None = None,
 ) -> tuple[LiteLLMMessage, TokenUsage]:
     """Run a completion, dispatching by ``model`` prefix (LM Studio, NV, OA,
     Tinfoil, LiteLLM)."""
@@ -392,7 +394,30 @@ def _chat_completion_provider(
             max_tokens=max_tokens,
             top_p=top_p,
         )
-        return _lms_to_litellm(output), usage
+        converted = _lms_to_litellm(output)
+        if on_chunk is not None:
+            on_chunk(_response_text(converted))
+        return converted, usage
+
+    if model.startswith(NV_INFERENCE_PREFIX):
+        nv_model = model[len(NV_INFERENCE_PREFIX) :]
+        # Only override the endpoint when the env var is set so the API's own
+        # InferenceHub default applies otherwise.
+        nv_kwargs: dict = {}
+        base_url = os.environ.get("NV_INFERENCE_BASE_URL")
+        if base_url:
+            nv_kwargs["base_url"] = base_url
+        output, usage = get_nv_inference_completion(
+            _to_nv_inference_messages(messages),
+            model=nv_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            stream=on_chunk is not None,
+            on_chunk=on_chunk,
+            **nv_kwargs,
+        )
+        return _nv_to_litellm(output), usage
 
     if model.startswith(NV_INFERENCE_PREFIX):
         nv_model = model[len(NV_INFERENCE_PREFIX) :]
@@ -431,7 +456,10 @@ def _chat_completion_provider(
             top_p=top_p,
             **oa_kwargs,
         )
-        return _oa_to_litellm(output), usage
+        converted = _oa_to_litellm(output)
+        if on_chunk is not None:
+            on_chunk(_response_text(converted))
+        return converted, usage
 
     if model.startswith(TINFOIL_PREFIX):
         tinfoil_model = model[len(TINFOIL_PREFIX) :]
@@ -442,7 +470,10 @@ def _chat_completion_provider(
             max_tokens=max_tokens,
             top_p=top_p,
         )
-        return _tinfoil_to_litellm(output), usage
+        converted = _tinfoil_to_litellm(output)
+        if on_chunk is not None:
+            on_chunk(_response_text(converted))
+        return converted, usage
 
     return get_litellm_completion(
         messages,
@@ -451,6 +482,9 @@ def _chat_completion_provider(
         max_tokens=max_tokens,
         top_p=top_p,
         reasoning_effort=reasoning_effort,
+        extra_body=extra_body,
+        stream=on_chunk is not None,
+        on_chunk=on_chunk,
     )
 
 
@@ -462,7 +496,9 @@ def chat_completion(
     top_p: float | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
     | None = None,
+    extra_body: dict[str, Any] | None = None,
     operation: str | None = None,
+    on_chunk: Callable[[str], None] | None = None,
 ) -> tuple[LiteLLMMessage, LLMCallMetrics]:
     """Run a completion and return a normalized response plus call metrics."""
     provider = _provider_for_model(model)
@@ -477,6 +513,8 @@ def chat_completion(
             max_tokens=max_tokens,
             top_p=top_p,
             reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
+            on_chunk=on_chunk,
         )
     except Exception:
         # Preserve existing failure semantics. Callers only receive metrics for
@@ -542,6 +580,7 @@ def prompt_to_text_with_metrics(
     user_prompt: str,
     image_paths: list[str] | None = None,
     operation: str | None = None,
+    extra_body: dict | None = None,
 ) -> tuple[str, LLMCallMetrics]:
     """Convenience wrapper that also returns normalized call metrics."""
     messages = _build_prompt_messages(
@@ -554,6 +593,7 @@ def prompt_to_text_with_metrics(
         model=model,
         max_tokens=8192,
         operation=operation,
+        extra_body=extra_body,
     )
     return _response_text(response), metrics
 
@@ -563,6 +603,7 @@ def prompt_to_text(
     system_prompt: str,
     user_prompt: str,
     image_paths: list[str] | None = None,
+    extra_body: dict | None = None,
 ) -> str:
     """Convenience wrapper: system + user prompt (+ optional images) -> reply text.
 
@@ -574,5 +615,6 @@ def prompt_to_text(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         image_paths=image_paths,
+        extra_body=extra_body,
     )
     return response

@@ -1126,6 +1126,190 @@ body,
   color: #4b5563;
 }
 
+/* Markdown inside the session chat.
+   Keep the hierarchy readable at chat-bubble scale instead of inheriting the
+   browser's document-sized heading and block margins. */
+.chat-markdown {
+  min-width: 0;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p {
+  margin: 0 0 7px;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: 12px 0 5px;
+  color: #1f2937;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.chat-markdown h1 {
+  font-size: 18px;
+}
+
+.chat-markdown h2 {
+  font-size: 16px;
+}
+
+.chat-markdown h3 {
+  font-size: 14px;
+}
+
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 13px;
+}
+
+.chat-markdown strong {
+  color: #1f2937;
+  font-weight: 700;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+
+.chat-markdown li {
+  margin: 3px 0;
+  padding-left: 1px;
+}
+
+.chat-markdown li > p {
+  margin-bottom: 3px;
+}
+
+.chat-markdown li > ul,
+.chat-markdown li > ol {
+  margin: 2px 0 3px;
+}
+
+.chat-markdown .task-list-item {
+  list-style: none;
+}
+
+.chat-markdown .task-list-item input {
+  margin: 0 6px 0 -19px;
+  vertical-align: -1px;
+  accent-color: #204a79;
+}
+
+.chat-markdown hr {
+  height: 1px;
+  margin: 9px 0;
+  border: 0;
+  background: #d1d5db;
+}
+
+.chat-markdown blockquote {
+  margin: 7px 0;
+  padding: 3px 0 3px 10px;
+  border-left: 3px solid #bcd0fc;
+  color: #4b5563;
+}
+
+.chat-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown a {
+  color: #204a79;
+  text-decoration: underline;
+  text-decoration-color: #bcd0fc;
+  text-underline-offset: 2px;
+}
+
+.chat-markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+.chat-markdown code {
+  padding: 1px 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #1e3a5f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.chat-markdown pre {
+  max-width: 100%;
+  margin: 7px 0;
+  padding: 9px 10px;
+  overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  background: #ffffff;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.chat-markdown pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1f2937;
+}
+
+.chat-markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 7px 0;
+  overflow-x: auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  padding: 5px 7px;
+  border: 1px solid #d1d5db;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-markdown th {
+  background: #e9efff;
+  color: #1f2937;
+  font-weight: 700;
+}
+
+.chat-markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 7px 0;
+  border-radius: 7px;
+}
+
+.chat-markdown .katex-display {
+  max-width: 100%;
+  margin: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* Compact card variant — for short prompts (session-start/end) so the white
    card hugs the content instead of stretching to the full window height.
    The notification window stays the same size; the transparent area outside

@@ -11,10 +11,36 @@ import json
 import time
 
 from memory import MemoryEngine, MemoryStore, ObservationInput
+from memory import engine as memory_engine_module
 
 
 def _obs(identifier: str, content: str) -> ObservationInput:
     return ObservationInput(id=identifier, content=content, created_at=time.time())
+
+
+def test_hosted_vllm_engine_disables_thinking(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_prompt_to_text(model, system, prompt, *, extra_body=None):
+        captured.update(
+            model=model,
+            system=system,
+            prompt=prompt,
+            extra_body=extra_body,
+        )
+        return "{}"
+
+    monkeypatch.setattr(memory_engine_module, "prompt_to_text", fake_prompt_to_text)
+    engine = MemoryEngine(
+        MemoryStore(tmp_path / "memory.db"),
+        user_name="User",
+        model="hosted_vllm/Qwen/Qwen3.5-9B",
+    )
+
+    assert engine._complete("system", "prompt") == "{}"
+    assert captured["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
 
 
 def test_store_searches_propositions_and_returns_evidence(tmp_path):
@@ -107,6 +133,112 @@ def test_engine_generates_and_marks_batch_processed(tmp_path):
     assert engine.process_pending_once() == 1
     assert store.pending_observations(10) == []
     assert store.search("auth VS Code")[0].proposition.confidence == 9
+
+
+def test_engine_retries_invalid_json_with_smaller_batch(tmp_path):
+    store = MemoryStore(tmp_path / "memory.db")
+    for index in range(4):
+        store.add_observation(_obs(f"o{index}", f"Working on task {index}"))
+
+    attempted_batch_sizes = []
+
+    def complete(system: str, prompt: str) -> str:
+        assert "grounded model" in system
+        batch_size = prompt.count("[observation_id=o")
+        attempted_batch_sizes.append(batch_size)
+        if batch_size > 2:
+            return "The response was truncated before the JSON."
+        return json.dumps(
+            {
+                "propositions": [
+                    {
+                        "proposition": "User is working on a task",
+                        "reasoning": "The observations explicitly say so",
+                        "observation_ids": ["o0"],
+                    }
+                ]
+            }
+        )
+
+    engine = MemoryEngine(
+        store,
+        user_name="User",
+        model="fake",
+        min_batch_size=1,
+        max_batch_size=4,
+        completion=complete,
+    )
+
+    assert engine.process_pending_once(force=True) == 2
+    assert attempted_batch_sizes == [4, 2]
+    assert [item.id for item in store.pending_observations(10)] == ["o2", "o3"]
+
+
+def test_engine_retains_unparseable_observation_without_proposition(caplog, tmp_path):
+    store = MemoryStore(tmp_path / "memory.db")
+    observation = _obs("unparseable", "Raw observation remains available")
+    store.add_observation(observation)
+
+    engine = MemoryEngine(
+        store,
+        user_name="User",
+        model="fake",
+        min_batch_size=1,
+        completion=lambda _system, _prompt: "not valid JSON",
+    )
+
+    assert engine.process_pending_once(force=True) == 1
+    assert store.pending_observations(10) == []
+    assert store.search("") == []
+    assert store.add_observation(observation) is False
+    assert "unparseable" in caplog.text
+    assert "without a proposition" in caplog.text
+
+
+def test_engine_skips_draft_when_relation_response_is_invalid(caplog, tmp_path):
+    store = MemoryStore(tmp_path / "memory.db")
+    old_observation = _obs("old", "Using OAuth in project Alpha")
+    new_observation = _obs("new", "Troubleshooting an OAuth callback in project Beta")
+    store.add_observation(old_observation)
+    from memory.models import PropositionDraft
+
+    store.insert_proposition(
+        PropositionDraft("User uses OAuth in project Alpha", "Observed directly"),
+        ["old"],
+    )
+    store.mark_processed(["old"])
+    store.add_observation(new_observation)
+
+    def complete(system: str, _prompt: str) -> str:
+        if "grounded model" in system:
+            return json.dumps(
+                {
+                    "propositions": [
+                        {
+                            "proposition": "User troubleshoots an OAuth callback in project Beta",
+                            "reasoning": "The callback was visible",
+                            "observation_ids": ["new"],
+                        }
+                    ]
+                }
+            )
+        assert "Classify" in system
+        return "relation response was not JSON"
+
+    engine = MemoryEngine(
+        store,
+        user_name="User",
+        model="fake",
+        min_batch_size=1,
+        completion=complete,
+    )
+
+    assert engine.process_pending_once(force=True) == 1
+    assert store.pending_observations(10) == []
+    assert len(store.search("", limit=10)) == 1
+    assert store.add_observation(new_observation) is False
+    assert "memory merge returned invalid JSON" in caplog.text
+    assert "new" in caplog.text
 
 
 def test_identical_proposition_accumulates_new_evidence(tmp_path):

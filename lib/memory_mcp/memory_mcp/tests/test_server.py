@@ -13,8 +13,12 @@ from pathlib import Path
 
 from memory.models import ObservationInput, PropositionDraft
 from memory.store import MemoryStore
-from memory_mcp.client import call_get_user_context
-from memory_mcp.server import _ago_timestamp, query_user_context
+from memory_mcp.client import call_get_recent_observations, call_get_user_context
+from memory_mcp.server import (
+    _ago_timestamp,
+    query_recent_observations,
+    query_user_context,
+)
 
 
 def test_ago_timestamp_parses_relative_window() -> None:
@@ -82,6 +86,73 @@ def test_query_validates_limits(tmp_path) -> None:
         raise AssertionError("invalid result limit was accepted")
 
 
+def test_recent_observations_are_newest_first_and_filterable(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    store.add_observation(
+        ObservationInput(
+            id="old",
+            content="Old editor activity",
+            created_at=7_000,
+            observation_type="snapshot",
+            session_id="session-1",
+        )
+    )
+    store.add_observation(
+        ObservationInput(
+            id="middle",
+            content="Middle browser activity",
+            created_at=8_000,
+            observation_type="event",
+            session_id="session-2",
+        )
+    )
+    store.add_observation(
+        ObservationInput(
+            id="new",
+            content="New editor activity",
+            created_at=9_700,
+            observation_type="snapshot",
+            session_id="session-1",
+        )
+    )
+    store.mark_processed(["new"])
+
+    response = query_recent_observations(store, limit=2, now=10_000)
+
+    assert [item["id"] for item in response["observations"]] == ["new", "middle"]
+    assert response["observations"][0]["content_type"] == "text"
+
+    filtered = query_recent_observations(
+        store,
+        limit=10,
+        start_hh_mm_ago="01:00",
+        end_hh_mm_ago="00:10",
+        session_id="session-1",
+        observation_type="snapshot",
+        now=10_000,
+    )
+
+    assert [item["id"] for item in filtered["observations"]] == ["old"]
+
+
+def test_recent_observations_validates_limit_and_time_window(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+
+    for arguments, message in [
+        ({"limit": 0}, "limit"),
+        (
+            {"start_hh_mm_ago": "00:10", "end_hh_mm_ago": "01:00"},
+            "older time",
+        ),
+    ]:
+        try:
+            query_recent_observations(store, now=10_000, **arguments)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:
+            raise AssertionError(f"invalid arguments were accepted: {arguments}")
+
+
 def test_server_supports_mcp_cli_file_import() -> None:
     """MCP CLI executes the file without first adding it to sys.modules."""
     server_path = Path(__file__).parents[1] / "server.py"
@@ -124,3 +195,27 @@ def test_cli_client_calls_get_user_context_over_stdio(tmp_path) -> None:
 
     assert response["count"] == 1
     assert response["results"][0]["text"].endswith("in Figma")
+
+
+def test_cli_client_calls_recent_observations_over_stdio(tmp_path) -> None:
+    db_path = tmp_path / "memory.db"
+    store = MemoryStore(db_path)
+    store.add_observation(
+        ObservationInput(
+            id="recent",
+            content="Reviewing a diagram in Figma",
+            created_at=1_000,
+            observation_type="snapshot",
+        )
+    )
+
+    response = asyncio.run(
+        call_get_recent_observations(
+            limit=1,
+            observation_type="snapshot",
+            db_path=db_path,
+        )
+    )
+
+    assert response["count"] == 1
+    assert response["observations"][0]["id"] == "recent"

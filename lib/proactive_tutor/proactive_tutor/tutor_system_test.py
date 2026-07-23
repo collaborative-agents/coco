@@ -40,6 +40,17 @@ def test_initialization():
     assert ts.image_num == 0
 
 
+def test_memory_tool_is_limited_to_everyday_support():
+    everyday = TutorSystem(model_name=MODEL, scenario="everyday_support")
+    student = TutorSystem(model_name=MODEL, scenario="student_learning")
+
+    assert everyday.tutor_agent.enable_memory_tool is True
+    assert student.tutor_agent.enable_memory_tool is False
+
+    everyday.set_scenario("student_learning")
+    assert everyday.tutor_agent.enable_memory_tool is False
+
+
 def test_handle_problem_statement():
     """handle_problem_statement stores the problem text."""
     ts = _make_tutor_system()
@@ -87,8 +98,11 @@ def test_handle_user_prompt_with_metrics_logs_tutor_call(tmp_path):
     class FakeTutorAgent:
         model = "fake-model"
 
-        def tutor_with_metrics(self, text_prompt: str, image_paths=None):
-            assert "Explain the next step" in text_prompt
+        def chat_with_metrics(self, messages, image_paths=None):
+            assert messages[-1] == {
+                "role": "user",
+                "content": "Explain the next step",
+            }
             assert image_paths == ["screen.png"]
             return '{"guidance": "Use metrics."}', metrics
 
@@ -114,6 +128,63 @@ def test_handle_user_prompt_with_metrics_logs_tutor_call(tmp_path):
     assert rows[0]["trigger"] == "user_prompt"
     assert rows[0]["llm_metrics"] == metrics
     assert rows[0]["image_paths"] == ["screen.png"]
+
+
+def test_everyday_chat_preserves_message_boundaries_and_omits_supplied_observation():
+    calls = []
+
+    class FakeChatAgent:
+        model = "fake-model"
+
+        def chat_with_metrics(self, messages, image_paths=None):
+            calls.append(messages)
+            return f"reply {len(calls)}", {
+                "call_id": f"call-{len(calls)}",
+                "operation": "tutor",
+                "model": "fake-model",
+                "provider": "fake",
+                "modality": "llm",
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "duration_ms": 1.0,
+                "started_at": 1.0,
+                "ended_at": 2.0,
+                "success": True,
+                "error": None,
+            }
+
+    ts = _make_tutor_system()
+    ts.memory = "The user prefers concise answers."
+    ts.tutor_agent = FakeChatAgent()
+
+    ts.handle_user_prompt_with_metrics(
+        obs="SCREEN OBSERVATION MUST NOT BE INJECTED",
+        user_text="First question",
+    )
+    ts.handle_user_prompt_with_metrics(
+        obs="ANOTHER SCREEN OBSERVATION",
+        user_text="Follow-up question",
+    )
+
+    assert [message["role"] for message in calls[0]] == ["system", "user"]
+    assert [message["role"] for message in calls[1]] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert calls[1][0]["content"].endswith("The user prefers concise answers.")
+    assert calls[1][1:] == [
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "reply 1"},
+        {"role": "user", "content": "Follow-up question"},
+    ]
+    assert all("SCREEN OBSERVATION" not in str(call) for call in calls)
 
 
 # ------------------------------------------------------------------

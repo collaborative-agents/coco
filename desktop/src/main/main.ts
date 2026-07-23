@@ -35,6 +35,8 @@ import {
   startObservationStream,
   stopObservationStream,
 } from './services/observation-stream';
+import { consumeTutorStream } from './services/tutor-stream';
+import type { TutorStreamEvent } from './services/tutor-stream';
 import {
   appendActivity,
   readActivity,
@@ -44,7 +46,11 @@ import {
   pruneActivity,
 } from './activity-store';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
-import type { ObservationStatus, AiToolButton, LLMCallMetrics } from '../renderer/components/observation-types';
+import type {
+  ObservationStatus,
+  AiToolButton,
+  LLMCallMetrics,
+} from '../renderer/components/observation-types';
 
 const dotenv = require('dotenv');
 
@@ -1186,7 +1192,14 @@ function endCurrentSession() {
 ipcMain.removeHandler('send-chat-message');
 ipcMain.handle(
   'send-chat-message',
-  async (_event, { userText, images }: { userText: string; images?: string[] }) => {
+  async (
+    ipcEvent,
+    {
+      requestId,
+      userText,
+      images,
+    }: { requestId: string; userText: string; images?: string[] },
+  ) => {
     const sensingPort = process.env.SENSING_PORT || '8080';
     const tutorPort = process.env.TUTOR_PORT || '8081';
 
@@ -1220,25 +1233,37 @@ ipcMain.handle(
       log.warn(`[Chat] observe/user_prompt failed: ${(err as Error).message}`);
     }
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
     try {
-      const resp = await axios.post(
-        `http://127.0.0.1:${tutorPort}/events/user_prompt`,
+      await consumeTutorStream(
+        `http://127.0.0.1:${tutorPort}/events/user_prompt/stream`,
         {
           observation,
           user_text: userText,
           image_paths: imagePaths.length ? imagePaths : null,
         },
-        { timeout: 120000 },
+        (streamEvent: TutorStreamEvent) => {
+          ipcEvent.sender.send('chat-stream-event', {
+            requestId,
+            ...streamEvent,
+            ...(streamEvent.type === 'done' ? { observerMetrics } : {}),
+          });
+        },
+        controller.signal,
       );
-      return {
-        guidance: String(resp.data?.guidance ?? ''),
-        observerMetrics,
-        tutorMetrics: (resp.data?.llm_metrics ?? null) as LLMCallMetrics | null,
-      };
+      return { streamed: true };
     } catch (err) {
       const ax = err as { response?: { data?: unknown }; message?: string };
-      log.error('[Chat] events/user_prompt failed:', JSON.stringify(ax?.response?.data ?? ax?.message));
+      log.error('[Chat] streaming user prompt failed:', JSON.stringify(ax?.response?.data ?? ax?.message));
+      ipcEvent.sender.send('chat-stream-event', {
+        requestId,
+        type: 'error',
+        error: 'The tutor could not generate a response. Please try again.',
+      });
       return { error: 'The tutor could not generate a response. Please try again.' };
+    } finally {
+      clearTimeout(timeout);
     }
   },
 );

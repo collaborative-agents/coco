@@ -17,6 +17,7 @@ import chz
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from memory import MemoryEngine, MemoryStore, default_memory_db_path
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder, default_records_dir
 from pydantic import BaseModel
@@ -31,6 +32,35 @@ from sensing.segment_processor import (
 from sensing.streamer import Streamer
 
 logger = init_logger(__name__)
+
+
+def _positive_int_from_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1")
+    return value
+
+
+def _build_memory_engine(observer_model: str) -> MemoryEngine:
+    """Build the shared proposition-memory worker from environment settings."""
+    memory_model = (os.environ.get("MEMORY_MODEL") or observer_model).strip()
+    if not memory_model:
+        raise ValueError("MEMORY_MODEL or --observer_model is required")
+
+    store = MemoryStore(default_memory_db_path())
+    return MemoryEngine(
+        store,
+        user_name=(os.environ.get("COCO_USER_NAME") or "the user").strip(),
+        model=memory_model,
+        min_batch_size=_positive_int_from_env("MEMORY_MIN_BATCH_SIZE", 20),
+        max_batch_size=_positive_int_from_env("MEMORY_MAX_BATCH_SIZE", 20),
+    )
 
 
 def _notify_hotkey_captured(index: int) -> None:
@@ -866,13 +896,16 @@ async def main_async(
         sensing_log_dir, "ai_tutor_streamer" + time.strftime("_%Y%m%d_%H%M%S.log")
     )
     processors = []
+    memory_engine: MemoryEngine | None = None
     if workflow_induction:
         processors.append(WorkflowInductionProcessor())
     if ai_tutoring:
+        memory_engine = _build_memory_engine(observer_model)
         ai_processor = AiTutoringProcessor.from_config(
             tutor_url=tutor_url,
             ai_tutor_output_log=ai_tutor_output_log,
             observer_model=observer_model,
+            memory_engine=memory_engine,
             # node_uuid and redis_url are configured later via POST /session
         )
         processors.append(ai_processor)
@@ -922,6 +955,11 @@ async def main_async(
     )
 
     try:
+        if memory_engine is not None:
+            memory_engine.start()
+            logger.info(
+                f"Memory engine started with database {memory_engine.store.db_path}"
+            )
         logger.info("Starting GUM context, streamer, and FastAPI server...")
         # Pause detection: screen idle → streamer generates observation → publishes to Redis
         screen.register_on_idle(streamer._process_actions_pause)
@@ -967,6 +1005,8 @@ async def main_async(
             except Exception as e:
                 logger.warning(f"ProgressDetector stop failed: {e}")
         await streamer.stop()
+        if memory_engine is not None:
+            await memory_engine.stop()
         await screen.stop()
         logger.info("Stopped cleanly.")
 

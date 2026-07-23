@@ -183,12 +183,18 @@ def _observe(
         image_paths=image_paths,
     )
 
-    result, metrics = chat_completion(
-        messages=messages,
-        model=model,
-        max_tokens=max_tokens,
-        operation="observer",
-    )
+    completion_kwargs = {
+        "messages": messages,
+        "model": model,
+        "max_tokens": max_tokens,
+        "operation": "observer",
+    }
+    if model.startswith("hosted_vllm/"):
+        completion_kwargs["extra_body"] = {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+
+    result, metrics = chat_completion(**completion_kwargs)
 
     if isinstance(result.content, str):
         return result.content, metrics
@@ -595,8 +601,8 @@ class AiTutoringProcessor(SegmentProcessor):
         self._last_observation_image_paths: list[str] = []
         # observation_id -> user reaction ("shown" | "engage" | "dismiss" |
         # "thumbs_up" | "thumbs_down"), updated from POST /feedback. Injected
-        # back into the observer prompt so it doesn't re-raise a suggestion the
-        # user just dismissed.
+        # back into the observer prompt so it doesn't re-raise suggestions the
+        # user dismissed or rated negatively.
         self._reactions: dict[str, str] = {}
         # Live subscribers (e.g. SSE clients on the Electron UI) that receive
         # every observation as it is produced.
@@ -1224,13 +1230,17 @@ class AiTutoringProcessor(SegmentProcessor):
         "need_help": "user ASKED FOR HELP despite this calm status — a MISSED need (you under-called here)",
         "shown": "shown to user — no response (ignored)",
         "thumbs_up": "user rated the resulting help 👍",
-        "thumbs_down": "user rated the resulting help 👎",
+        "thumbs_down": (
+            "user rated the resulting help as NEGATIVE — classify similar "
+            'observations as "progress"'
+        ),
     }
 
     def _recent_observations_block(self, n: int = 3) -> str:
         """Build an in-context block of the last ``n`` observations + reactions.
 
-        Lets the observer avoid re-raising a suggestion the user just dismissed.
+        Lets the observer avoid re-raising a suggestion the user just dismissed
+        or rated negatively.
         Returns an empty string when there is no prior observation.
         """
         recent = self.recent_observations(n)
@@ -1240,10 +1250,11 @@ class AiTutoringProcessor(SegmentProcessor):
         lines = [
             "<recent_observations>",
             "Your last few observations and how the user reacted to the bubble each "
-            "one triggered. Do NOT re-raise a suggestion the user just DISMISSED "
-            "unless the situation has materially changed — for the same ongoing "
-            'activity, prefer a calmer status ("progress"/"observing") instead of '
-            'repeating an "inefficient"/"mistake"/"stuck" flag.',
+            "one triggered. Do NOT re-raise a suggestion the user just DISMISSED. "
+            "A NEGATIVE rating means the resulting help was not useful: classify "
+            'similar observations as "progress". Only re-flag after a dismissal or '
+            "negative rating if the situation has materially changed (a new task, "
+            "new app, or genuinely different issue or opportunity).",
         ]
         for i, entry in enumerate(recent, start=1):
             age = max(0.0, now - float(entry.get("ts", now)))
