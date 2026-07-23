@@ -15,8 +15,9 @@
  */
 
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { NotificationBubble } from '../renderer/components/NotificationView';
+import type { InstantSuggestion } from '../renderer/components/observation-types';
 
 // ---------------------------------------------------------------------------
 // 1. Plain text / Markdown
@@ -219,5 +220,52 @@ describe('visualization code suppression', () => {
     const msg = 'Try calling `train()` first.';
     render(<NotificationBubble message={msg} />);
     expect(screen.getByText('train()')).toBeInTheDocument();
+  });
+});
+
+describe('instant suggestion actions', () => {
+  const contentSuggestion: InstantSuggestion = {
+    kind: 'content',
+    title: 'Try a smaller example',
+    body: 'Reduce the input before debugging the full workflow.',
+    copyText: 'Reduce the input before debugging the full workflow.',
+  };
+
+  it('offers to continue a content suggestion in chat', () => {
+    const onChat = jest.fn();
+    render(
+      <NotificationBubble
+        message="Try a smaller example"
+        actionLabel="Copy"
+        notifType="instant-suggestion"
+        suggestion={contentSuggestion}
+        onChatAboutSuggestion={onChat}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat about it' }));
+    expect(onChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers to continue a delegated suggestion in chat', () => {
+    const onChat = jest.fn();
+    render(
+      <NotificationBubble
+        message="Ask an AI tool"
+        notifType="instant-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Ask an AI tool',
+          prompt: 'Explain this error.',
+          copyText: 'Explain this error.',
+          targetTool: 'chatgpt',
+          availableTools: [],
+        }}
+        onChatAboutSuggestion={onChat}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat about it' }));
+    expect(onChat).toHaveBeenCalledTimes(1);
   });
 });
