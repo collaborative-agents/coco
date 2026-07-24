@@ -4,6 +4,42 @@ import { render, screen } from '@testing-library/react';
 import { ToolCallCard } from '../renderer/components/SessionChatView';
 
 describe('Tutor tool-call visualization', () => {
+  it('shows on-demand screen observation progress and evidence', () => {
+    const { rerender } = render(
+      <ToolCallCard
+        call={{
+          id: 'tool-screen',
+          name: 'observe_screen',
+          arguments: { focus: 'Identify the visible error' },
+          status: 'running',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Current screen')).toBeInTheDocument();
+    expect(screen.getByText('Observing…')).toBeInTheDocument();
+
+    rerender(
+      <ToolCallCard
+        call={{
+          id: 'tool-screen',
+          name: 'observe_screen',
+          arguments: { focus: 'Identify the visible error' },
+          status: 'completed',
+          result: {
+            observation: 'A spreadsheet shows a #VALUE! error in cell D12.',
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Observed')).toBeInTheDocument();
+    expect(screen.getByText('View screen observation')).toBeInTheDocument();
+    expect(
+      screen.getByText('A spreadsheet shows a #VALUE! error in cell D12.'),
+    ).toBeInTheDocument();
+  });
+
   it('shows observation query arguments, status, and retrieved content', () => {
     render(
       <ToolCallCard

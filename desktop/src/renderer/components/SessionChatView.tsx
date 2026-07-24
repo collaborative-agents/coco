@@ -188,6 +188,11 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 15, color: '#9ca3af', padding: '3px 7px', borderRadius: 7,
   },
   iconBtnActive: { background: ACCENT_BG, color: ACCENT },
+  newSessionBtn: {
+    border: `1px solid ${ACCENT_BORDER}`, background: '#fff', cursor: 'pointer',
+    fontSize: 11.5, color: ACCENT, padding: '3px 8px', borderRadius: 7,
+    fontFamily: FONT, fontWeight: 600,
+  },
   problem: { padding: '6px 14px', fontSize: 11, color: '#9ca3af', borderBottom: `1px solid #f3f4f6`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   list: { flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 },
   userRow: { alignSelf: 'flex-end', maxWidth: '85%' },
@@ -297,6 +302,44 @@ function TutorMessage({ text }: { text: string }) {
 }
 
 export function ToolCallCard({ call }: { call: TutorToolCall }) {
+  if (call.name === 'observe_screen') {
+    const observation = call.result?.observation?.trim();
+    return (
+      <div style={S.toolCard}>
+        <div style={S.toolHeader}>
+          <span style={S.toolIcon}>▣</span>
+          <span>Current screen</span>
+          <span
+            style={{
+              ...S.toolStatus,
+              ...(call.status === 'error' ? S.toolStatusError : {}),
+            }}
+          >
+            {call.status === 'running'
+              ? 'Observing…'
+              : call.status === 'error'
+                ? 'Unavailable'
+                : 'Observed'}
+          </span>
+        </div>
+        {call.arguments?.focus && (
+          <div style={S.toolArgs}>{call.arguments.focus}</div>
+        )}
+        {call.result?.error && (
+          <div style={{ ...S.toolArgs, ...S.toolStatusError }}>
+            {call.result.error}
+          </div>
+        )}
+        {observation && (
+          <details style={S.toolDetails}>
+            <summary>View screen observation</summary>
+            <div style={S.toolObservation}>{observation}</div>
+          </details>
+        )}
+      </div>
+    );
+  }
+
   const query = call.arguments?.query?.trim();
   const start = call.arguments?.start_hh_mm_ago;
   const end = call.arguments?.end_hh_mm_ago;
@@ -397,6 +440,7 @@ export default function SessionChatView() {
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [startingNewSession, setStartingNewSession] = useState(false);
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -600,6 +644,9 @@ export default function SessionChatView() {
         sessionIdRef.current = sessionId;
         setMessages([]);
         setRatings({});
+        setInput('');
+        setPendingImages([]);
+        setSending(false);
         pendingContextRef.current = null;
         setPendingContextLabel(null);
       }
@@ -749,12 +796,24 @@ export default function SessionChatView() {
   };
 
   const handleSend = () => {
-    if (sending) return;
+    if (sending || startingNewSession) return;
     const imgs = pendingImages;
     const text = input;
     setInput('');
     setPendingImages([]);
     sendMessage(text, imgs);
+  };
+
+  const handleNewSession = async () => {
+    if (sending || startingNewSession) return;
+    setStartingNewSession(true);
+    try {
+      await window.electron?.ipcRenderer.invoke('start-new-chat-session', {
+        problemStatement: problem,
+      });
+    } finally {
+      setStartingNewSession(false);
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -764,7 +823,15 @@ export default function SessionChatView() {
     }
   };
 
-  const canSend = !sending && (input.trim().length > 0 || pendingImages.length > 0);
+  const canSend =
+    !sending &&
+    !startingNewSession &&
+    (input.trim().length > 0 || pendingImages.length > 0);
+  const hasRunningTool = messages.some(
+    (message) =>
+      message.role === 'tutor' &&
+      message.toolCalls?.some((call) => call.status === 'running'),
+  );
 
   return (
     <div style={S.root}>
@@ -773,6 +840,19 @@ export default function SessionChatView() {
           <span style={S.statusDot} /> Coco <span style={S.sub}>· Session active</span>
         </span>
         <div style={S.headerBtns}>
+          <button
+            type="button"
+            style={{
+              ...S.newSessionBtn,
+              ...(sending || startingNewSession ? S.sendBtnDisabled : {}),
+            }}
+            title="Start a new session"
+            aria-label="Start a new session"
+            disabled={sending || startingNewSession}
+            onClick={handleNewSession}
+          >
+            {startingNewSession ? 'Starting…' : '+ New'}
+          </button>
           <button
             type="button"
             style={{ ...S.iconBtn, ...(showSettings ? S.iconBtnActive : {}) }}
@@ -1033,7 +1113,9 @@ export default function SessionChatView() {
             )}
           </div>
         ))}
-        {sending && <div style={S.typing}>Coco is thinking…</div>}
+        {sending && !hasRunningTool && (
+          <div style={S.typing}>Coco is thinking…</div>
+        )}
       </div>
 
       <div style={S.composer}>

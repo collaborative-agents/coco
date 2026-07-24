@@ -543,9 +543,19 @@ class TutorSystem:
             + f'\n\n<observation timestamp="{obs_ts}">\n{obs}\n</observation>'
             + dim_note
         )
-        guidance, metrics = self.tutor_agent.tutor_with_metrics(
-            text_prompt, image_paths=image_paths
-        )
+        if on_event is None:
+            guidance, metrics = self.tutor_agent.tutor_with_metrics(
+                text_prompt,
+                image_paths=image_paths,
+                max_tool_calls=None,
+            )
+        else:
+            guidance, metrics = self.tutor_agent.tutor_with_metrics(
+                text_prompt,
+                image_paths=image_paths,
+                on_event=on_event,
+                max_tool_calls=None,
+            )
         if on_event is not None:
             on_event({"type": "text_delta", "text": guidance})
         logger.info(f"[TUTOR] {guidance}")

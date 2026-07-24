@@ -516,11 +516,22 @@ async def handle_user_prompt_stream(req: EventRequest):
                 event = queue.get_nowait()
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
+            tool_calls = llm_metrics.get("tool_calls", [])
+            observer_metrics = next(
+                (
+                    call.get("result", {}).get("llm_metrics")
+                    for call in tool_calls
+                    if call.get("name") == "observe_screen"
+                    and isinstance(call.get("result"), dict)
+                ),
+                None,
+            )
             done = {
                 "type": "done",
                 "guidance": guidance,
                 "llm_metrics": llm_metrics,
-                "tool_calls": llm_metrics.get("tool_calls", []),
+                "tool_calls": tool_calls,
+                "observer_metrics": observer_metrics,
             }
             yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
         except Exception as exc:

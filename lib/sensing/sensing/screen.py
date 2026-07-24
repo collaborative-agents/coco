@@ -494,13 +494,46 @@ class Screen(Observer):
 
     # ─────────────────────────────── inspect current frame screenshot
     async def _inspect(self) -> tuple[str, str]:
-        """Capture current screen and return path."""
+        """Capture the best available current screen and return its path.
+
+        A prompt can arrive before the first click or scroll establishes an
+        active monitor. In that case, prefer the monitor under the cursor and
+        then fall back to any captured frame. If the capture loop has not
+        produced a frame yet, return an empty result so callers can continue
+        without screen context.
+        """
         async with self._frame_lock:
-            if self._last_active_click_monitor_idx is None:
-                raise RuntimeError("No active monitor found for inspection.")
-            bf = self._frames[self._last_active_click_monitor_idx]
+            idx = self._last_active_click_monitor_idx
+            bf = self._frames.get(idx) if idx is not None else None
+
+            if bf is None and self._mons:
+                try:
+                    x, y = mouse.Controller().position
+                    idx = self._mon_for(x, y, self._mons)
+                    bf = self._frames.get(idx)
+                except Exception as exc:
+                    logging.getLogger("Screen").debug(
+                        "Could not determine the monitor under the cursor: %s", exc
+                    )
+
             if bf is None:
+                available = next(
+                    (
+                        (monitor_idx, frame)
+                        for monitor_idx, frame in self._frames.items()
+                        if frame is not None
+                    ),
+                    None,
+                )
+                if available is not None:
+                    idx, bf = available
+
+            if bf is None:
+                logging.getLogger("Screen").debug(
+                    "No captured frame is available for inspection yet."
+                )
                 return "", ""
+
             path, ts = await self._save_frame(bf, 0, 0, "inspect", draw_box=False)
             print(f"[INSPECT] saved current frame to: {path} at {ts}")
             return path, ts
