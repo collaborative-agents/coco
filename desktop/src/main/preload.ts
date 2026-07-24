@@ -29,6 +29,7 @@ export type Channels =
   | 'proactive-session-end-confirmed'
   // Local chat (SessionChatView) — session context + user turns
   | 'session-init'
+  | 'start-new-chat-session'
   | 'send-chat-message'
   | 'chat-stream-event'
   // Hot-key screen capture → preview thumbnail in the chat input bar

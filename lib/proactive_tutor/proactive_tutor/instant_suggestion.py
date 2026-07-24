@@ -15,8 +15,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from external_api.llm import prompt_to_text_with_metrics
 from external_api.types import LLMCallMetrics
+from proactive_tutor.agents.tutor import TutorAgent
 from proactive_tutor.ai_tool_capabilities import (
     format_tool_names,
     get_capabilities_for_tools,
@@ -185,11 +185,19 @@ def generate_instant_suggestion_with_metrics(
         memory=memory,
         has_screenshots=bool(image_paths),
     )
-    raw, metrics = prompt_to_text_with_metrics(
+    # Instant suggestions may retrieve relevant long-term or recent activity,
+    # but never inspect the live screen: their observation/screenshots were
+    # already captured by the proactive sensing flow.
+    agent = TutorAgent(
         model,
         INSTANT_SYSTEM_PROMPT,
+        enable_memory_tool=True,
+        enable_screen_tool=False,
+    )
+    raw, metrics = agent.tutor_with_metrics(
         user_prompt,
         image_paths=image_paths,
         operation="instant_suggestion",
+        max_tool_calls=3,
     )
     return _parse_instant_suggestion(raw), metrics

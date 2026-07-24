@@ -59,6 +59,7 @@ export interface TutorToolCall {
   name: string;
   arguments: {
     query?: string;
+    focus?: string;
     start_hh_mm_ago?: string | null;
     end_hh_mm_ago?: string | null;
     limit?: number;
@@ -68,6 +69,8 @@ export interface TutorToolCall {
   result?: {
     count?: number;
     results?: TutorMemoryResult[];
+    observation?: string;
+    llm_metrics?: LLMCallMetrics | null;
     error?: string;
   };
 }

@@ -1149,6 +1149,27 @@ async function createProactiveTutorSession(
   return sessionId;
 }
 
+// Start a fresh conversation directly from the chat header. Reuse the regular
+// session setup path so tutor context, sensing, profile settings, and long-term
+// memory all move to the same new session boundary.
+ipcMain.removeHandler('start-new-chat-session');
+ipcMain.handle(
+  'start-new-chat-session',
+  async (_event, { problemStatement }: { problemStatement?: string } = {}) => {
+    const task =
+      problemStatement?.trim() || pendingTaskLabel || 'General help session';
+    try {
+      const sessionId = await createProactiveTutorSession(task, 120);
+      return { success: Boolean(sessionId), sessionId };
+    } catch (err) {
+      log.warn(
+        `[ProactiveSession] Could not start a new chat session: ${(err as Error).message}`,
+      );
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
+
 // User confirmed the task + struggle-time in the session-setup window.
 ipcMain.removeAllListeners('proactive-session-confirmed');
 ipcMain.on('proactive-session-confirmed', async (_event, { struggleSeconds, taskLabel }: { struggleSeconds: number; taskLabel?: string }) => {
@@ -1200,7 +1221,6 @@ ipcMain.handle(
       images,
     }: { requestId: string; userText: string; images?: string[] },
   ) => {
-    const sensingPort = process.env.SENSING_PORT || '8080';
     const tutorPort = process.env.TUTOR_PORT || '8081';
 
     // Persist any pasted images to temp files for the tutor's vision call.
@@ -1218,28 +1238,15 @@ ipcMain.handle(
       }
     }
 
-    // Best-effort screen observation for context (chat still works without it).
-    let observation = '';
-    let observerMetrics: LLMCallMetrics | null = null;
-    try {
-      const obs = await axios.post(
-        `http://127.0.0.1:${sensingPort}/observe/user_prompt`,
-        { text: userText },
-        { timeout: 30000 },
-      );
-      observation = String(obs.data?.observation ?? '');
-      observerMetrics = (obs.data?.llm_metrics ?? null) as LLMCallMetrics | null;
-    } catch (err) {
-      log.warn(`[Chat] observe/user_prompt failed: ${(err as Error).message}`);
-    }
-
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
     try {
       await consumeTutorStream(
         `http://127.0.0.1:${tutorPort}/events/user_prompt/stream`,
         {
-          observation,
+          // Current-screen context is now retrieved only when the tutor calls
+          // observe_screen; ordinary chat turns skip the observer entirely.
+          observation: '',
           user_text: userText,
           image_paths: imagePaths.length ? imagePaths : null,
         },
@@ -1247,7 +1254,9 @@ ipcMain.handle(
           ipcEvent.sender.send('chat-stream-event', {
             requestId,
             ...streamEvent,
-            ...(streamEvent.type === 'done' ? { observerMetrics } : {}),
+            ...(streamEvent.type === 'done'
+              ? { observerMetrics: streamEvent.observer_metrics ?? null }
+              : {}),
           });
         },
         controller.signal,

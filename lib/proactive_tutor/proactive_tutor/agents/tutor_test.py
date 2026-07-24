@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from external_api.litellm_api import LiteLLMMessage, TextContent
 from proactive_tutor.agents import tutor as tutor_module
 from proactive_tutor.agents.tutor import TutorAgent
@@ -118,6 +120,31 @@ def test_tool_call_gets_recent_observations(monkeypatch) -> None:
     }
 
 
+def test_tool_call_observes_screen_only_when_requested(monkeypatch) -> None:
+    captured: dict = {}
+    expected = {
+        "observation": "A spreadsheet shows a #VALUE! error in cell D12.",
+        "llm_metrics": {"total_tokens": 42},
+    }
+
+    def fake_screen_observer(focus: str):
+        captured["focus"] = focus
+        return expected
+
+    monkeypatch.setattr(tutor_module, "_call_screen_observer", fake_screen_observer)
+    agent = TutorAgent("test-model", "system")
+
+    result = agent._execute_tool_call(
+        {
+            "name": "observe_screen",
+            "arguments": {"focus": "Identify the visible spreadsheet error"},
+        }
+    )
+
+    assert result == expected
+    assert captured == {"focus": "Identify the visible spreadsheet error"}
+
+
 def test_tool_rejects_non_mcp_tool_and_unexpected_arguments() -> None:
     agent = TutorAgent("test-model", "system")
 
@@ -126,7 +153,7 @@ def test_tool_rejects_non_mcp_tool_and_unexpected_arguments() -> None:
         {"name": "get_user_context", "arguments": {"path": "/tmp"}}
     )
 
-    assert "only get_user_context and get_recent_observations" in wrong_tool["error"]
+    assert wrong_tool["error"] == "tool is not available: unknown_tool"
     assert "unexpected arguments: path" in wrong_argument["error"]
 
 
@@ -178,7 +205,12 @@ def test_tutor_skips_tool_loop_when_disabled(monkeypatch) -> None:
         "_current_datetime_context",
         lambda: "<current_datetime>2026-07-23T12:34:56-07:00</current_datetime>",
     )
-    agent = TutorAgent("test-model", "base system", enable_memory_tool=False)
+    agent = TutorAgent(
+        "test-model",
+        "base system",
+        enable_memory_tool=False,
+        enable_screen_tool=False,
+    )
 
     response, metrics = agent.tutor_with_metrics("context")
 
@@ -191,6 +223,31 @@ def test_tutor_skips_tool_loop_when_disabled(monkeypatch) -> None:
         )
     ]
     assert metrics["call_id"] == "single-call"
+
+
+def test_chat_does_not_observe_screen_without_tool_call(monkeypatch) -> None:
+    def fail_if_called(_focus: str):
+        raise AssertionError("screen observer should not run")
+
+    def fake_chat(messages, **kwargs):
+        return (
+            LiteLLMMessage(
+                role="assistant",
+                content=[TextContent(text="A direct answer needs no screen context.")],
+            ),
+            _metrics("chat-direct"),
+        )
+
+    monkeypatch.setattr(tutor_module, "_call_screen_observer", fail_if_called)
+    monkeypatch.setattr(tutor_module, "chat_completion", fake_chat)
+    agent = TutorAgent("test-model", "base system")
+
+    response, metrics = agent.chat_with_metrics(
+        [{"role": "user", "content": "What is two plus two?"}]
+    )
+
+    assert response == "A direct answer needs no screen context."
+    assert metrics["tool_calls"] == []
 
 
 def test_chat_memory_tool_loop_keeps_exchange_as_separate_messages(
@@ -299,3 +356,48 @@ def test_chat_streams_answer_and_emits_memory_tool_events(monkeypatch) -> None:
         == response
     )
     assert all("<tool_call>" not in str(event) for event in events)
+
+
+def test_chat_allows_more_than_three_tool_calls(monkeypatch) -> None:
+    tool_responses = [
+        "<tool_call>"
+        + json.dumps(
+            {
+                "name": "get_user_context",
+                "arguments": {
+                    "query": f"context {index}",
+                    "limit": 1,
+                    "evidence_limit": 0,
+                },
+            }
+        )
+        + "</tool_call>"
+        for index in range(4)
+    ]
+    responses = iter([*tool_responses, "Final answer after four retrievals."])
+    tool_queries: list[str] = []
+
+    async def fake_memory_mcp(**kwargs):
+        tool_queries.append(kwargs["query"])
+        return {"count": 0, "results": []}
+
+    def fake_chat(messages, **kwargs):
+        return (
+            LiteLLMMessage(
+                role="assistant",
+                content=[TextContent(text=next(responses))],
+            ),
+            _metrics(f"chat-{len(tool_queries)}"),
+        )
+
+    monkeypatch.setattr(tutor_module, "call_get_user_context", fake_memory_mcp)
+    monkeypatch.setattr(tutor_module, "chat_completion", fake_chat)
+    agent = TutorAgent("test-model", "base system")
+
+    response, metrics = agent.chat_with_metrics(
+        [{"role": "user", "content": "Use all relevant context."}]
+    )
+
+    assert response == "Final answer after four retrievals."
+    assert tool_queries == [f"context {index}" for index in range(4)]
+    assert len(metrics["tool_calls"]) == 4
