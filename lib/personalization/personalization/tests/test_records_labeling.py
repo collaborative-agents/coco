@@ -1,6 +1,10 @@
 import json
 
-from personalization.labeling import build_candidate_moments, label_records
+from personalization.labeling import (
+    build_candidate_moments,
+    label_records,
+    label_signals_for_moment,
+)
 from personalization.records import flatten_sessions, load_records
 from personalization.signals import derive_short_window_signals
 from personalization.signals.future_behavior import derive_future_behavior_signals
@@ -123,3 +127,61 @@ def test_future_user_prompt_creates_positive_signal(tmp_path):
     assert any(
         s.observation_id == "obs-1" and s.kind == "user_prompt_after" for s in signals
     )
+
+
+def test_judge_and_observer_status_do_not_create_label_signals(tmp_path):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": "obs-stuck",
+                "session_id": "s1",
+                "ts": 10.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": json.dumps(
+                    {"status": "stuck", "observation": "User appears stuck."}
+                ),
+            },
+            {
+                "observation_id": "obs-progress",
+                "session_id": "s1",
+                "ts": 20.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": json.dumps(
+                    {"status": "progress", "observation": "User is progressing."}
+                ),
+            },
+        ],
+    )
+    _append_jsonl(
+        session / "decisions.jsonl",
+        [
+            {
+                "decision_id": "decision-1",
+                "session_id": "s1",
+                "ts": 11.0,
+                "scenario": "everyday_support",
+                "phase": "nudge",
+                "should_intervene": True,
+                "confidence": 1.0,
+                "evidence": "The judge recommends intervening.",
+                "judge_input": "judge prompt",
+                "observer": {
+                    "fresh_observation_id": "obs-stuck",
+                    "history_observation_ids": [],
+                },
+            }
+        ],
+    )
+
+    records = flatten_sessions(load_records(tmp_path))
+    moments = build_candidate_moments(records)
+
+    assert all(label_signals_for_moment(moment, []) == [] for moment in moments)
+    assert label_records(records) == []

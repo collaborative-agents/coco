@@ -22,13 +22,6 @@ from personalization.signals import derive_short_window_signals
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
-_SUPPORT_STATUSES = {
-    "stuck",
-    "mistake",
-    "inefficient",
-    "ai_struggle",
-    "discernment_opportunity",
-}
 
 
 def parse_json_object(text: str) -> JsonDict | None:
@@ -180,52 +173,6 @@ def label_signals_for_moment(
             weight = _short_window_weight(signal.kind)
             signals.append(signal.to_label_signal(moment.moment_id, weight=weight))
 
-    for decision in moment.decisions:
-        if decision.should_intervene is True:
-            signals.append(
-                LabelSignal(
-                    signal_id=stable_id(
-                        "lsig", moment.moment_id, decision.decision_id, "judge"
-                    ),
-                    moment_id=moment.moment_id,
-                    ts=decision.ts,
-                    source="judge_intervene",
-                    polarity="positive",
-                    confidence=decision.confidence or 0.5,
-                    weight=0.45,
-                    evidence=decision.evidence,
-                    source_record_ids=[decision.decision_id],
-                )
-            )
-
-    if moment.status in _SUPPORT_STATUSES:
-        signals.append(
-            LabelSignal(
-                signal_id=stable_id("lsig", moment.moment_id, "status"),
-                moment_id=moment.moment_id,
-                ts=moment.ts,
-                source=f"observer_status:{moment.status}",
-                polarity="positive",
-                confidence=0.45,
-                weight=0.5,
-                evidence=f"observer classified the moment as {moment.status}",
-                source_record_ids=[moment.observation_id],
-            )
-        )
-    elif moment.status in {"progress", "observing"}:
-        signals.append(
-            LabelSignal(
-                signal_id=stable_id("lsig", moment.moment_id, "calm_status"),
-                moment_id=moment.moment_id,
-                ts=moment.ts,
-                source=f"observer_status:{moment.status}",
-                polarity="negative",
-                confidence=0.25,
-                weight=0.25,
-                evidence=f"observer classified the moment as {moment.status}",
-                source_record_ids=[moment.observation_id],
-            )
-        )
     return signals
 
 
