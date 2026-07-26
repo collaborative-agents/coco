@@ -6,7 +6,12 @@ import json
 import re
 from collections import defaultdict
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from typing import Any
+
+from external_api.llm import prompt_to_text
+from tqdm import tqdm
 
 from personalization.schemas import (
     CandidateMoment,
@@ -22,6 +27,40 @@ from personalization.signals import derive_short_window_signals
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+_ORIGINAL_SUPPORT_STATUSES = {
+    "stuck",
+    "mistake",
+    "inefficient",
+    "ai_struggle",
+    "discernment_opportunity",
+}
+_ORIGINAL_NO_SUPPORT_STATUSES = {"progress", "observing", "task_complete"}
+
+_REVISION_SYSTEM_PROMPT = """\
+You correct observation annotations after user behavior has established that the
+original proactive-support prediction had the wrong polarity.
+
+Return only a JSON object with exactly these string fields:
+{
+  "observation": "<revised factual description of the user's current situation>",
+  "user_intent": "<the user's immediate goal, in under 15 words>"
+}
+
+Treat the derived need_support label as authoritative, but remain grounded in the
+provided record. Do not invent screen contents, actions, errors, or goals. If
+need_support is "yes", clarify the concrete need or useful assistance opportunity
+supported by the record. If it is "no", remove unsupported claims of struggle,
+error, or interruption-worthy inefficiency. Do not mention labels, feedback, or
+the correction process in either field.
+
+The revised observation and intent may be stored in long-term user memory.
+Preserve the concrete, memory-relevant details already visible in the original
+screenshot-derived observation, such as application and file names, commands,
+error messages, artifacts, workflow state, and what changed over time. Do not
+replace necessary screenshot details with a vague summary. Preserve only details
+supported by the record, and avoid incidental or sensitive details that are not
+needed to understand the user's work.
+"""
 
 
 def parse_json_object(text: str) -> JsonDict | None:
@@ -62,6 +101,26 @@ def observer_user_intent(observer_output: str) -> str | None:
     obj = parse_json_object(observer_output)
     if obj and obj.get("user_intent"):
         return str(obj["user_intent"])
+    return None
+
+
+def original_need_support(observer_output: str) -> str | None:
+    """Read the observer's original support polarity without using it as a label."""
+    obj = parse_json_object(observer_output)
+    if not obj:
+        return None
+
+    explicit = str(obj.get("need_support") or "").strip().lower()
+    if explicit in {"yes", "true"}:
+        return "yes"
+    if explicit in {"no", "false"}:
+        return "no"
+
+    status = str(obj.get("status") or "").strip().lower()
+    if status in _ORIGINAL_SUPPORT_STATUSES:
+        return "yes"
+    if status in _ORIGINAL_NO_SUPPORT_STATUSES:
+        return "no"
     return None
 
 
@@ -169,7 +228,10 @@ def label_signals_for_moment(
             signals.append(label)
 
     for signal in short_window_signals:
-        if signal.observation_id == moment.observation_id:
+        if signal.observation_id == moment.observation_id and signal.kind not in {
+            "search_after",
+            "ai_tool_after",
+        }:
             weight = _short_window_weight(signal.kind)
             signals.append(signal.to_label_signal(moment.moment_id, weight=weight))
 
@@ -218,8 +280,6 @@ def _short_window_weight(kind: str) -> float:
         "thumbs_up": 0.85,
         "thumbs_down": 0.85,
         "user_prompt_after": 0.7,
-        "search_after": 0.35,
-        "ai_tool_after": 0.45,
     }.get(kind, 0.3)
 
 
@@ -296,3 +356,124 @@ def label_records(
         if label is not None:
             labeled.append(label)
     return labeled
+
+
+def revise_label_disagreements(
+    records: SessionRecords,
+    labeled: list[LabeledMoment],
+    *,
+    model: str,
+    limit: int | None = None,
+    concurrency: int = 8,
+    retries: int = 2,
+    show_progress: bool = False,
+) -> tuple[list[LabeledMoment], int]:
+    """Revise labels that disagree with observer predictions.
+
+    Returns only the revised examples plus the total number of eligible
+    disagreements, leaving the input label list untouched.
+    """
+    if not model:
+        raise ValueError("model is required")
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be at least 1")
+    if concurrency < 1:
+        raise ValueError("concurrency must be at least 1")
+    if retries < 0:
+        raise ValueError("retries must be at least 0")
+
+    moments_by_id = {
+        moment.moment_id: moment for moment in build_candidate_moments(records)
+    }
+    disagreements: list[tuple[CandidateMoment, LabeledMoment]] = []
+    for label in labeled:
+        moment = moments_by_id.get(label.moment_id)
+        if moment is None:
+            continue
+        original_prediction = original_need_support(moment.observer_output)
+        if (
+            original_prediction is not None
+            and original_prediction != label.need_support
+        ):
+            disagreements.append((moment, label))
+
+    selected = disagreements if limit is None else disagreements[:limit]
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {
+            pool.submit(
+                _revise_disagreement,
+                moment,
+                label,
+                model=model,
+                retries=retries,
+            ): index
+            for index, (moment, label) in enumerate(selected)
+        }
+        revised: list[LabeledMoment | None] = [None] * len(selected)
+        with tqdm(
+            total=len(selected),
+            desc="Revising labels",
+            unit="label",
+            disable=not show_progress,
+        ) as progress:
+            for future in as_completed(futures):
+                revised[futures[future]] = future.result()
+                progress.update()
+    return [item for item in revised if item is not None], len(disagreements)
+
+
+def _revise_disagreement(
+    moment: CandidateMoment,
+    label: LabeledMoment,
+    *,
+    model: str,
+    retries: int,
+) -> LabeledMoment:
+    original_prediction = original_need_support(moment.observer_output)
+    if original_prediction is None or original_prediction == label.need_support:
+        raise ValueError("label revision requires a polarity disagreement")
+
+    base_prompt = "\n\n".join(
+        (
+            f"Original need_support prediction: {original_prediction}",
+            f"Derived need_support label: {label.need_support}",
+            f"Derived-label rationale:\n{label.label_rationale}",
+            f"Original observer input:\n{moment.observer_input}",
+            f"Original observer output:\n{moment.observer_output}",
+        )
+    )
+    prompt = base_prompt
+    for attempt in range(retries + 1):
+        raw = prompt_to_text(
+            model=model,
+            system_prompt=_REVISION_SYSTEM_PROMPT,
+            user_prompt=prompt,
+        )
+        revised = parse_json_object(raw)
+        observation = (
+            str(revised.get("observation") or "").strip() if revised is not None else ""
+        )
+        user_intent = (
+            str(revised.get("user_intent") or "").strip() if revised is not None else ""
+        )
+        if observation and user_intent:
+            return replace(
+                label,
+                target_observation=observation,
+                target_user_intent=user_intent,
+            )
+        if attempt < retries:
+            prompt = "\n\n".join(
+                (
+                    base_prompt,
+                    "Your previous response was invalid. Return only one JSON object "
+                    'with non-empty string fields "observation" and "user_intent".',
+                    f"Invalid previous response:\n{str(raw)[-4000:]}",
+                )
+            )
+
+    raise ValueError(
+        "label revision model returned invalid JSON after "
+        f"{retries + 1} attempts; expected non-empty observation and "
+        "user_intent strings"
+    )

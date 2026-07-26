@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from personalization.records import write_jsonl
+from personalization.records import read_jsonl, write_jsonl
 from personalization.schemas import LabeledMoment, SFTExample
+
+
+def read_labeled_moments(path: str | Path) -> list[LabeledMoment]:
+    return [LabeledMoment.from_dict(row) for row in read_jsonl(path)]
 
 
 def write_labeled_moments(path: str | Path, moments: list[LabeledMoment]) -> None:

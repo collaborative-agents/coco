@@ -7,13 +7,22 @@ import json
 import sys
 from pathlib import Path
 
+from memory.paths import default_memory_db_path
+from memory.store import MemoryStore as CocoMemoryStore
+
 from personalization.dataset_builder import build_sft_examples, temporal_split
 from personalization.exporters import (
+    read_labeled_moments,
     write_labeled_moments,
     write_sft_jsonl,
     write_sharegpt_json,
 )
-from personalization.labeling import label_records
+from personalization.labeling import label_records, revise_label_disagreements
+from personalization.lookahead import (
+    build_lookahead_tasks,
+    run_lookahead_critique,
+    validate_lookahead_config,
+)
 from personalization.memory import (
     EvolveConfig,
     SelfEvolvingLearner,
@@ -21,7 +30,7 @@ from personalization.memory import (
 from personalization.memory_store import MemoryStore, create_memory_draft
 from personalization.privacy import RetentionPolicy, prune_old_files
 from personalization.prompt_context import render_personalization_context
-from personalization.records import flatten_sessions, load_records
+from personalization.records import flatten_sessions, load_records, write_jsonl
 from personalization.signals import derive_short_window_signals
 from personalization.signals.user_feedback_inspector import (
     inspect_feedback_interactively,
@@ -39,6 +48,111 @@ def main(argv: list[str] | None = None) -> int:
     label.add_argument("--records-root", required=True)
     label.add_argument("--out", required=True)
     label.add_argument("--min-abs-score", type=float, default=0.45)
+
+    revise = sub.add_parser(
+        "revise-labels",
+        help="Revise a bounded sample of polarity-disagreement labels",
+    )
+    revise.add_argument("--records-root", required=True)
+    revise.add_argument("--labeled", required=True, help="input labeled moments JSONL")
+    revise.add_argument("--out", required=True, help="output revised sample JSONL")
+    revise.add_argument("--revision-model", required=True)
+    revise.add_argument(
+        "--limit",
+        type=int,
+        help="maximum number of disagreement examples to revise (default: all)",
+    )
+    revise.add_argument("--concurrency", type=int, default=8)
+    revise.add_argument(
+        "--revision-retries",
+        type=int,
+        default=2,
+        help="retries per label after an invalid model response (default: 2)",
+    )
+
+    lookahead = sub.add_parser(
+        "lookahead-critique",
+        help="Use future support needs to improve observations retrieved from memory",
+    )
+    lookahead.add_argument("--records-root", required=True)
+    lookahead.add_argument(
+        "--memory-db",
+        type=Path,
+        default=default_memory_db_path(),
+        help="Coco memory SQLite database used for intent retrieval",
+    )
+    lookahead.add_argument(
+        "--labeled",
+        required=True,
+        help="base labeled moments JSONL",
+    )
+    lookahead.add_argument(
+        "--revised",
+        help="optional revised-label sample overlaid by moment_id before look-ahead",
+    )
+    lookahead.add_argument("--out", required=True, help="output critique JSONL")
+    lookahead.add_argument("--teacher-model", required=True)
+    lookahead.add_argument(
+        "--limit",
+        type=int,
+        required=True,
+        help="maximum number of future need-support moments to critique",
+    )
+    lookahead.add_argument(
+        "--max-past-observations",
+        type=int,
+        default=4,
+        help="retrieved past notes supplied for each future need",
+    )
+    lookahead.add_argument(
+        "--memory-proposition-limit",
+        type=int,
+        default=12,
+        help="maximum matched memory propositions per future intent",
+    )
+    lookahead.add_argument(
+        "--memory-evidence-limit",
+        type=int,
+        default=10,
+        help="supporting observations loaded from each matched proposition",
+    )
+    lookahead.add_argument(
+        "--max-action-chars",
+        type=int,
+        default=5000,
+        help="maximum observer-input/action-context characters per moment",
+    )
+    lookahead.add_argument(
+        "--max-observation-words",
+        type=int,
+        default=80,
+        help="teacher's word budget for each improved observation",
+    )
+    lookahead.add_argument("--max-tokens", type=int, default=4096)
+    lookahead.add_argument("--concurrency", type=int, default=4)
+    lookahead.add_argument(
+        "--teacher-retries",
+        type=int,
+        default=2,
+        help="retries after an invalid teacher response (default: 2)",
+    )
+    lookahead.add_argument(
+        "--include-images",
+        action="store_true",
+        help="send existing retained screenshots to the configured teacher/VLM",
+    )
+    lookahead.add_argument(
+        "--max-images-per-moment",
+        type=int,
+        default=2,
+        help="frame cap for each past/future moment when images are enabled",
+    )
+    lookahead.add_argument(
+        "--no-progress",
+        action="store_false",
+        dest="show_progress",
+        help="disable the progress bar",
+    )
 
     dataset = sub.add_parser("build-dataset", help="Export SFT examples")
     dataset.add_argument("--records-root", required=True)
@@ -118,6 +232,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_summary(args)
     if args.cmd == "label":
         return _cmd_label(args)
+    if args.cmd == "revise-labels":
+        return _cmd_revise_labels(args)
+    if args.cmd == "lookahead-critique":
+        return _cmd_lookahead_critique(args)
     if args.cmd == "build-dataset":
         return _cmd_build_dataset(args)
     if args.cmd == "render-context":
@@ -157,6 +275,87 @@ def _cmd_label(args) -> int:
     labeled = label_records(records, min_abs_score=args.min_abs_score)
     write_labeled_moments(args.out, labeled)
     print(f"wrote {len(labeled)} labeled moments to {args.out}", file=sys.stderr)
+    return 0
+
+
+def _cmd_revise_labels(args) -> int:
+    _, records = _load_flat_records(args.records_root)
+    labeled = read_labeled_moments(args.labeled)
+    revised, eligible = revise_label_disagreements(
+        records,
+        labeled,
+        model=args.revision_model,
+        limit=args.limit,
+        concurrency=args.concurrency,
+        retries=args.revision_retries,
+        show_progress=True,
+    )
+    write_labeled_moments(args.out, revised)
+    print(
+        f"eligible disagreements={eligible}; wrote revised sample={len(revised)} "
+        f"to {args.out}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_lookahead_critique(args) -> int:
+    validate_lookahead_config(
+        limit=args.limit,
+        max_past_observations=args.max_past_observations,
+        memory_proposition_limit=args.memory_proposition_limit,
+        memory_evidence_limit=args.memory_evidence_limit,
+        max_action_chars=args.max_action_chars,
+        max_observation_words=args.max_observation_words,
+        max_tokens=args.max_tokens,
+        concurrency=args.concurrency,
+        max_images_per_moment=args.max_images_per_moment,
+        teacher_retries=args.teacher_retries,
+    )
+    sessions = load_records(args.records_root)
+    memory_store = CocoMemoryStore(args.memory_db)
+    labeled = read_labeled_moments(args.labeled)
+    revised = read_labeled_moments(args.revised) if args.revised else []
+    tasks, eligible = build_lookahead_tasks(
+        sessions,
+        memory_store,
+        labeled,
+        revised=revised,
+        limit=args.limit,
+        max_past_observations=args.max_past_observations,
+        memory_proposition_limit=args.memory_proposition_limit,
+        memory_evidence_limit=args.memory_evidence_limit,
+    )
+    artifacts = run_lookahead_critique(
+        tasks,
+        model=args.teacher_model,
+        concurrency=args.concurrency,
+        max_action_chars=args.max_action_chars,
+        max_observation_words=args.max_observation_words,
+        max_tokens=args.max_tokens,
+        include_images=args.include_images,
+        max_images_per_moment=args.max_images_per_moment,
+        show_progress=args.show_progress,
+        retries=args.teacher_retries,
+    )
+    write_jsonl(args.out, artifacts)
+    print(
+        json.dumps(
+            {
+                "future_need_moments_eligible": eligible,
+                "future_need_moments_processed": len(tasks),
+                "past_observations_critiqued": sum(
+                    len(artifact["critiques"]) for artifact in artifacts
+                ),
+                "teacher_model": args.teacher_model,
+                "memory_db": str(args.memory_db.expanduser()),
+                "include_images": args.include_images,
+                "output": str(Path(args.out).expanduser()),
+            },
+            indent=2,
+        ),
+        file=sys.stderr,
+    )
     return 0
 
 

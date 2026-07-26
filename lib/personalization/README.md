@@ -7,6 +7,73 @@ labels candidate assistance moments, manages layered personalization memory, and
 exports supervised fine-tuning examples. It intentionally does not train model
 weights.
 
+Labeling and LLM revision are separate stages. First export the unchanged
+feedback-derived labels:
+
+```bash
+coco-personalization label \
+    --records-root ./records --out ./out/labeled_moments.jsonl
+```
+
+After inspecting those labels, revise labels whose polarity disagrees with the
+observer's original support prediction. Omit `--limit` to revise all eligible
+labels, or set it to process a bounded sample:
+
+```bash
+coco-personalization revise-labels \
+    --records-root ./records \
+    --labeled ./out/labeled_moments.jsonl \
+    --out ./out/revised_sample.jsonl \
+    --revision-model openai/gpt-4.1 \
+    --limit 20 --concurrency 8
+```
+
+Invalid revision responses are retried twice by default. Set
+`--revision-retries 0` to disable retries or another non-negative value to tune
+the retry count.
+
+## Look-ahead observation critique
+
+After label/intent revision, the look-ahead stage uses later
+`need_support=yes` moments as supervision for improving earlier observer notes:
+
+```bash
+coco-personalization lookahead-critique \
+    --records-root "$HOME/Library/Application Support/coco/coco-records" \
+    --labeled ./out/labeled_moments.jsonl \
+    --revised ./out/revised_sample.jsonl \
+    --out ./out/lookahead_critiques.jsonl \
+    --teacher-model openai/gpt-4.1 \
+    --limit 20 \
+    --max-past-observations 4 \
+    --memory-proposition-limit 12 \
+    --memory-evidence-limit 10 \
+    --max-observation-words 80 \
+    --teacher-retries 2 \
+    --include-images
+```
+
+For each future support need, the revised `target_user_intent` is sent to Coco's
+shared `MemoryStore.search`. Supporting observation IDs cited by matching memory
+propositions are joined back to the recorded observer moments; observations at
+or after the future need are excluded. This reuses Coco's cross-session memory
+retrieval and proposition/evidence graph instead of maintaining a separate
+experiment-only retriever. Use `--memory-db` to override the normal Coco memory
+database.
+
+The teacher receives the future labeled/revised target, matched memory
+propositions, bounded action context, retrieved past notes, and (when explicitly
+enabled) retained frames. Output JSONL keeps the memory query and proposition
+provenance, critique, improved observation, helpfulness score, word-budget
+check, raw teacher response, and LLM metrics. The prompt permits hindsight to
+identify useful contemporaneous facts but prohibits leaking future events into
+the rewritten past note.
+
+Invalid teacher JSON is retried twice by default with a corrective prompt that
+repeats the required observation IDs and schema. Configure this with
+`--teacher-retries`; `--max-tokens` controls the per-attempt output limit and
+defaults to 4096.
+
 The runtime personalization hierarchy is:
 
 1. User-written memory: durable, user-controlled, highest priority.

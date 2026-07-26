@@ -301,6 +301,29 @@ class LabeledMoment:
     target_suggestion_type: str = "none"
     target_suggestion: str = ""
 
+    @classmethod
+    def from_dict(cls, row: JsonDict) -> LabeledMoment:
+        return cls(
+            moment_id=_as_str(row.get("moment_id")),
+            observation_id=_as_str(row.get("observation_id")),
+            session_id=_as_str_or_none(row.get("session_id")),
+            ts=_as_float(row.get("ts")),
+            need_support=_as_str(row.get("need_support")),
+            label_confidence=_as_float(row.get("label_confidence")),
+            label_sources=_as_str_list(row.get("label_sources")),
+            label_rationale=_as_str(row.get("label_rationale")),
+            observer_input=_as_str(row.get("observer_input")),
+            observer_output=_as_str(row.get("observer_output")),
+            image_paths=_as_str_list(row.get("image_paths")),
+            target_observation=_as_str_or_none(row.get("target_observation")),
+            target_user_intent=_as_str_or_none(row.get("target_user_intent")),
+            target_suggestion_type=_as_str(
+                row.get("target_suggestion_type"),
+                "none",
+            ),
+            target_suggestion=_as_str(row.get("target_suggestion")),
+        )
+
     def to_dict(self) -> JsonDict:
         return asdict(self)
 
