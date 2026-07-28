@@ -15,6 +15,7 @@ describe('deferred suggestion context', () => {
         return [
           {
             sessionId: 'past-session',
+            title: 'Launch checklist',
             problem: 'Plan the launch',
             createdAt: 1753200000000,
             updatedAt: 1753203600000,
@@ -46,10 +47,10 @@ describe('deferred suggestion context', () => {
       screen.getByRole('button', { name: 'Review past conversations' }),
     );
 
-    expect(await screen.findByText('Plan the launch')).toBeInTheDocument();
+    expect(await screen.findByText('Launch checklist')).toBeInTheDocument();
     expect(screen.getByText('What should I do first?')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Plan the launch'));
+    fireEvent.click(screen.getByText('Launch checklist'));
     expect(
       screen.getByText('Start by naming the launch owner.'),
     ).toBeInTheDocument();
@@ -110,6 +111,53 @@ describe('deferred suggestion context', () => {
         problemStatement: 'Draft a project plan',
       });
     });
+  });
+
+  it('restores the active transcript after a renderer reload', async () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const savedConversation = {
+      sessionId: 'active-session',
+      problem: 'Review prior literature',
+      createdAt: 1753200000000,
+      updatedAt: 1753203600000,
+      messages: [
+        { role: 'user', text: 'What does previous work fall short of?' },
+        {
+          role: 'tutor',
+          text: 'Prior work often assumes memory is already available.',
+        },
+      ],
+    };
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-chat-conversations') return [savedConversation];
+      return null;
+    });
+
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    act(() => {
+      listeners.get('session-init')?.({
+        sessionId: 'active-session',
+        problemStatement: 'Review prior literature',
+      });
+    });
+
+    expect(
+      await screen.findByText('What does previous work fall short of?'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Prior work often assumes memory is already available.'),
+    ).toBeInTheDocument();
   });
 
   it('waits for the user to send a message before calling the tutor', async () => {

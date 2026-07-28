@@ -144,6 +144,15 @@ interface ChatMessage {
   retryImages?: string[];
 }
 
+interface SavedConversation {
+  sessionId: string;
+  title?: string;
+  problem: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
+}
+
 // crypto.randomUUID needs a secure context; fall back for safety.
 const makeMessageId = (): string =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -196,6 +205,16 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 11.5, color: ACCENT, padding: '3px 8px', borderRadius: 7,
     fontFamily: FONT, fontWeight: 600,
   },
+  historyPanel: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#fff' },
+  historyPanelHeader: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', borderBottom: `1px solid ${BORDER}` },
+  historyTitle: { fontSize: 14, fontWeight: 700, color: '#374151' },
+  historyBack: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 700, fontFamily: FONT },
+  historyList: { flex: 1, overflowY: 'auto', padding: '8px 10px 12px', display: 'flex', flexDirection: 'column', gap: 6 },
+  historyItem: { width: '100%', border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 10, padding: '9px 10px', textAlign: 'left', cursor: 'pointer', fontFamily: FONT },
+  historyItemTitle: { display: 'block', color: '#374151', fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  historyItemMeta: { display: 'block', color: '#9ca3af', fontSize: 10.5, marginTop: 2 },
+  historyItemPreview: { display: 'block', color: '#6b7280', fontSize: 11.5, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  reviewBanner: { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: ACCENT_BG, borderBottom: `1px solid ${ACCENT_BORDER}`, color: ACCENT, fontSize: 11.5 },
   problem: { padding: '6px 14px', fontSize: 11, color: '#9ca3af', borderBottom: `1px solid #f3f4f6`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   list: { flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 },
   userRow: { alignSelf: 'flex-end', maxWidth: '85%' },
@@ -448,6 +467,11 @@ export default function SessionChatView() {
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
+  const [conversations, setConversations] = useState<SavedConversation[]>([]);
+  const [reviewing, setReviewing] = useState<SavedConversation | null>(null);
   const [profile, setProfile] = useState<{
     scenario: string;
     aiTools: string[];
@@ -479,6 +503,26 @@ export default function SessionChatView() {
   const listRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   const pendingContextRef = useRef<string | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const problemRef = useRef('');
+
+  // Keep each active conversation on disk. A short debounce avoids a write for
+  // every streaming token while still preserving completed turns promptly.
+  useEffect(() => {
+    messagesRef.current = messages;
+    problemRef.current = problem;
+    if (!sessionIdRef.current || messages.length === 0) return undefined;
+    const timeout = window.setTimeout(() => {
+      window.electron?.ipcRenderer
+        .invoke('save-chat-conversation', {
+          sessionId: sessionIdRef.current,
+          problem,
+          messages,
+        })
+        .catch(() => {});
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [messages, problem]);
 
   // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
   // same pipeline as the bubble reactions.
@@ -679,6 +723,15 @@ export default function SessionChatView() {
         problemStatement?: string;
       };
       if (sessionId && sessionId !== sessionIdRef.current) {
+        if (sessionIdRef.current && messagesRef.current.length > 0) {
+          window.electron?.ipcRenderer
+            .invoke('save-chat-conversation', {
+              sessionId: sessionIdRef.current,
+              problem: problemRef.current,
+              messages: messagesRef.current,
+            })
+            .catch(() => {});
+        }
         sessionIdRef.current = sessionId;
         setMessages([]);
         setRatings({});
@@ -687,8 +740,32 @@ export default function SessionChatView() {
         setSending(false);
         pendingContextRef.current = null;
         setPendingContextLabel(null);
+        window.electron?.ipcRenderer
+          .invoke('get-chat-conversations')
+          .then((saved: unknown) => {
+            if (sessionIdRef.current !== sessionId || !Array.isArray(saved)) {
+              return;
+            }
+            const conversation = (saved as SavedConversation[]).find(
+              (candidate) => candidate.sessionId === sessionId,
+            );
+            if (!conversation) return;
+            setMessages((current) =>
+              current.length === 0
+                ? conversation.messages
+                : [...conversation.messages, ...current],
+            );
+            setProblem(
+              problemStatement?.trim()
+                ? problemStatement
+                : conversation.problem,
+            );
+          })
+          .catch(() => {});
       }
       setProblem(problemStatement ?? '');
+      setReviewing(null);
+      setShowHistory(false);
     });
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
@@ -839,6 +916,36 @@ export default function SessionChatView() {
     const text = input;
     setInput('');
     setPendingImages([]);
+    if (reviewing) {
+      const conversation = reviewing;
+      setSending(true);
+      window.electron?.ipcRenderer
+        .invoke('resume-chat-conversation', {
+          sessionId: conversation.sessionId,
+        })
+        .then((result: any) => {
+          if (!result?.success) {
+            setInput(text);
+            setPendingImages(imgs);
+            setSending(false);
+            return;
+          }
+          sessionIdRef.current = conversation.sessionId;
+          setProblem(conversation.problem);
+          setMessages(conversation.messages);
+          setRatings({});
+          setReviewing(null);
+          setShowHistory(false);
+          setSending(false);
+          sendMessage(text, imgs);
+        })
+        .catch(() => {
+          setInput(text);
+          setPendingImages(imgs);
+          setSending(false);
+        });
+      return;
+    }
     sendMessage(text, imgs);
   };
 
@@ -854,6 +961,44 @@ export default function SessionChatView() {
     }
   };
 
+  const openHistory = async () => {
+    setShowSettings(false);
+    setReviewing(null);
+    setShowHistory(true);
+    setHistoryLoading(true);
+    setHistoryError(false);
+    try {
+      const saved = await window.electron?.ipcRenderer.invoke(
+        'get-chat-conversations',
+      );
+      setConversations(
+        (Array.isArray(saved) ? saved : []).filter(
+          (conversation: SavedConversation) =>
+            conversation.sessionId !== sessionIdRef.current,
+        ),
+      );
+    } catch {
+      setHistoryError(true);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const conversationTitle = (conversation: SavedConversation) =>
+    conversation.title || conversation.problem || 'General help session';
+
+  const conversationPreview = (conversation: SavedConversation) =>
+    conversation.messages.find((message) => message.text.trim())?.text ||
+    'No messages';
+
+  const formatConversationDate = (timestamp: number) =>
+    new Date(timestamp).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -865,7 +1010,8 @@ export default function SessionChatView() {
     !sending &&
     !startingNewSession &&
     (input.trim().length > 0 || pendingImages.length > 0);
-  const hasRunningTool = messages.some(
+  const visibleMessages = reviewing?.messages ?? messages;
+  const hasRunningTool = visibleMessages.some(
     (message) =>
       message.role === 'tutor' &&
       message.toolCalls?.some((call) => call.status === 'running'),
@@ -893,9 +1039,22 @@ export default function SessionChatView() {
           </button>
           <button
             type="button"
+            style={{ ...S.iconBtn, ...(showHistory ? S.iconBtnActive : {}) }}
+            title="Review past conversations"
+            aria-label="Review past conversations"
+            onClick={openHistory}
+          >
+            ◷
+          </button>
+          <button
+            type="button"
             style={{ ...S.iconBtn, ...(showSettings ? S.iconBtnActive : {}) }}
             title="Settings"
-            onClick={() => setShowSettings((v) => !v)}
+            onClick={() => {
+              setShowHistory(false);
+              setReviewing(null);
+              setShowSettings((v) => !v);
+            }}
           >
             ⚙
           </button>
@@ -1075,17 +1234,85 @@ export default function SessionChatView() {
         </div>
       )}
 
-      {problem && <div style={S.problem}>Task: {problem}</div>}
+      {(!showHistory || reviewing) && (reviewing?.problem || problem) && (
+        <div style={S.problem}>Task: {reviewing?.problem || problem}</div>
+      )}
 
-      <div style={S.list} ref={listRef}>
-        {messages.length === 0 && !sending && (
+      {showHistory && !reviewing ? (
+        <div style={S.historyPanel}>
+          <div style={S.historyPanelHeader}>
+            <span style={S.historyTitle}>Past conversations</span>
+            <button
+              type="button"
+              style={{ ...S.historyBack, marginLeft: 'auto' }}
+              onClick={() => setShowHistory(false)}
+            >
+              Back to chat
+            </button>
+          </div>
+          <div style={S.historyList}>
+            {historyLoading && (
+              <div style={S.empty}>Loading conversations…</div>
+            )}
+            {!historyLoading && historyError && (
+              <div style={S.empty}>
+                Conversation history could not be loaded.
+              </div>
+            )}
+            {!historyLoading && !historyError && conversations.length === 0 && (
+              <div style={S.empty}>
+                Your past conversations will appear here.
+              </div>
+            )}
+            {!historyLoading &&
+              conversations.map((conversation) => (
+                <button
+                  key={conversation.sessionId}
+                  type="button"
+                  style={S.historyItem}
+                  onClick={() => setReviewing(conversation)}
+                >
+                  <span style={S.historyItemTitle}>
+                    {conversationTitle(conversation)}
+                  </span>
+                  <span style={S.historyItemMeta}>
+                    {formatConversationDate(conversation.updatedAt)}
+                    {' · '}
+                    {conversation.messages.length}{' '}
+                    {conversation.messages.length === 1
+                      ? 'message'
+                      : 'messages'}
+                  </span>
+                  <span style={S.historyItemPreview}>
+                    {conversationPreview(conversation)}
+                  </span>
+                </button>
+              ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          {reviewing && (
+            <div style={S.reviewBanner}>
+              <span>Viewing a past conversation</span>
+              <button
+                type="button"
+                style={{ ...S.historyBack, marginLeft: 'auto' }}
+                onClick={() => setReviewing(null)}
+              >
+                Back to history
+              </button>
+            </div>
+          )}
+          <div style={S.list} ref={listRef}>
+        {visibleMessages.length === 0 && !sending && (
           <div style={S.empty}>
             Ask Coco about your task, an AI tool, or anything else.
             <br />
             You can paste a screenshot to show what you&apos;re working on.
           </div>
         )}
-        {messages.map((m, i) => (
+        {visibleMessages.map((m, i) => (
           // eslint-disable-next-line react/no-array-index-key
           <div key={i} style={m.role === 'user' ? S.userRow : S.tutorRow}>
             {m.role === 'user' ? (
@@ -1233,6 +1460,8 @@ export default function SessionChatView() {
           Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

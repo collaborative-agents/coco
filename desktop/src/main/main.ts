@@ -48,6 +48,10 @@ import {
   recordSupportSuggestion,
   pruneActivity,
 } from './activity-store';
+import {
+  readConversations,
+  saveConversation,
+} from './conversation-store';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
 import type {
   ObservationStatus,
@@ -1167,6 +1171,78 @@ ipcMain.handle(
     } catch (err) {
       log.warn(
         `[ProactiveSession] Could not start a new chat session: ${(err as Error).message}`,
+      );
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
+
+// Chat history is local-only: the renderer persists completed turns here and
+// asks main to rebuild tutor context before continuing an older conversation.
+ipcMain.removeHandler('get-chat-conversations');
+ipcMain.handle('get-chat-conversations', () => readConversations());
+
+ipcMain.removeHandler('save-chat-conversation');
+ipcMain.handle('save-chat-conversation', (_event, payload) => {
+  saveConversation(payload ?? {});
+  return { success: true };
+});
+
+ipcMain.removeHandler('resume-chat-conversation');
+ipcMain.handle(
+  'resume-chat-conversation',
+  async (_event, { sessionId }: { sessionId?: string } = {}) => {
+    const conversation = readConversations().find(
+      (saved) => saved.sessionId === sessionId,
+    );
+    if (!conversation) {
+      return { success: false, error: 'Conversation not found.' };
+    }
+
+    const tutorPort = process.env.TUTOR_PORT || '8081';
+    const tutor = `http://127.0.0.1:${tutorPort}`;
+    const { aiTools, scenario } = readProfile();
+    try {
+      await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
+      await axios.post(
+        `${tutor}/config/scenario`,
+        { scenario },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/problem_statement`,
+        { problem_statement: conversation.problem },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/ai_tools`,
+        { ai_tools: aiTools },
+        { timeout: 8000 },
+      );
+      const savedMemory = readLocalMemory();
+      if (savedMemory) {
+        await axios.post(
+          `${tutor}/context/memory`,
+          { memory: savedMemory },
+          { timeout: 8000 },
+        );
+      }
+      await axios.post(
+        `${tutor}/context/conversation`,
+        {
+          messages: conversation.messages
+            .filter((message) => !message.isError)
+            .map(({ role, text }) => ({ role, text })),
+        },
+        { timeout: 8000 },
+      );
+      currentSessionId = conversation.sessionId;
+      isSessionActive = true;
+      pendingTaskLabel = conversation.problem;
+      return { success: true };
+    } catch (err) {
+      log.warn(
+        `[Chat] Could not resume conversation: ${(err as Error).message}`,
       );
       return { success: false, error: (err as Error).message };
     }
