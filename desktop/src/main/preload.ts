@@ -32,6 +32,9 @@ export type Channels =
   | 'start-new-chat-session'
   | 'send-chat-message'
   | 'chat-stream-event'
+  | 'get-chat-conversations'
+  | 'save-chat-conversation'
+  | 'resume-chat-conversation'
   // Hot-key screen capture → preview thumbnail in the chat input bar
   | 'hotkey-capture'
   // Renderer → main: chat's hot-key listener is mounted; flush buffered captures

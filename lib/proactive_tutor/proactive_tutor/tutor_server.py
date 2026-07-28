@@ -105,6 +105,15 @@ class MemoryRequest(BaseModel):
     memory: str
 
 
+class ConversationMessage(BaseModel):
+    role: str
+    text: str
+
+
+class ConversationRequest(BaseModel):
+    messages: list[ConversationMessage]
+
+
 class MemoryResponse(BaseModel):
     memory: str
 
@@ -656,6 +665,16 @@ async def reset_context():
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     tutor.reset_session()
     logger.info("Session reset: conversation history and curriculum state cleared")
+    return StatusResponse(status="ok")
+
+
+@app.post("/context/conversation", response_model=StatusResponse)
+async def restore_conversation(req: ConversationRequest):
+    """Restore a saved transcript so the next turn continues that conversation."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    tutor.restore_conversation([message.model_dump() for message in req.messages])
+    logger.info("Restored %d saved conversation messages", len(req.messages))
     return StatusResponse(status="ok")
 
 

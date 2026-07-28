@@ -139,6 +139,9 @@ interface ChatMessage {
   /** Correlates incremental main-process events with this pending reply. */
   requestId?: string;
   isStreaming?: boolean;
+  /** Exact request payload retained so an error can be retried in place. */
+  retryText?: string;
+  retryImages?: string[];
 }
 
 // crypto.randomUUID needs a secure context; fall back for safety.
@@ -201,6 +204,7 @@ const S: Record<string, React.CSSProperties> = {
   userBubble: { background: ACCENT, color: '#fff', padding: '9px 13px', borderRadius: '16px 16px 4px 16px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   tutorBubble: { background: '#f3f4f6', color: '#374151', padding: '9px 13px', borderRadius: '4px 16px 16px 16px', fontSize: 13, lineHeight: 1.5 },
   errBubble: { background: '#fef2f2', color: '#b91c1c', padding: '9px 13px', borderRadius: 12, fontSize: 13, border: '1px solid #fecaca' },
+  retryBtn: { marginTop: 7, border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', borderRadius: 8, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
   thumbRow: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   thumb: { width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: `1px solid ${BORDER}` },
   example: { marginTop: 8, background: ACCENT_BG, border: `1px solid ${ACCENT_BORDER}`, borderRadius: 10, padding: '8px 10px', fontSize: 12, color: ACCENT },
@@ -567,30 +571,8 @@ export default function SessionChatView() {
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, [scrollToBottom]);
 
-  // Core send: append the user turn and an empty tutor turn immediately. The
-  // latter is filled by chat-stream-event updates while the IPC request runs.
-  const sendMessage = useCallback(
-    async (text: string, images: string[]) => {
-      const trimmed = text.trim();
-      if (!trimmed && images.length === 0) return;
-      const requestId = makeMessageId();
-      setMessages((m) => [
-        ...m,
-        { role: 'user', text: trimmed, images },
-        {
-          role: 'tutor',
-          text: '',
-          requestId,
-          isStreaming: true,
-          toolCalls: [],
-        },
-      ]);
-      const pendingContext = pendingContextRef.current;
-      const userText = pendingContext
-        ? `${pendingContext}\n\nThe user now says:\n${trimmed}`
-        : trimmed;
-      pendingContextRef.current = null;
-      setPendingContextLabel(null);
+  const submitTutorRequest = useCallback(
+    async (requestId: string, userText: string, images: string[]) => {
       setSending(true);
       scrollToBottom();
       const res = await window.electron?.ipcRenderer.invoke('send-chat-message', {
@@ -631,6 +613,62 @@ export default function SessionChatView() {
       scrollToBottom();
     },
     [scrollToBottom],
+  );
+
+  // Core send: append the user turn and an empty tutor turn immediately. The
+  // latter is filled by chat-stream-event updates while the IPC request runs.
+  const sendMessage = useCallback(
+    async (text: string, images: string[]) => {
+      const trimmed = text.trim();
+      if (!trimmed && images.length === 0) return;
+      const requestId = makeMessageId();
+      const pendingContext = pendingContextRef.current;
+      const userText = pendingContext
+        ? `${pendingContext}\n\nThe user now says:\n${trimmed}`
+        : trimmed;
+      setMessages((m) => [
+        ...m,
+        { role: 'user', text: trimmed, images },
+        {
+          role: 'tutor',
+          text: '',
+          requestId,
+          isStreaming: true,
+          toolCalls: [],
+          retryText: userText,
+          retryImages: images,
+        },
+      ]);
+      pendingContextRef.current = null;
+      setPendingContextLabel(null);
+      await submitTutorRequest(requestId, userText, images);
+    },
+    [submitTutorRequest],
+  );
+
+  const retryMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (sending || startingNewSession || message.retryText === undefined) return;
+      const previousRequestId = message.requestId;
+      const requestId = makeMessageId();
+      const images = message.retryImages ?? [];
+      setMessages((current) =>
+        current.map((item) =>
+          item.requestId === previousRequestId
+            ? {
+                ...item,
+                text: '',
+                requestId,
+                isError: false,
+                isStreaming: true,
+                toolCalls: [],
+              }
+            : item,
+        ),
+      );
+      await submitTutorRequest(requestId, message.retryText, images);
+    },
+    [sending, startingNewSession, submitTutorRequest],
   );
 
   // Session context from main. A new sessionId resets the conversation.
@@ -1075,7 +1113,24 @@ export default function SessionChatView() {
                   )}
                   {(m.text || m.isError) && (
                     <div style={m.isError ? S.errBubble : S.tutorBubble}>
-                      {m.isError ? m.text : <TutorMessage text={m.text} />}
+                      {m.isError ? (
+                        <>
+                          <div>{m.text}</div>
+                          {m.retryText !== undefined && (
+                            <button
+                              type="button"
+                              style={{
+                                ...S.retryBtn,
+                                ...(sending || startingNewSession ? S.sendBtnDisabled : {}),
+                              }}
+                              disabled={sending || startingNewSession}
+                              onClick={() => retryMessage(m)}
+                            >
+                              Retry
+                            </button>
+                          )}
+                        </>
+                      ) : <TutorMessage text={m.text} />}
                     </div>
                   )}
                   {!m.isError && (

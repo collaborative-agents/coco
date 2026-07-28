@@ -236,6 +236,26 @@ def test_conversation_history_accumulates():
         assert len(entry) > 0
 
 
+def test_restore_conversation_populates_both_history_formats():
+    ts = _make_tutor_system()
+
+    ts.restore_conversation(
+        [
+            {"role": "user", "text": "What should I do first?"},
+            {"role": "tutor", "text": "Name the project owner."},
+            {"role": "invalid", "text": "ignore me"},
+        ]
+    )
+
+    assert ts._chat_messages == [
+        {"role": "user", "content": "What should I do first?"},
+        {"role": "assistant", "content": "Name the project owner."},
+    ]
+    assert len(ts.conversation_history) == 2
+    assert "[User]: What should I do first?" in ts.conversation_history[0]
+    assert "[Tutor]: Name the project owner." in ts.conversation_history[1]
+
+
 if __name__ == "__main__":
     import sys
 

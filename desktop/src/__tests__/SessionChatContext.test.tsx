@@ -1,8 +1,82 @@
 import '@testing-library/jest-dom';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import SessionChatView from '../renderer/components/SessionChatView';
 
 describe('deferred suggestion context', () => {
+  it('opens and resumes a past conversation from the chat header', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-chat-conversations') {
+        return [
+          {
+            sessionId: 'past-session',
+            problem: 'Plan the launch',
+            createdAt: 1753200000000,
+            updatedAt: 1753203600000,
+            messages: [
+              { role: 'user', text: 'What should I do first?' },
+              { role: 'tutor', text: 'Start by naming the launch owner.' },
+            ],
+          },
+        ];
+      }
+      if (channel === 'resume-chat-conversation') {
+        return { success: true };
+      }
+      if (channel === 'send-chat-message') {
+        return { guidance: 'Continue by setting a launch date.' };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Review past conversations' }),
+    );
+
+    expect(await screen.findByText('Plan the launch')).toBeInTheDocument();
+    expect(screen.getByText('What should I do first?')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Plan the launch'));
+    expect(
+      screen.getByText('Start by naming the launch owner.'),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Ask the tutor/)).toBeInTheDocument();
+    expect(screen.getByText('Viewing a past conversation')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText(/Ask the tutor/), {
+      target: { value: 'What should I do next?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('resume-chat-conversation', {
+        sessionId: 'past-session',
+      });
+      expect(invoke).toHaveBeenCalledWith(
+        'send-chat-message',
+        expect.objectContaining({ userText: 'What should I do next?' }),
+      );
+    });
+    expect(screen.getByText('What should I do first?')).toBeInTheDocument();
+    expect(screen.getByText('What should I do next?')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Viewing a past conversation'),
+    ).not.toBeInTheDocument();
+  });
+
   it('starts a fresh chat session from the header', async () => {
     const listeners = new Map<string, (data: unknown) => void>();
     const invoke = jest.fn(async () => ({ success: true }));
@@ -27,7 +101,9 @@ describe('deferred suggestion context', () => {
       });
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start a new session' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Start a new session' }),
+    );
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('start-new-chat-session', {
@@ -93,8 +169,12 @@ describe('deferred suggestion context', () => {
     const tutorPayload = invoke.mock.calls.find(
       ([channel]) => channel === 'send-chat-message',
     )?.[1] as { userText: string };
-    expect(tutorPayload.userText).toContain('Observation: the full workflow is failing.');
-    expect(tutorPayload.userText).toContain('The user now says:\nWhy would that help?');
+    expect(tutorPayload.userText).toContain(
+      'Observation: the full workflow is failing.',
+    );
+    expect(tutorPayload.userText).toContain(
+      'The user now says:\nWhy would that help?',
+    );
     expect(screen.getByText('Why would that help?')).toBeInTheDocument();
     expect(
       screen.queryByText(/Suggestion context attached/),

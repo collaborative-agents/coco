@@ -35,7 +35,10 @@ import {
   startObservationStream,
   stopObservationStream,
 } from './services/observation-stream';
-import { consumeTutorStream } from './services/tutor-stream';
+import {
+  consumeTutorStream,
+  TutorStreamTimeoutError,
+} from './services/tutor-stream';
 import type { TutorStreamEvent } from './services/tutor-stream';
 import {
   appendActivity,
@@ -1238,8 +1241,6 @@ ipcMain.handle(
       }
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000);
     try {
       await consumeTutorStream(
         `http://127.0.0.1:${tutorPort}/events/user_prompt/stream`,
@@ -1259,20 +1260,29 @@ ipcMain.handle(
               : {}),
           });
         },
-        controller.signal,
+        undefined,
+        {
+          // This is an activity timeout, refreshed by every SSE chunk (including
+          // server keep-alives), plus a separate ceiling for genuinely runaway
+          // tool/model loops.
+          idleMs: 60_000,
+          hardMs: 5 * 60_000,
+        },
       );
       return { streamed: true };
     } catch (err) {
       const ax = err as { response?: { data?: unknown }; message?: string };
       log.error('[Chat] streaming user prompt failed:', JSON.stringify(ax?.response?.data ?? ax?.message));
+      const error =
+        err instanceof TutorStreamTimeoutError
+          ? 'The tutor took too long to respond. Please retry.'
+          : 'The tutor could not generate a response. Please try again.';
       ipcEvent.sender.send('chat-stream-event', {
         requestId,
         type: 'error',
-        error: 'The tutor could not generate a response. Please try again.',
+        error,
       });
-      return { error: 'The tutor could not generate a response. Please try again.' };
-    } finally {
-      clearTimeout(timeout);
+      return { error };
     }
   },
 );

@@ -283,6 +283,24 @@ class TutorSystem:
         }
         self.intervention_count = 0
 
+    def restore_conversation(self, messages: list[dict[str, str]]) -> None:
+        """Restore user/tutor turns from a locally saved chat transcript."""
+        restored: list[dict[str, str]] = []
+        legacy_history: list[str] = []
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for message in messages:
+            role = message.get("role")
+            text = message.get("text", "").strip()
+            if role not in {"user", "tutor"} or not text:
+                continue
+            provider_role = "user" if role == "user" else "assistant"
+            restored.append({"role": provider_role, "content": text})
+            label = "User" if role == "user" else "Tutor"
+            legacy_history.append(f"[{ts}] [{label}]: {text}")
+
+        self._chat_messages = restored
+        self.conversation_history = legacy_history
+
     # ------------------------------------------------------------------
     # Long-term memory (user-editable, persisted across sessions)
     # ------------------------------------------------------------------

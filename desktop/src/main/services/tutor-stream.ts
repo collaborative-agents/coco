@@ -8,6 +8,25 @@ export interface TutorStreamEvent {
   [key: string]: unknown;
 }
 
+export interface TutorStreamTimeouts {
+  idleMs: number;
+  hardMs: number;
+}
+
+export class TutorStreamTimeoutError extends Error {
+  readonly kind: 'idle' | 'hard';
+
+  constructor(kind: 'idle' | 'hard') {
+    super(
+      kind === 'idle'
+        ? 'Tutor stream stopped producing activity'
+        : 'Tutor stream exceeded its maximum duration',
+    );
+    this.name = 'TutorStreamTimeoutError';
+    this.kind = kind;
+  }
+}
+
 function extractSseEvents(buffer: string): {
   events: TutorStreamEvent[];
   remainder: string;
@@ -35,30 +54,65 @@ export async function consumeTutorStream(
   body: Record<string, unknown>,
   onEvent: (event: TutorStreamEvent) => void,
   signal?: AbortSignal,
+  timeouts?: TutorStreamTimeouts,
 ): Promise<void> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Accept: 'text/event-stream',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!response.ok || !response.body) {
-    throw new Error(`Tutor stream failed: HTTP ${response.status}`);
+  const controller = new AbortController();
+  let timeoutKind: 'idle' | 'hard' | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let hardTimer: ReturnType<typeof setTimeout> | undefined;
+  const abortFromSignal = () => controller.abort();
+  const armIdleTimer = () => {
+    if (!timeouts) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      timeoutKind = 'idle';
+      controller.abort();
+    }, timeouts.idleMs);
+  };
+
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', abortFromSignal, { once: true });
+  armIdleTimer();
+  if (timeouts) {
+    hardTimer = setTimeout(() => {
+      timeoutKind = 'hard';
+      controller.abort();
+    }, timeouts.hardMs);
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-    const parsed = extractSseEvents(buffer);
-    buffer = parsed.remainder;
-    parsed.events.forEach(onEvent);
-    if (done) break;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Tutor stream failed: HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (value?.length) armIdleTimer();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+      const parsed = extractSseEvents(buffer);
+      buffer = parsed.remainder;
+      parsed.events.forEach(onEvent);
+      if (done) break;
+    }
+  } catch (error) {
+    if (timeoutKind) throw new TutorStreamTimeoutError(timeoutKind);
+    throw error;
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    if (hardTimer) clearTimeout(hardTimer);
+    signal?.removeEventListener('abort', abortFromSignal);
   }
 }
 
