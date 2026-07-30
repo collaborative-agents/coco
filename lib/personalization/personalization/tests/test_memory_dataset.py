@@ -457,3 +457,35 @@ def test_build_sft_from_labeled_moments():
     assistant = json.loads(examples[0].messages[2]["content"])
     assert assistant["need_support"] == "yes"
     assert assistant["suggestion"] == "Try batching this."
+
+
+def test_build_sft_includes_no_help_target_without_suggestion():
+    labeled = LabeledMoment(
+        moment_id="moment-no-help",
+        observation_id="obs-no-help",
+        session_id="s1",
+        ts=2.0,
+        need_support="no",
+        label_confidence=1.0,
+        label_sources=["observer:no_support_unverified"],
+        label_rationale="Weak unverified observer no-support prediction.",
+        observer_input="screen context",
+        observer_output='{"need_support":"yes"}',
+        target_observation="The user is progressing without needing help.",
+        target_user_intent="Continue the task independently.",
+        target_suggestion_type="direct_message",
+        target_suggestion="This stale suggestion must not be exported.",
+    )
+
+    examples = build_sft_examples([labeled])
+    assistant = json.loads(examples[0].messages[2]["content"])
+
+    assert assistant == {
+        "observation": "The user is progressing without needing help.",
+        "user_intent": "Continue the task independently.",
+        "need_support": "no",
+        "rationale": "Weak unverified observer no-support prediction.",
+        "suggestion_type": "none",
+        "suggestion": "",
+    }
+    assert examples[0].metadata["label_sources"] == ["observer:no_support_unverified"]

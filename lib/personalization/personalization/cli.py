@@ -48,6 +48,23 @@ def main(argv: list[str] | None = None) -> int:
     label.add_argument("--records-root", required=True)
     label.add_argument("--out", required=True)
     label.add_argument("--min-abs-score", type=float, default=0.45)
+    label.add_argument(
+        "--include-unverified-no-support",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="include weak negatives from uncorrected observer no-support predictions",
+    )
+    label.add_argument(
+        "--unverified-no-support-confidence",
+        type=float,
+        default=0.25,
+    )
+    label.add_argument(
+        "--require-saved-images",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="include only records with at least one image file present on disk",
+    )
 
     revise = sub.add_parser(
         "revise-labels",
@@ -160,6 +177,23 @@ def main(argv: list[str] | None = None) -> int:
     dataset.add_argument("--min-confidence", type=float, default=0.0)
     dataset.add_argument("--eval-fraction", type=float, default=0.2)
     dataset.add_argument("--require-images", action="store_true")
+    dataset.add_argument(
+        "--include-unverified-no-support",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="include weak negatives from uncorrected observer no-support predictions",
+    )
+    dataset.add_argument(
+        "--unverified-no-support-confidence",
+        type=float,
+        default=0.25,
+    )
+    dataset.add_argument(
+        "--require-saved-images",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="include only records with at least one image file present on disk",
+    )
 
     context = sub.add_parser("render-context", help="Render layered prompt context")
     context.add_argument("--memory-root", required=True)
@@ -187,7 +221,15 @@ def main(argv: list[str] | None = None) -> int:
         "self-evolve",
         help="Self-evolving prompting: learn a preference memory from records (no weight updates)",
     )
-    evolve.add_argument("--records-root", required=True)
+    evolve_input = evolve.add_mutually_exclusive_group(required=True)
+    evolve_input.add_argument(
+        "--records-root",
+        help="raw Coco records to label before self-evolving",
+    )
+    evolve_input.add_argument(
+        "--labeled",
+        help="preselected labeled moments JSONL (for example, a privacy-reviewed subset)",
+    )
     evolve.add_argument(
         "--out-dir",
         required=True,
@@ -272,7 +314,13 @@ def _cmd_summary(args) -> int:
 
 def _cmd_label(args) -> int:
     _, records = _load_flat_records(args.records_root)
-    labeled = label_records(records, min_abs_score=args.min_abs_score)
+    labeled = label_records(
+        records,
+        min_abs_score=args.min_abs_score,
+        include_unverified_no_support=args.include_unverified_no_support,
+        unverified_no_support_confidence=args.unverified_no_support_confidence,
+        require_saved_images=args.require_saved_images,
+    )
     write_labeled_moments(args.out, labeled)
     print(f"wrote {len(labeled)} labeled moments to {args.out}", file=sys.stderr)
     return 0
@@ -363,7 +411,12 @@ def _cmd_build_dataset(args) -> int:
     _, records = _load_flat_records(args.records_root)
     labeled = [
         moment
-        for moment in label_records(records)
+        for moment in label_records(
+            records,
+            include_unverified_no_support=args.include_unverified_no_support,
+            unverified_no_support_confidence=args.unverified_no_support_confidence,
+            require_saved_images=args.require_saved_images,
+        )
         if moment.label_confidence >= args.min_confidence
     ]
     train, eval_ = temporal_split(labeled, eval_fraction=args.eval_fraction)
@@ -385,8 +438,11 @@ def _cmd_build_dataset(args) -> int:
     write_sft_jsonl(out_dir / "sft_eval.jsonl", eval_examples)
     write_sharegpt_json(out_dir / "sharegpt_train.json", train_examples)
     write_sharegpt_json(out_dir / "sharegpt_eval.json", eval_examples)
+    yes_count = sum(moment.need_support == "yes" for moment in labeled)
+    no_count = sum(moment.need_support == "no" for moment in labeled)
     print(
-        f"wrote train={len(train_examples)} eval={len(eval_examples)} examples to {out_dir}",
+        f"wrote train={len(train_examples)} eval={len(eval_examples)} examples "
+        f"(need_support yes={yes_count} no={no_count}) to {out_dir}",
         file=sys.stderr,
     )
     return 0
@@ -424,9 +480,27 @@ def _cmd_inspect_feedback(args) -> int:
 
 
 def _cmd_self_evolve(args) -> int:
-    _, records = _load_flat_records(args.records_root)
-    signals = derive_short_window_signals(records)
-    all_labeled = label_records(records)
+    if args.labeled:
+        all_labeled = read_labeled_moments(args.labeled)
+        input_counts = {
+            "input": "labeled",
+            "labeled_path": str(Path(args.labeled).expanduser()),
+            "labeled_moments": len(all_labeled),
+        }
+    else:
+        _, records = _load_flat_records(args.records_root)
+        signals = derive_short_window_signals(records)
+        all_labeled = label_records(records)
+        input_counts = {
+            "input": "records",
+            "records_root": str(Path(args.records_root).expanduser()),
+            "observations": len(records.observations),
+            "feedback_events": len(records.feedback),
+            "tutor_calls": len(records.tutor_calls),
+            "decisions": len(records.decisions),
+            "short_window_signals": len(signals),
+            "labeled_moments": len(all_labeled),
+        }
     labeled = [
         moment
         for moment in all_labeled
@@ -443,12 +517,7 @@ def _cmd_self_evolve(args) -> int:
                     "evolution": args.evolution_model or args.prediction_model,
                 },
                 "self_evolve_input_counts": {
-                    "observations": len(records.observations),
-                    "feedback_events": len(records.feedback),
-                    "tutor_calls": len(records.tutor_calls),
-                    "decisions": len(records.decisions),
-                    "short_window_signals": len(signals),
-                    "labeled_moments": len(all_labeled),
+                    **input_counts,
                     "samples_feeding_self_evolving_prompting": len(labeled),
                     "min_confidence": args.min_confidence,
                 },

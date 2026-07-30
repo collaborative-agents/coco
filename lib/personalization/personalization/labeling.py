@@ -8,6 +8,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from external_api.llm import prompt_to_text
@@ -35,6 +36,7 @@ _ORIGINAL_SUPPORT_STATUSES = {
     "discernment_opportunity",
 }
 _ORIGINAL_NO_SUPPORT_STATUSES = {"progress", "observing", "task_complete"}
+UNVERIFIED_NO_SUPPORT_SOURCE = "observer:no_support_unverified"
 
 _REVISION_SYSTEM_PROMPT = """\
 You correct observation annotations after user behavior has established that the
@@ -346,16 +348,87 @@ def label_records(
     records: SessionRecords,
     *,
     min_abs_score: float = 0.45,
+    include_unverified_no_support: bool = False,
+    unverified_no_support_confidence: float = 0.25,
+    require_saved_images: bool = False,
 ) -> list[LabeledMoment]:
+    if not 0.0 <= unverified_no_support_confidence <= 1.0:
+        raise ValueError("unverified_no_support_confidence must be between 0 and 1")
     moments = build_candidate_moments(records)
     short_signals = derive_short_window_signals(records)
     labeled: list[LabeledMoment] = []
     for moment in moments:
+        if require_saved_images:
+            saved_images = _existing_moment_images(moment)
+            if not saved_images:
+                continue
+            moment = replace(
+                moment,
+                image_paths=[],
+                retained_image_paths=saved_images,
+            )
         signals = label_signals_for_moment(moment, short_signals)
         label = label_moment(moment, signals, min_abs_score=min_abs_score)
+        if (
+            label is None
+            and include_unverified_no_support
+            and not any(
+                signal.polarity in {"positive", "negative"} for signal in signals
+            )
+            and original_need_support(moment.observer_output) == "no"
+        ):
+            label = _unverified_no_support_label(
+                moment,
+                confidence=unverified_no_support_confidence,
+            )
         if label is not None:
             labeled.append(label)
     return labeled
+
+
+def _existing_moment_images(moment: CandidateMoment) -> list[str]:
+    paths = [
+        Path(path).expanduser()
+        for path in [*moment.retained_image_paths, *moment.image_paths]
+    ]
+    output: list[str] = []
+    seen: set[Path] = set()
+    for path in paths:
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        output.append(str(path))
+    return output
+
+
+def _unverified_no_support_label(
+    moment: CandidateMoment,
+    *,
+    confidence: float,
+) -> LabeledMoment:
+    return LabeledMoment(
+        moment_id=moment.moment_id,
+        observation_id=moment.observation_id,
+        session_id=moment.session_id,
+        ts=moment.ts,
+        need_support="no",
+        label_confidence=round(confidence, 4),
+        label_sources=[UNVERIFIED_NO_SUPPORT_SOURCE],
+        label_rationale=(
+            "Weak negative from the observer's original no-support prediction; "
+            "no user correction or qualifying interaction signal was recorded."
+        ),
+        observer_input=moment.observer_input,
+        observer_output=moment.observer_output,
+        image_paths=moment.retained_image_paths or moment.image_paths,
+        target_observation=observer_observation(moment.observer_output),
+        target_user_intent=observer_user_intent(moment.observer_output),
+        target_suggestion_type="none",
+        target_suggestion="",
+    )
 
 
 def revise_label_disagreements(

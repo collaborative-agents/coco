@@ -13,7 +13,7 @@ from personalization.schemas import (
 )
 from personalization.signals.user_feedback import DEFAULT_SIGNAL_TTL_S
 
-FUTURE_BEHAVIOR_WINDOW_S = 5 * 60
+FUTURE_BEHAVIOR_WINDOW_S = 60
 
 _SEARCH_RE = re.compile(
     r"\b(search|searched|searching|google|bing|duckduckgo|query|look up|lookup)\b",

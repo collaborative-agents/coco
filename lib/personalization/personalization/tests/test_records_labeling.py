@@ -77,6 +77,9 @@ def test_load_records_and_label_feedback(tmp_path):
     assert len(labeled) == 1
     assert labeled[0].need_support == "yes"
     assert labeled[0].target_suggestion == "Help me automate the lookup."
+    image_required = label_records(records, require_saved_images=True)
+    assert len(image_required) == 1
+    assert image_required[0].image_paths == [str(retained_image)]
 
 
 def test_future_user_prompt_creates_positive_signal(tmp_path):
@@ -129,6 +132,58 @@ def test_future_user_prompt_creates_positive_signal(tmp_path):
     assert any(
         s.observation_id == "obs-1" and s.kind == "user_prompt_after" for s in signals
     )
+
+
+def test_user_prompt_after_default_window_is_one_minute(tmp_path):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": "at-boundary",
+                "session_id": "s1",
+                "ts": 10.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": "{}",
+            },
+            {
+                "observation_id": "outside-boundary",
+                "session_id": "s1",
+                "ts": 9.999,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": "{}",
+            },
+        ],
+    )
+    _append_jsonl(
+        session / "tutor_calls.jsonl",
+        [
+            {
+                "ts": 70.0,
+                "session_id": "s1",
+                "trigger": "user_prompt",
+                "scenario": "everyday_support",
+                "model": "fake",
+                "tutor_input": "input",
+                "tutor_output": "output",
+            }
+        ],
+    )
+
+    records = flatten_sessions(load_records(tmp_path))
+    prompted_observations = {
+        signal.observation_id
+        for signal in derive_future_behavior_signals(records)
+        if signal.kind == "user_prompt_after"
+    }
+
+    assert "at-boundary" in prompted_observations
+    assert "outside-boundary" not in prompted_observations
 
 
 def test_search_and_ai_tool_behavior_do_not_create_labels(tmp_path):
@@ -233,6 +288,26 @@ def test_judge_and_observer_status_do_not_create_label_signals(tmp_path):
 
     assert all(label_signals_for_moment(moment, []) == [] for moment in moments)
     assert label_records(records) == []
+    weak_negatives = label_records(
+        records,
+        include_unverified_no_support=True,
+        unverified_no_support_confidence=0.25,
+    )
+    assert len(weak_negatives) == 1
+    assert weak_negatives[0].observation_id == "obs-progress"
+    assert weak_negatives[0].need_support == "no"
+    assert weak_negatives[0].label_confidence == 0.25
+    assert weak_negatives[0].label_sources == ["observer:no_support_unverified"]
+    assert weak_negatives[0].target_suggestion_type == "none"
+    assert weak_negatives[0].target_suggestion == ""
+    assert (
+        label_records(
+            records,
+            include_unverified_no_support=True,
+            require_saved_images=True,
+        )
+        == []
+    )
 
 
 def test_disagreement_model_revises_observation_and_intent(tmp_path, monkeypatch):

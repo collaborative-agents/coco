@@ -15,6 +15,20 @@ coco-personalization label \
     --records-root ./records --out ./out/labeled_moments.jsonl
 ```
 
+A user prompt to Coco within 60 seconds after an observation contributes the
+positive `user_prompt_after` label signal.
+
+The CLI also includes uncorrected observer no-support predictions as weak
+negative examples by default. They are marked with
+`observer:no_support_unverified` at confidence `0.25`, never contain a
+suggestion, and remain distinguishable from user-corrected labels. Disable them
+with `--no-include-unverified-no-support` or adjust their confidence with
+`--unverified-no-support-confidence`.
+
+Label and dataset CLI exports require at least one image file to exist on disk
+by default. Paths to deleted rolling screenshots do not qualify. Override this
+only when needed with `--no-require-saved-images`.
+
 After inspecting those labels, revise labels whose polarity disagrees with the
 observer's original support prediction. Omit `--limit` to revise all eligible
 labels, or set it to process a bounded sample:
@@ -109,6 +123,19 @@ coco-personalization self-evolve \
     --evolution-model openai/gpt-4.1 \
     --epochs 10 --target-utility 0.7 --false-positive-cost 2 \
     --persona my_user --memory-root ./coco-memory
+```
+
+To evolve only from a reviewed subset, pass its `LabeledMoment` JSONL instead
+of raw records. Relative image paths are resolved against `--image-root`:
+
+```bash
+coco-personalization self-evolve \
+    --labeled ./privacy_safe_sharegpt/labeled_moments.jsonl \
+    --image-root ./privacy_safe_sharegpt \
+    --out-dir ./out/privacy_safe_memory \
+    --prediction-model nv_inference/nvidia/qwen/qwen3.5-35b-a3b \
+    --evolution-model nv_inference/nvidia/qwen/qwen3.5-35b-a3b \
+    --epochs 3
 ```
 
 `epochs` is the maximum number of passes. When `--target-utility` is set, the
