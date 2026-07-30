@@ -143,6 +143,39 @@ def test_chat_completion_forwards_extra_body(monkeypatch):
     }
 
 
+def test_chat_completion_forwards_native_tools(monkeypatch):
+    _fake_clock(monkeypatch, start_time=9.0, end_time=9.1)
+    captured = {}
+
+    def fake_completion(*args, **kwargs):
+        captured.update(kwargs)
+        return (
+            LiteLLMMessage(role="assistant"),
+            TokenUsage(prompt_tokens=1, completion_tokens=1),
+        )
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    monkeypatch.setattr(llm, "get_litellm_completion", fake_completion)
+
+    llm.chat_completion(
+        [{"role": "user", "content": "look this up"}],
+        model="openai/test-model",
+        tools=tools,
+        tool_choice="auto",
+    )
+
+    assert captured["tools"] == tools
+    assert captured["tool_choice"] == "auto"
+
+
 def test_prompt_to_text_with_metrics_propagates_tokens_and_latency(monkeypatch):
     _fake_clock(monkeypatch, start_time=42.0, end_time=42.333)
 

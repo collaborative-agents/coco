@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 
-from external_api.litellm_api import LiteLLMMessage, TextContent
+from external_api.litellm_api import (
+    FunctionCall,
+    LiteLLMMessage,
+    TextContent,
+    ToolCall,
+)
 from proactive_tutor.agents import tutor as tutor_module
 from proactive_tutor.agents.tutor import TutorAgent
 
@@ -46,6 +51,33 @@ def _memory_result() -> dict:
             }
         ],
     }
+
+
+def _tool_response(
+    name: str,
+    arguments: dict,
+    *,
+    call_id: str = "call-1",
+) -> LiteLLMMessage:
+    return LiteLLMMessage(
+        role="assistant",
+        tool_calls=[
+            ToolCall(
+                id=call_id,
+                function=FunctionCall(
+                    name=name,
+                    arguments=json.dumps(arguments),
+                ),
+            )
+        ],
+    )
+
+
+def _text_response(text: str) -> LiteLLMMessage:
+    return LiteLLMMessage(
+        role="assistant",
+        content=[TextContent(text=text)],
+    )
 
 
 def test_tool_call_uses_memory_mcp(monkeypatch) -> None:
@@ -160,22 +192,28 @@ def test_tool_rejects_non_mcp_tool_and_unexpected_arguments() -> None:
 def test_tutor_executes_memory_mcp_and_synthesizes_answer(monkeypatch) -> None:
     responses = iter(
         [
-            '<tool_call>{"name":"get_user_context","arguments":{"query":"roadmap","limit":3,"evidence_limit":1}}</tool_call>',
-            "<guidance>The roadmap review appears to be your current task.</guidance>",
+            _tool_response(
+                "get_user_context",
+                {"query": "roadmap", "limit": 3, "evidence_limit": 1},
+            ),
+            _text_response(
+                "<guidance>The roadmap review appears to be your current "
+                "task.</guidance>"
+            ),
         ]
     )
-    prompts: list[tuple[str, str]] = []
+    calls: list[list[dict]] = []
 
     async def fake_memory_mcp(**kwargs):
         assert kwargs["query"] == "roadmap"
         return _memory_result()
 
-    def fake_completion(model, system_prompt, user_prompt, **kwargs):
-        prompts.append((system_prompt, user_prompt))
-        return next(responses), _metrics(f"call-{len(prompts)}")
+    def fake_completion(messages, **kwargs):
+        calls.append([dict(message) for message in messages])
+        return next(responses), _metrics(f"call-{len(calls)}")
 
     monkeypatch.setattr(tutor_module, "call_get_user_context", fake_memory_mcp)
-    monkeypatch.setattr(tutor_module, "prompt_to_text_with_metrics", fake_completion)
+    monkeypatch.setattr(tutor_module, "chat_completion", fake_completion)
     monkeypatch.setattr(
         tutor_module,
         "_current_datetime_context",
@@ -186,20 +224,21 @@ def test_tutor_executes_memory_mcp_and_synthesizes_answer(monkeypatch) -> None:
     response, metrics = agent.tutor_with_metrics("current context")
 
     assert response.startswith("<guidance>The roadmap")
-    assert "get_user_context" in prompts[0][0]
-    assert "2026-07-23T12:34:56-07:00" in prompts[0][0]
-    assert "reviewing a roadmap in Notion" in prompts[1][1]
+    assert "get_user_context" in calls[0][0]["content"]
+    assert "2026-07-23T12:34:56-07:00" in calls[0][0]["content"]
+    assert calls[1][-1]["role"] == "tool"
+    assert "reviewing a roadmap in Notion" in calls[1][-1]["content"]
     assert metrics["total_tokens"] == 10
 
 
 def test_tutor_skips_tool_loop_when_disabled(monkeypatch) -> None:
-    calls: list[tuple[str, str]] = []
+    calls: list[list[dict]] = []
 
-    def fake_completion(model, system_prompt, user_prompt, **kwargs):
-        calls.append((system_prompt, user_prompt))
-        return "final guidance", _metrics("single-call")
+    def fake_completion(messages, **kwargs):
+        calls.append([dict(message) for message in messages])
+        return _text_response("final guidance"), _metrics("single-call")
 
-    monkeypatch.setattr(tutor_module, "prompt_to_text_with_metrics", fake_completion)
+    monkeypatch.setattr(tutor_module, "chat_completion", fake_completion)
     monkeypatch.setattr(
         tutor_module,
         "_current_datetime_context",
@@ -215,13 +254,11 @@ def test_tutor_skips_tool_loop_when_disabled(monkeypatch) -> None:
     response, metrics = agent.tutor_with_metrics("context")
 
     assert response == "final guidance"
-    assert calls == [
-        (
-            "base system\n\n"
-            "<current_datetime>2026-07-23T12:34:56-07:00</current_datetime>",
-            "context",
-        )
-    ]
+    assert len(calls) == 1
+    assert calls[0][0]["content"] == (
+        "base system\n\n<current_datetime>2026-07-23T12:34:56-07:00</current_datetime>"
+    )
+    assert calls[0][1] == {"role": "user", "content": "context"}
     assert metrics["call_id"] == "single-call"
 
 
@@ -255,8 +292,11 @@ def test_chat_memory_tool_loop_keeps_exchange_as_separate_messages(
 ) -> None:
     responses = iter(
         [
-            '<tool_call>{"name":"get_user_context","arguments":{"query":"roadmap","limit":3,"evidence_limit":1}}</tool_call>',
-            "The roadmap review appears to be your current task.",
+            _tool_response(
+                "get_user_context",
+                {"query": "roadmap", "limit": 3, "evidence_limit": 1},
+            ),
+            _text_response("The roadmap review appears to be your current task."),
         ]
     )
     calls: list[list[dict]] = []
@@ -266,12 +306,7 @@ def test_chat_memory_tool_loop_keeps_exchange_as_separate_messages(
 
     def fake_chat(messages, **kwargs):
         calls.append([dict(message) for message in messages])
-        return (
-            LiteLLMMessage(
-                role="assistant", content=[TextContent(text=next(responses))]
-            ),
-            _metrics(f"chat-{len(calls)}"),
-        )
+        return next(responses), _metrics(f"chat-{len(calls)}")
 
     monkeypatch.setattr(tutor_module, "call_get_user_context", fake_memory_mcp)
     monkeypatch.setattr(tutor_module, "chat_completion", fake_chat)
@@ -287,18 +322,13 @@ def test_chat_memory_tool_loop_keeps_exchange_as_separate_messages(
     )
 
     assert response.startswith("The roadmap")
-    assert [message["role"] for message in calls[0]] == [
-        "system",
-        "system",
-        "user",
-    ]
-    assert "2026-07-23T12:34:56-07:00" in calls[0][1]["content"]
+    assert [message["role"] for message in calls[0]] == ["system", "user"]
+    assert "2026-07-23T12:34:56-07:00" in calls[0][0]["content"]
     assert [message["role"] for message in calls[1]] == [
-        "system",
         "system",
         "user",
         "assistant",
-        "user",
+        "tool",
     ]
     assert "reviewing a roadmap in Notion" in calls[1][-1]["content"]
     assert metrics["tool_calls"][0]["name"] == "get_user_context"
@@ -307,12 +337,17 @@ def test_chat_memory_tool_loop_keeps_exchange_as_separate_messages(
 
 def test_chat_streams_answer_and_emits_memory_tool_events(monkeypatch) -> None:
     responses = [
-        [
-            "<tool",
-            '_call>{"name":"get_user_context","arguments":',
-            '{"query":"roadmap","limit":3,"evidence_limit":1}}</tool_call>',
-        ],
-        ["The roadmap ", "is the current task."],
+        (
+            _tool_response(
+                "get_user_context",
+                {"query": "roadmap", "limit": 3, "evidence_limit": 1},
+            ),
+            [],
+        ),
+        (
+            _text_response("The roadmap is the current task."),
+            ["The roadmap ", "is the current task."],
+        ),
     ]
     call_index = 0
 
@@ -321,18 +356,13 @@ def test_chat_streams_answer_and_emits_memory_tool_events(monkeypatch) -> None:
 
     def fake_chat(messages, **kwargs):
         nonlocal call_index
-        chunks = responses[call_index]
+        response, chunks = responses[call_index]
         call_index += 1
         on_chunk = kwargs.get("on_chunk")
         if on_chunk is not None:
             for chunk in chunks:
                 on_chunk(chunk)
-        return (
-            LiteLLMMessage(
-                role="assistant", content=[TextContent(text="".join(chunks))]
-            ),
-            _metrics(f"chat-{call_index}"),
-        )
+        return response, _metrics(f"chat-{call_index}")
 
     monkeypatch.setattr(tutor_module, "call_get_user_context", fake_memory_mcp)
     monkeypatch.setattr(tutor_module, "chat_completion", fake_chat)
@@ -355,26 +385,25 @@ def test_chat_streams_answer_and_emits_memory_tool_events(monkeypatch) -> None:
         "".join(event["text"] for event in events if event["type"] == "text_delta")
         == response
     )
-    assert all("<tool_call>" not in str(event) for event in events)
+    assert all("tool_call" not in event.get("text", "") for event in events)
 
 
 def test_chat_allows_more_than_three_tool_calls(monkeypatch) -> None:
     tool_responses = [
-        "<tool_call>"
-        + json.dumps(
+        _tool_response(
+            "get_user_context",
             {
-                "name": "get_user_context",
-                "arguments": {
-                    "query": f"context {index}",
-                    "limit": 1,
-                    "evidence_limit": 0,
-                },
-            }
+                "query": f"context {index}",
+                "limit": 1,
+                "evidence_limit": 0,
+            },
+            call_id=f"call-{index}",
         )
-        + "</tool_call>"
         for index in range(4)
     ]
-    responses = iter([*tool_responses, "Final answer after four retrievals."])
+    responses = iter(
+        [*tool_responses, _text_response("Final answer after four retrievals.")]
+    )
     tool_queries: list[str] = []
 
     async def fake_memory_mcp(**kwargs):
@@ -382,13 +411,7 @@ def test_chat_allows_more_than_three_tool_calls(monkeypatch) -> None:
         return {"count": 0, "results": []}
 
     def fake_chat(messages, **kwargs):
-        return (
-            LiteLLMMessage(
-                role="assistant",
-                content=[TextContent(text=next(responses))],
-            ),
-            _metrics(f"chat-{len(tool_queries)}"),
-        )
+        return next(responses), _metrics(f"chat-{len(tool_queries)}")
 
     monkeypatch.setattr(tutor_module, "call_get_user_context", fake_memory_mcp)
     monkeypatch.setattr(tutor_module, "chat_completion", fake_chat)

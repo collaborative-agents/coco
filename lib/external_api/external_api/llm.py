@@ -43,10 +43,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from external_api.litellm_api import (
+    FunctionCall,
     ImageURL,
     ImageURLContent,
     LiteLLMMessage,
     TextContent,
+    ToolCall,
     get_litellm_completion,
 )
 from external_api.lm_studio_api import (
@@ -109,6 +111,8 @@ TINFOIL_PREFIX = "tinfoil/"
 def _provider_for_model(model: str) -> str:
     if model.startswith(LM_STUDIO_PREFIX):
         return "lm_studio"
+    if model.startswith(NV_INFERENCE_PREFIX):
+        return "nv_inference"
     if model.startswith(OA_PREFIX):
         return "oa"
     if model.startswith(TINFOIL_PREFIX):
@@ -241,16 +245,21 @@ def _lms_to_litellm(output: LMStudioMessage) -> LiteLLMMessage:
 
 def _to_nv_inference_messages(
     messages: Sequence[LiteLLMMessage | dict],
-) -> list[NVInferenceMessage]:
-    out: list[NVInferenceMessage] = []
+) -> list[NVInferenceMessage | dict]:
+    out: list[NVInferenceMessage | dict] = []
     for m in messages:
         if isinstance(m, LiteLLMMessage):
             role = m.role
             content: Any = m.content
+            message_dict = m.model_dump()
         else:
             role = m["role"]
-            content = m["content"]
+            content = m.get("content")
+            message_dict = dict(m)
 
+        if role == "tool" or message_dict.get("tool_calls"):
+            out.append(message_dict)
+            continue
         if role not in ("system", "user", "assistant"):
             raise ValueError(f"Unsupported role for NV InferenceHub: {role}")
 
@@ -279,7 +288,21 @@ def _nv_to_litellm(output: NVInferenceMessage) -> LiteLLMMessage:
             converted.append(TextContent(text=block.text))
     if not converted:
         converted.append(TextContent(text=""))
-    return LiteLLMMessage(role=output.role, content=converted)
+    return LiteLLMMessage(
+        role=output.role,
+        content=converted,
+        tool_calls=[
+            ToolCall(
+                id=call.id,
+                function=FunctionCall(
+                    name=call.function.name,
+                    arguments=call.function.arguments,
+                ),
+            )
+            for call in output.tool_calls
+        ],
+        tool_call_id=output.tool_call_id,
+    )
 
 
 def _to_oa_messages(
@@ -380,10 +403,14 @@ def _chat_completion_provider(
     | None = None,
     extra_body: dict[str, Any] | None = None,
     on_chunk: Callable[[str], None] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> tuple[LiteLLMMessage, TokenUsage]:
     """Run a completion, dispatching by ``model`` prefix (LM Studio, NV, OA,
     Tinfoil, LiteLLM)."""
     if model.startswith(LM_STUDIO_PREFIX):
+        if tools:
+            raise ValueError("native function calling is not supported by LM Studio")
         lms_model = model[len(LM_STUDIO_PREFIX) :]
         host = os.environ.get("LM_STUDIO_HOST", "localhost:1234")
         output, usage = get_lm_studio_completion(
@@ -415,6 +442,8 @@ def _chat_completion_provider(
             top_p=top_p,
             stream=on_chunk is not None,
             on_chunk=on_chunk,
+            tools=tools,
+            tool_choice=tool_choice,
             **nv_kwargs,
         )
         return _nv_to_litellm(output), usage
@@ -438,6 +467,8 @@ def _chat_completion_provider(
         return _nv_to_litellm(output), usage
 
     if model.startswith(OA_PREFIX):
+        if tools:
+            raise ValueError("native function calling is not supported by OA")
         oa_model = model[len(OA_PREFIX) :]
         # Only forward the endpoint / destination overrides when their env vars
         # are set so OA's own defaults apply otherwise.
@@ -462,6 +493,8 @@ def _chat_completion_provider(
         return converted, usage
 
     if model.startswith(TINFOIL_PREFIX):
+        if tools:
+            raise ValueError("native function calling is not supported by Tinfoil")
         tinfoil_model = model[len(TINFOIL_PREFIX) :]
         output, usage = get_tinfoil_completion(
             _to_tinfoil_messages(messages),
@@ -485,6 +518,8 @@ def _chat_completion_provider(
         extra_body=extra_body,
         stream=on_chunk is not None,
         on_chunk=on_chunk,
+        tools=tools,
+        tool_choice=tool_choice,
     )
 
 
@@ -499,6 +534,8 @@ def chat_completion(
     extra_body: dict[str, Any] | None = None,
     operation: str | None = None,
     on_chunk: Callable[[str], None] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> tuple[LiteLLMMessage, LLMCallMetrics]:
     """Run a completion and return a normalized response plus call metrics."""
     provider = _provider_for_model(model)
@@ -515,6 +552,8 @@ def chat_completion(
             reasoning_effort=reasoning_effort,
             extra_body=extra_body,
             on_chunk=on_chunk,
+            tools=tools,
+            tool_choice=tool_choice,
         )
     except Exception:
         # Preserve existing failure semantics. Callers only receive metrics for

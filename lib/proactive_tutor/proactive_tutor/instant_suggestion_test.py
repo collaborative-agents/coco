@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import json
+
+from external_api.litellm_api import (
+    FunctionCall,
+    LiteLLMMessage,
+    TextContent,
+    ToolCall,
+)
 from proactive_tutor import instant_suggestion
 from proactive_tutor.agents import tutor as tutor_module
 
@@ -29,19 +37,40 @@ def test_instant_suggestion_can_retrieve_memory_before_generating(
 ) -> None:
     responses = iter(
         [
-            (
-                '<tool_call>{"name":"get_user_context","arguments":'
-                '{"query":"status update tone","limit":3,"evidence_limit":1}}'
-                "</tool_call>"
+            LiteLLMMessage(
+                role="assistant",
+                tool_calls=[
+                    ToolCall(
+                        id="call-1",
+                        function=FunctionCall(
+                            name="get_user_context",
+                            arguments=json.dumps(
+                                {
+                                    "query": "status update tone",
+                                    "limit": 3,
+                                    "evidence_limit": 1,
+                                }
+                            ),
+                        ),
+                    )
+                ],
             ),
-            (
-                "<suggestion><kind>content</kind><title>Send status update</title>"
-                "<body>Quick update: the launch checklist is on track.</body>"
-                "</suggestion>"
+            LiteLLMMessage(
+                role="assistant",
+                content=[
+                    TextContent(
+                        text=(
+                            "<suggestion><kind>content</kind>"
+                            "<title>Send status update</title>"
+                            "<body>Quick update: the launch checklist is on "
+                            "track.</body></suggestion>"
+                        )
+                    )
+                ],
             ),
         ]
     )
-    prompts: list[tuple[str, str, str]] = []
+    calls: list[tuple[list[dict], str]] = []
 
     async def fake_memory_mcp(**kwargs):
         assert kwargs["query"] == "status update tone"
@@ -54,14 +83,14 @@ def test_instant_suggestion_can_retrieve_memory_before_generating(
             ],
         }
 
-    def fake_completion(model, system_prompt, user_prompt, **kwargs):
-        prompts.append((system_prompt, user_prompt, kwargs["operation"]))
-        return next(responses), _metrics(f"instant-{len(prompts)}")
+    def fake_completion(messages, **kwargs):
+        calls.append(([dict(message) for message in messages], kwargs["operation"]))
+        return next(responses), _metrics(f"instant-{len(calls)}")
 
     monkeypatch.setattr(tutor_module, "call_get_user_context", fake_memory_mcp)
     monkeypatch.setattr(
         tutor_module,
-        "prompt_to_text_with_metrics",
+        "chat_completion",
         fake_completion,
     )
 
@@ -75,10 +104,10 @@ def test_instant_suggestion_can_retrieve_memory_before_generating(
 
     assert result["kind"] == "content"
     assert result["copyText"] == "Quick update: the launch checklist is on track."
-    assert "get_user_context" in prompts[0][0]
-    assert "observe_screen" not in prompts[0][0]
-    assert "concise, direct status updates" in prompts[1][1]
-    assert [operation for _, _, operation in prompts] == [
+    assert "get_user_context" in calls[0][0][0]["content"]
+    assert "observe_screen" not in calls[0][0][0]["content"]
+    assert "concise, direct status updates" in calls[1][0][-1]["content"]
+    assert [operation for _, operation in calls] == [
         "instant_suggestion",
         "instant_suggestion",
     ]
@@ -90,17 +119,27 @@ def test_instant_suggestion_skips_memory_when_not_needed(monkeypatch) -> None:
     def fail_if_called(**kwargs):
         raise AssertionError(f"memory MCP should not run: {kwargs}")
 
-    def fake_completion(model, system_prompt, user_prompt, **kwargs):
+    def fake_completion(messages, **kwargs):
         return (
-            "<suggestion><kind>content</kind><title>Reply briefly</title>"
-            "<body>Sounds good—thank you!</body></suggestion>",
+            LiteLLMMessage(
+                role="assistant",
+                content=[
+                    TextContent(
+                        text=(
+                            "<suggestion><kind>content</kind>"
+                            "<title>Reply briefly</title>"
+                            "<body>Sounds good—thank you!</body></suggestion>"
+                        )
+                    )
+                ],
+            ),
             _metrics("instant-direct"),
         )
 
     monkeypatch.setattr(tutor_module, "call_get_user_context", fail_if_called)
     monkeypatch.setattr(
         tutor_module,
-        "prompt_to_text_with_metrics",
+        "chat_completion",
         fake_completion,
     )
 
