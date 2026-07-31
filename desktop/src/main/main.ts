@@ -109,6 +109,7 @@ let avatarWindow: BrowserWindow | null = null;
 let chatWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
+let latestHiddenSuggestionObservationId: string | undefined;
 let onboardingWindow: BrowserWindow | null = null;
 let sessionSetupWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -509,7 +510,11 @@ const showNotification = (payload: {
   observationId?: string;
   status?: string;
   rawObservation?: string;
+  suggestion?: InstantSuggestion;
 }) => {
+  if (payload.notifType !== 'proactive-suggestion') {
+    latestHiddenSuggestionObservationId = undefined;
+  }
   if (
     notificationHovered &&
     notificationWindow &&
@@ -980,9 +985,11 @@ function precomputeSuggestion(event: {
   task_label?: string;
   scenario?: string;
   image_paths?: string[];
-}) {
+}): Promise<InstantSuggestion | null> | undefined {
   const id = event.observation_id;
-  if (!id || suggestionCache.has(id)) return;
+  if (!id) return undefined;
+  const cached = suggestionCache.get(id);
+  if (cached) return cached.promise;
   pruneSuggestionCache();
 
   const { aiTools, scenario } = readProfile();
@@ -1012,6 +1019,7 @@ function precomputeSuggestion(event: {
       return null;
     });
   suggestionCache.set(id, { ts: Date.now(), promise });
+  return promise;
 }
 
 // Renderer asks for the precomputed suggestion when the user clicks "Help me".
@@ -1851,29 +1859,49 @@ const startObserver = () => {
       // regardless of session state — the renderer reveals it instantly either
       // way, falling back to the chat flow only on a cache miss.
       if (status && PRECOMPUTE_STATUSES.has(status)) {
-        precomputeSuggestion(event);
+        const suggestionPromise = precomputeSuggestion(event);
         if (hideAvatarMode && event.observation) {
           const rawObservation = cleanObservation(event.observation);
-          showNotification({
-            message: rawObservation,
-            actionLabel: 'Help me with this',
-            notifType: 'proactive-suggestion',
-            observationId: event.observation_id,
-            status,
-            rawObservation,
-          });
-          const sensingPort = process.env.SENSING_PORT || '8080';
-          axios.post(
-            `http://127.0.0.1:${sensingPort}/feedback`,
-            {
-              kind: 'shown',
-              surface: 'notification',
-              observation_id: event.observation_id ?? null,
+          latestHiddenSuggestionObservationId = event.observation_id;
+          void suggestionPromise?.then((value) => {
+            // Hidden-avatar notifications preview the generated suggestion,
+            // rather than the observer diagnosis that led to it.
+            if (
+              !value ||
+              !hideAvatarMode ||
+              latestHiddenSuggestionObservationId !== event.observation_id
+            ) {
+              return;
+            }
+            const suggestion: InstantSuggestion =
+              value.kind === 'delegate'
+                ? {
+                    ...value,
+                    availableTools: buildAvailableTools(value.targetTool),
+                  }
+                : value;
+            showNotification({
+              message: suggestion.title,
+              actionLabel: 'Reveal full suggestion',
+              notifType: 'proactive-suggestion',
+              observationId: event.observation_id,
               status,
-            },
-            { timeout: 3000 },
-          ).catch((err) => {
-            log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+              rawObservation,
+              suggestion,
+            });
+            const sensingPort = process.env.SENSING_PORT || '8080';
+            axios.post(
+              `http://127.0.0.1:${sensingPort}/feedback`,
+              {
+                kind: 'shown',
+                surface: 'notification',
+                observation_id: event.observation_id ?? null,
+                status,
+              },
+              { timeout: 3000 },
+            ).catch((err) => {
+              log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+            });
           });
         }
       }

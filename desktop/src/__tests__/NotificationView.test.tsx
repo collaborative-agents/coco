@@ -233,6 +233,37 @@ describe('instant suggestion actions', () => {
     copyText: 'Reduce the input before debugging the full workflow.',
   };
 
+  it('previews only the title before the full suggestion is revealed', () => {
+    const onReveal = jest.fn();
+    const { container } = render(
+      <NotificationBubble
+        message={contentSuggestion.title}
+        actionLabel="Reveal full suggestion"
+        notifType="proactive-suggestion"
+        suggestion={contentSuggestion}
+        onAction={onReveal}
+        adjustable
+      />,
+    );
+
+    expect(screen.getByText(contentSuggestion.title)).toBeInTheDocument();
+    expect(screen.getByText('Suggestion')).toBeInTheDocument();
+    expect(
+      container.querySelector('.toast-card--suggestion-preview'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Expand notification' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(contentSuggestion.body!)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Chat about it' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reveal full suggestion →' }),
+    );
+    expect(onReveal).toHaveBeenCalledTimes(1);
+  });
+
   it('offers to continue a content suggestion in chat', () => {
     const onChat = jest.fn();
     render(

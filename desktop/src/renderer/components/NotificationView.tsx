@@ -201,6 +201,10 @@ export function NotificationBubble({
 }) {
   const isPrompt =
     notifType === 'session-start-prompt' || notifType === 'session-end-prompt';
+  const isSuggestionPreview =
+    notifType === 'proactive-suggestion' && suggestion != null;
+  const isRevealedSuggestion =
+    notifType === 'instant-suggestion' && suggestion != null;
 
   // For default pause-event guidance, truncate to a short preview so the
   // card doesn't overflow with a multi-paragraph response.
@@ -212,7 +216,9 @@ export function NotificationBubble({
 
   return (
     <div
-      className={`toast-card${isPrompt ? ' toast-card--compact' : ''}`}
+      className={`toast-card${isPrompt ? ' toast-card--compact' : ''}${
+        isSuggestionPreview ? ' toast-card--suggestion-preview' : ''
+      }`}
       onMouseEnter={() => onHoverChange?.(true)}
       onMouseLeave={() => onHoverChange?.(false)}
     >
@@ -222,7 +228,7 @@ export function NotificationBubble({
           <span className="toast-brand-name">Coco</span>
         </div>
         <div className="toast-header-actions">
-          {adjustable && (
+          {adjustable && !isSuggestionPreview && (
             <button
               type="button"
               className="toast-window-control"
@@ -247,6 +253,12 @@ export function NotificationBubble({
       </div>
 
       <div className="toast-body">
+        {isSuggestionPreview && (
+          <div className="toast-suggestion-label">
+            <span aria-hidden="true">✦</span>
+            <span>Suggestion</span>
+          </div>
+        )}
         <div className="toast-message toast-markdown">
           <Markdown
             remarkPlugins={[remarkGfm, remarkMath]}
@@ -272,7 +284,7 @@ export function NotificationBubble({
             </button>
           )}
         </div>
-      ) : suggestion?.kind === 'delegate' ? (
+      ) : isRevealedSuggestion && suggestion.kind === 'delegate' ? (
         <div className="toast-footer toast-tool-actions">
           <div className="toast-rating-actions">
             {(['up', 'down'] as const).map((rating) => (
@@ -319,7 +331,7 @@ export function NotificationBubble({
       ) : (
         actionLabel && (
           <div className="toast-footer">
-            {suggestion && (
+            {isRevealedSuggestion && (
               <div className="toast-rating-actions">
                 {(['up', 'down'] as const).map((rating) => (
                   <button
@@ -339,7 +351,7 @@ export function NotificationBubble({
                 ))}
               </div>
             )}
-            {suggestion && (
+            {isRevealedSuggestion && (
               <button
                 type="button"
                 className="toast-action toast-chat-action"
@@ -389,8 +401,10 @@ export default function NotificationView() {
           observationId: incoming?.observationId,
           status: incoming?.status,
           rawObservation: incoming?.rawObservation,
+          suggestion: incoming?.suggestion,
           adjustable: incoming?.adjustable === true,
         });
+        setLoadingSuggestion(false);
         setSuggestionRating(null);
         setCopyConfirmed(false);
         setExpanded(false);
@@ -446,13 +460,19 @@ export default function NotificationView() {
     }
     if (payload.notifType === 'proactive-suggestion') {
       if (loadingSuggestion) return;
-      setLoadingSuggestion(true);
-      const result = await ipc?.invoke('get-instant-suggestion', {
-        observationId: payload.observationId,
-      });
-      setLoadingSuggestion(false);
-      if (result?.status === 'ready' && result.suggestion) {
-        const suggestion = result.suggestion as InstantSuggestion;
+      let suggestion = payload.suggestion;
+      if (!suggestion) {
+        setLoadingSuggestion(true);
+        const result = await ipc?.invoke('get-instant-suggestion', {
+          observationId: payload.observationId,
+        });
+        setLoadingSuggestion(false);
+        suggestion =
+          result?.status === 'ready'
+            ? (result.suggestion as InstantSuggestion)
+            : undefined;
+      }
+      if (suggestion) {
         const detail =
           suggestion.kind === 'delegate'
             ? suggestion.prompt
@@ -509,21 +529,15 @@ export default function NotificationView() {
     window.close();
   };
 
-  const rateUnengagedSuggestionDown = () => {
+  const recordUnengagedDismissal = () => {
     if (
       payload.notifType !== 'proactive-suggestion' ||
       !payload.observationId
     ) {
       return;
     }
-    const ratedAt = Math.floor(Date.now() / 1000);
-    ipc?.sendMessage('activity-support-rated', {
-      observationId: payload.observationId,
-      rating: 'down',
-      ratedAt,
-    });
     ipc?.sendMessage('training-feedback', {
-      kind: 'thumbs_down',
+      kind: 'dismiss',
       surface: 'notification',
       observation_id: payload.observationId,
       status: payload.status,
@@ -532,7 +546,7 @@ export default function NotificationView() {
   };
 
   const handleDismiss = () => {
-    rateUnengagedSuggestionDown();
+    recordUnengagedDismissal();
     setVisible(false);
     window.close();
   };
