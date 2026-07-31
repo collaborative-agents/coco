@@ -7,7 +7,7 @@ through the official ``openai`` Python SDK pointed at the InferenceHub base.
 import logging
 import os
 from collections.abc import Callable, Sequence
-from typing import Literal
+from typing import Any, Literal
 
 from external_api.types import TokenUsage
 from openai import OpenAI
@@ -39,9 +39,22 @@ class ImageURLContent(BaseModel):
 ContentBlock = TextContent | ImageURLContent
 
 
+class FunctionCall(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: Literal["function"] = "function"
+    function: FunctionCall
+
+
 class NVInferenceMessage(BaseModel):
-    role: Literal["user", "assistant", "system"]
-    content: list[ContentBlock]
+    role: Literal["user", "assistant", "system", "tool"]
+    content: list[ContentBlock] = Field(default_factory=list)
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
 
 
 def _normalize_message_content(msg: dict) -> dict:
@@ -86,6 +99,8 @@ def get_nv_inference_completion(
     top_p: float | None = None,
     stream: bool = False,
     on_chunk: Callable[[str], None] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> tuple[NVInferenceMessage, TokenUsage]:
     """Get a completion from a model hosted by NVIDIA InferenceHub.
 
@@ -102,7 +117,11 @@ def get_nv_inference_completion(
 
     payload_messages = [
         _normalize_message_content(
-            message.model_dump(by_alias=True)
+            message.model_dump(
+                by_alias=True,
+                exclude_none=True,
+                exclude={"tool_calls"} if not message.tool_calls else None,
+            )
             if isinstance(message, NVInferenceMessage)
             else message
         )
@@ -122,11 +141,16 @@ def get_nv_inference_completion(
         kwargs["max_tokens"] = max_tokens
     if top_p is not None:
         kwargs["top_p"] = top_p
+    if tools is not None:
+        kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
 
     if stream:
         # Ask for usage stats on the final chunk (OpenAI streaming extension).
         kwargs["stream_options"] = {"include_usage": True}
         text_parts: list[str] = []
+        tool_call_parts: dict[int, dict[str, str]] = {}
         usage_obj = None
         for chunk in client.chat.completions.create(**kwargs):
             if chunk.usage is not None:
@@ -138,15 +162,49 @@ def get_nv_inference_completion(
                 text_parts.append(delta)
                 if on_chunk is not None:
                     on_chunk(delta)
+            for call in chunk.choices[0].delta.tool_calls or []:
+                part = tool_call_parts.setdefault(
+                    call.index,
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                if call.id:
+                    part["id"] = call.id
+                if call.function is not None:
+                    if call.function.name:
+                        part["name"] += call.function.name
+                    if call.function.arguments:
+                        part["arguments"] += call.function.arguments
         content = "".join(text_parts)
+        tool_calls = [
+            ToolCall(
+                id=part["id"],
+                function=FunctionCall(
+                    name=part["name"],
+                    arguments=part["arguments"],
+                ),
+            )
+            for _, part in sorted(tool_call_parts.items())
+        ]
     else:
         response = client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content or ""
+        response_message = response.choices[0].message
+        content = response_message.content or ""
+        tool_calls = [
+            ToolCall(
+                id=call.id,
+                function=FunctionCall(
+                    name=call.function.name,
+                    arguments=call.function.arguments,
+                ),
+            )
+            for call in (response_message.tool_calls or [])
+        ]
         usage_obj = response.usage
 
     output = NVInferenceMessage(
         role="assistant",
         content=[TextContent(text=content)],
+        tool_calls=tool_calls,
     )
     usage = TokenUsage(
         prompt_tokens=getattr(usage_obj, "prompt_tokens", 0) or 0,

@@ -6,7 +6,9 @@ uv run pytest lib/external_api/external_api/nv_inference_api_test.py -v
 """
 
 import os
+from types import SimpleNamespace
 
+import external_api.nv_inference_api as nv_inference_api
 import pytest
 from dotenv import load_dotenv
 from external_api.nv_inference_api import (
@@ -94,6 +96,92 @@ def test_dict_messages(api_key):
     )
 
     assert "hello" in _response_text(output).lower()
+
+
+def test_native_function_call(api_key):
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_user_context",
+                "description": "Retrieve relevant user context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+
+    output, _ = get_nv_inference_completion(
+        [{"role": "user", "content": "Look up my current project."}],
+        model=MODEL,
+        api_key=api_key,
+        max_tokens=128,
+        tools=tools,
+        tool_choice={
+            "type": "function",
+            "function": {"name": "get_user_context"},
+        },
+    )
+
+    assert len(output.tool_calls) == 1
+    assert output.tool_calls[0].function.name == "get_user_context"
+
+
+def test_native_function_call_arguments_are_forwarded(monkeypatch):
+    captured = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    id="call-1",
+                                    function=SimpleNamespace(
+                                        name="get_user_context",
+                                        arguments='{"query":"current project"}',
+                                    ),
+                                )
+                            ],
+                        )
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=4),
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(nv_inference_api, "OpenAI", FakeOpenAI)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_user_context",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    output, _ = get_nv_inference_completion(
+        [{"role": "user", "content": "Look up my project."}],
+        model=MODEL,
+        api_key="test-key",
+        tools=tools,
+        tool_choice="auto",
+    )
+
+    assert captured["tools"] == tools
+    assert captured["tool_choice"] == "auto"
+    assert output.tool_calls[0].function.name == "get_user_context"
 
 
 def test_image_query(api_key):

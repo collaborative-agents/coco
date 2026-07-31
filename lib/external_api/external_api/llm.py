@@ -448,24 +448,6 @@ def _chat_completion_provider(
         )
         return _nv_to_litellm(output), usage
 
-    if model.startswith(NV_INFERENCE_PREFIX):
-        nv_model = model[len(NV_INFERENCE_PREFIX) :]
-        # Only override the endpoint when the env var is set so the API's own
-        # InferenceHub default applies otherwise.
-        nv_kwargs: dict = {}
-        base_url = os.environ.get("NV_INFERENCE_BASE_URL")
-        if base_url:
-            nv_kwargs["base_url"] = base_url
-        output, usage = get_nv_inference_completion(
-            _to_nv_inference_messages(messages),
-            model=nv_model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            **nv_kwargs,
-        )
-        return _nv_to_litellm(output), usage
-
     if model.startswith(OA_PREFIX):
         if tools:
             raise ValueError("native function calling is not supported by OA")
