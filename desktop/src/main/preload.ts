@@ -12,6 +12,7 @@ export type Channels =
   | 'close-main-window'
   | 'notification'
   | 'notification-hover-state'
+  | 'set-notification-expanded'
   | 'observation-update'
   | 'shell-show-item-in-finder'
   | 'download-benchmark-file'

@@ -951,7 +951,7 @@ body,
 }
 
 .toast-card {
-  width: 344px;
+  width: calc(100% - 16px);
   /* Fill the notification BrowserWindow's vertical space so the footer
      button stays pinned at the bottom regardless of body content height. */
   height: 100%;
@@ -984,6 +984,8 @@ body,
   justify-content: space-between;
   padding: 10px 12px 8px 14px;
   border-bottom: 1px solid #f1f3f4;
+  cursor: move;
+  -webkit-app-region: drag;
 }
 
 .toast-brand {
@@ -1009,7 +1011,15 @@ body,
   text-transform: uppercase;
 }
 
+.toast-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
 /* Close (×) button – fully inside the card */
+.toast-window-control,
 .toast-close {
   width: 22px;
   height: 22px;
@@ -1028,6 +1038,7 @@ body,
   transition: background 0.12s ease;
 }
 
+.toast-window-control:hover,
 .toast-close:hover {
   background: #e2e4ea;
   color: #374151;

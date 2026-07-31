@@ -24,6 +24,7 @@ interface NotificationPayload {
   status?: string;
   rawObservation?: string;
   suggestion?: InstantSuggestion;
+  adjustable?: boolean;
 }
 
 // ── Tutor JSON parsing ────────────────────────────────────────────────────────
@@ -148,29 +149,10 @@ function truncateForPreview(text: string): string {
 }
 
 // ── Markdown renderer config ──────────────────────────────────────────────────
-// Pythony languages we treat as "visualization code" and never render.
-// Python is the only one used by the tutor today, but Plotly/JSON specs
-// might appear later — keep the list narrow and explicit.
-const VIZ_CODE_LANGS = new Set(['python', 'py']);
-
 // Custom react-markdown renderers:
-//  - <code>: drop fenced visualization code blocks (per the user request);
-//    keep inline code and short non-python fences.
-//  - <a>:    open external links in the system browser via shell, not
+//  - <a>: open external links in the system browser via shell, not
 //    inside this transparent BrowserWindow.
 const markdownComponents: React.ComponentProps<typeof Markdown>['components'] = {
-  code({ inline, className, children, ...props }: any) {
-    const lang = /language-(\w+)/.exec(className || '')?.[1]?.toLowerCase();
-    if (!inline && lang && VIZ_CODE_LANGS.has(lang)) {
-      // Hide the visualization code block entirely — the toast is for guidance.
-      return null;
-    }
-    return (
-      <code className={className} {...props}>
-        {children}
-      </code>
-    );
-  },
   a({ href, children, ...props }: any) {
     return (
       <a href={href} target="_blank" rel="noreferrer" {...props}>
@@ -195,6 +177,9 @@ export function NotificationBubble({
   suggestionRating,
   onRateSuggestion,
   copyConfirmed,
+  adjustable,
+  expanded,
+  onToggleExpanded,
 }: {
   message: string;
   actionLabel?: string;
@@ -210,6 +195,9 @@ export function NotificationBubble({
   suggestionRating?: 'up' | 'down' | null;
   onRateSuggestion?: (rating: 'up' | 'down') => void;
   copyConfirmed?: boolean;
+  adjustable?: boolean;
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
 }) {
   const isPrompt =
     notifType === 'session-start-prompt' || notifType === 'session-end-prompt';
@@ -218,7 +206,7 @@ export function NotificationBubble({
   // card doesn't overflow with a multi-paragraph response.
   const resolvedMessage = resolveMessage(message);
   const displayMessage =
-    isPrompt || notifType === 'instant-suggestion'
+    expanded || isPrompt || notifType === 'instant-suggestion'
       ? resolvedMessage
       : truncateForPreview(resolvedMessage);
 
@@ -233,14 +221,29 @@ export function NotificationBubble({
           <span className="toast-brand-dot" />
           <span className="toast-brand-name">Coco</span>
         </div>
-        <button
-          type="button"
-          className="toast-close"
-          onClick={onDismiss}
-          aria-label="Dismiss"
-        >
-          ×
-        </button>
+        <div className="toast-header-actions">
+          {adjustable && (
+            <button
+              type="button"
+              className="toast-window-control"
+              onClick={onToggleExpanded}
+              aria-label={
+                expanded ? 'Collapse notification' : 'Expand notification'
+              }
+              title={expanded ? 'Collapse' : 'Expand'}
+            >
+              {expanded ? '↙' : '↗'}
+            </button>
+          )}
+          <button
+            type="button"
+            className="toast-close"
+            onClick={onDismiss}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <div className="toast-body">
@@ -363,6 +366,7 @@ export default function NotificationView() {
     'up' | 'down' | null
   >(null);
   const [copyConfirmed, setCopyConfirmed] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -385,9 +389,11 @@ export default function NotificationView() {
           observationId: incoming?.observationId,
           status: incoming?.status,
           rawObservation: incoming?.rawObservation,
+          adjustable: incoming?.adjustable === true,
         });
         setSuggestionRating(null);
         setCopyConfirmed(false);
+        setExpanded(false);
         setVisible(true);
       },
     );
@@ -535,6 +541,14 @@ export default function NotificationView() {
     ipc?.sendMessage('notification-hover-state', { hovered });
   };
 
+  const handleToggleExpanded = () => {
+    const nextExpanded = !expanded;
+    setExpanded(nextExpanded);
+    ipc?.sendMessage('set-notification-expanded', {
+      expanded: nextExpanded,
+    });
+  };
+
   const handleSuggestionAction = (toolId: string | null) => {
     ipc?.sendMessage('suggestion-action', {
       toolId,
@@ -579,6 +593,9 @@ export default function NotificationView() {
         suggestionRating={suggestionRating}
         onRateSuggestion={rateInstantSuggestion}
         copyConfirmed={copyConfirmed}
+        adjustable={payload.adjustable}
+        expanded={expanded}
+        onToggleExpanded={handleToggleExpanded}
       />
     </div>
   );

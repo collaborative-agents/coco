@@ -124,7 +124,9 @@ describe('deferred suggestion context', () => {
         { role: 'user', text: 'What does previous work fall short of?' },
         {
           role: 'tutor',
-          text: 'Prior work often assumes memory is already available.',
+          text:
+            'Prior work often assumes memory is already available.\n\n' +
+            '```python\nfrom huggingface_hub import snapshot_download\n```\n',
         },
       ],
     };
@@ -157,6 +159,9 @@ describe('deferred suggestion context', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText('Prior work often assumes memory is already available.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('from huggingface_hub import snapshot_download'),
     ).toBeInTheDocument();
   });
 

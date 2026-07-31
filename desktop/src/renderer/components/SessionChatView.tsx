@@ -110,14 +110,7 @@ function parseGuidance(raw: string): Guidance {
   return { text: raw };
 }
 
-// Hide fenced python/visualization code from the chat prose.
-const VIZ_CODE_LANGS = new Set(['python', 'py']);
 const markdownComponents: React.ComponentProps<typeof Markdown>['components'] = {
-  code({ inline, className, children, ...props }: any) {
-    const lang = /language-(\w+)/.exec(className || '')?.[1]?.toLowerCase();
-    if (!inline && lang && VIZ_CODE_LANGS.has(lang)) return null;
-    return <code className={className} {...props}>{children}</code>;
-  },
   a({ href, children, ...props }: any) {
     return <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>;
   },

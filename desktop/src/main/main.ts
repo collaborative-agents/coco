@@ -489,6 +489,8 @@ const showSessionSetupWindow = async (taskLabel: string | null) => {
 const NOTIF_WIDTH = 360;
 // Keep the card compact; longer Markdown guidance scrolls inside the body.
 const NOTIF_HEIGHT = 220;
+const NOTIF_EXPANDED_WIDTH = 560;
+const NOTIF_EXPANDED_HEIGHT = 520;
 
 type VizState = 'none' | 'success' | 'error';
 type NotifType =
@@ -520,9 +522,10 @@ const showNotification = (payload: {
   notificationHovered = false;
   notificationWindow?.destroy();
 
-  const { width: sw } = screen.getPrimaryDisplay().workAreaSize;
-  const x = sw - NOTIF_WIDTH - 16;
-  const y = 16;
+  const { workArea } = screen.getPrimaryDisplay();
+  const x = workArea.x + workArea.width - NOTIF_WIDTH - 16;
+  const y = workArea.y + 16;
+  const adjustable = hideAvatarMode;
 
   notificationWindow = new BrowserWindow({
     show: false,
@@ -533,7 +536,11 @@ const showNotification = (payload: {
     transparent: true,
     frame: false,
     alwaysOnTop: true,
-    resizable: false,
+    resizable: adjustable,
+    minimizable: false,
+    maximizable: false,
+    minWidth: adjustable ? 320 : undefined,
+    minHeight: adjustable ? 180 : undefined,
     skipTaskbar: true,
     webPreferences: { preload: preloadPath() },
   });
@@ -543,7 +550,10 @@ const showNotification = (payload: {
 
   notificationWindow.on('ready-to-show', () => {
     notificationWindow?.show();
-    notificationWindow?.webContents.send('notification', payload);
+    notificationWindow?.webContents.send('notification', {
+      ...payload,
+      adjustable,
+    });
   });
 
   notificationWindow.on('closed', () => {
@@ -720,6 +730,42 @@ ipcMain.on(
   'notification-hover-state',
   (_event, { hovered }: { hovered?: boolean }) => {
     notificationHovered = hovered === true;
+  },
+);
+
+ipcMain.removeAllListeners('set-notification-expanded');
+ipcMain.on(
+  'set-notification-expanded',
+  (_event, { expanded }: { expanded?: boolean }) => {
+    if (
+      !hideAvatarMode ||
+      !notificationWindow ||
+      notificationWindow.isDestroyed()
+    ) {
+      return;
+    }
+
+    const current = notificationWindow.getBounds();
+    const display = screen.getDisplayMatching(current);
+    const targetWidth = expanded ? NOTIF_EXPANDED_WIDTH : NOTIF_WIDTH;
+    const targetHeight = expanded ? NOTIF_EXPANDED_HEIGHT : NOTIF_HEIGHT;
+    const width = Math.min(targetWidth, display.workArea.width);
+    const height = Math.min(targetHeight, display.workArea.height);
+
+    // Preserve a user-dragged position where possible, while ensuring the
+    // resized notification remains fully reachable on its current display.
+    const x = Math.max(
+      display.workArea.x,
+      Math.min(current.x, display.workArea.x + display.workArea.width - width),
+    );
+    const y = Math.max(
+      display.workArea.y,
+      Math.min(
+        current.y,
+        display.workArea.y + display.workArea.height - height,
+      ),
+    );
+    notificationWindow.setBounds({ x, y, width, height }, true);
   },
 );
 
