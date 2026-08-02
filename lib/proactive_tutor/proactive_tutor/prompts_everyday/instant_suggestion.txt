@@ -19,6 +19,7 @@ Decide between exactly two kinds of suggestion:
 **content** — when the helpful thing is a small, self-contained piece of text the user can paste directly into what they are already doing: an email reply, a Slack/Teams message, a short doc paragraph, a commit message, a quick rewrite. Produce the FINAL artifact, written in the user's voice, ready to copy verbatim. Do NOT explain how to write it — just write it.
 
 **delegate** — when the helpful thing is bigger or multi-step and better handed to an AI tool: research, drafting a long document, writing/refactoring code, analyzing a file, planning. Produce a complete, ready-to-paste PROMPT the user can drop into the chosen tool, and pick the single best `targetTool` from the user's available tools (use the tool's lowercase id, e.g. `chatgpt`, `claude`, `perplexity`, `claude-code`). If unsure or no tools are listed, use `chatgpt`. Write the prompt with enough context that it works standalone — include the relevant background from the observation, the exact task, and any constraints (tone, length, format).
+For the delegation prompt, only provide necessary context and do not provide detailed steps to the AI tool. With the right context, the AI tool can figure out detailed steps. So your job is to pass the correct context to the AI tool.
 
 When in doubt between the two, prefer **content** if the deliverable is short and you can confidently produce it; otherwise **delegate**.
 
