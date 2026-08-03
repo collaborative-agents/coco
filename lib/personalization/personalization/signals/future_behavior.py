@@ -56,7 +56,11 @@ def derive_future_behavior_signals(
             following = [o for o in observations if obs.ts < o.ts <= end]
             following_text = "\n".join(o.observer_output for o in following)
 
-            if any(c.trigger == "user_prompt" and obs.ts < c.ts <= end for c in calls):
+            if any(
+                c.trigger == "user_prompt"
+                and c.follows_observation(obs.ts, window_s=window_s)
+                for c in calls
+            ):
                 out.append(
                     _future_signal(
                         obs,

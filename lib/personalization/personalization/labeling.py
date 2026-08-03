@@ -153,7 +153,7 @@ def build_candidate_moments(
             call
             for call in records.tutor_calls
             if _same_session(obs.session_id, call.session_id)
-            and obs.ts <= call.ts <= obs.ts + tutor_after_s
+            and call.follows_observation(obs.ts, window_s=tutor_after_s)
         ]
         preceding = [
             o.observation_id
@@ -215,7 +215,7 @@ def _scenario_from_decisions(decisions: list[DecisionRecord]) -> str | None:
 
 
 def _same_session(left: str | None, right: str | None) -> bool:
-    return left == right or left is None or right is None
+    return left == right
 
 
 def label_signals_for_moment(
@@ -231,6 +231,16 @@ def label_signals_for_moment(
 
     for signal in short_window_signals:
         if signal.observation_id == moment.observation_id and signal.kind not in {
+            # Explicit feedback is already represented above with the stronger,
+            # provenance-prefixed label mapping. Do not count it a second time.
+            "shown",
+            "engage",
+            "dismiss",
+            "need_help",
+            "thumbs_up",
+            "thumbs_down",
+            # These behavioral hints are retained for prompt personalization but
+            # are not considered reliable enough to supervise support labels.
             "search_after",
             "ai_tool_after",
         }:

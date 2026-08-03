@@ -76,6 +76,7 @@ def test_load_records_and_label_feedback(tmp_path):
     labeled = label_records(records)
     assert len(labeled) == 1
     assert labeled[0].need_support == "yes"
+    assert labeled[0].label_sources == ["feedback:engage"]
     assert labeled[0].target_suggestion == "Help me automate the lookup."
     image_required = label_records(records, require_saved_images=True)
     assert len(image_required) == 1
@@ -132,6 +133,123 @@ def test_future_user_prompt_creates_positive_signal(tmp_path):
     assert any(
         s.observation_id == "obs-1" and s.kind == "user_prompt_after" for s in signals
     )
+
+
+def test_legacy_null_session_user_prompt_uses_request_start_time(tmp_path):
+    session = tmp_path / "session_legacy"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": "obs-before-prompt",
+                "session_id": "s1",
+                "ts": 10.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt 1",
+                "observer_output": json.dumps(
+                    {"status": "observing", "observation": "Editing a document."}
+                ),
+            },
+            {
+                "observation_id": "obs-user-prompt",
+                "session_id": "s1",
+                # Observer persistence can finish after the tutor request starts.
+                "ts": 30.0,
+                "type": "user_prompt",
+                "model": "fake",
+                "observer_input": "prompt 2",
+                "observer_output": json.dumps(
+                    {"status": "observing", "observation": "Asking for help."}
+                ),
+            },
+        ],
+    )
+    _append_jsonl(
+        session / "tutor_calls.jsonl",
+        [
+            {
+                # Legacy rows were timestamped after generation and had no session.
+                "ts": 121.0,
+                "session_id": None,
+                "trigger": "user_prompt",
+                "scenario": "everyday_support",
+                "model": "fake",
+                "tutor_input": "input",
+                "tutor_output": "output",
+                "llm_metrics": {"started_at": 21.0},
+            }
+        ],
+    )
+
+    records = flatten_sessions(load_records(tmp_path))
+
+    assert records.tutor_calls[0].session_id == "s1"
+    assert records.tutor_calls[0].event_ts == 21.0
+    prompted_observations = {
+        signal.observation_id
+        for signal in derive_future_behavior_signals(records)
+        if signal.kind == "user_prompt_after"
+    }
+    assert prompted_observations == {"obs-before-prompt", "obs-user-prompt"}
+
+    labels = label_records(records)
+    assert {label.observation_id for label in labels} == prompted_observations
+    assert all(label.need_support == "yes" for label in labels)
+    assert all(label.label_sources == ["user_prompt_after"] for label in labels)
+
+
+def test_tutor_output_is_not_attributed_across_sessions(tmp_path):
+    session = tmp_path / "session_mixed"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": "obs-s1",
+                "session_id": "s1",
+                "ts": 10.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": "{}",
+            },
+            {
+                "observation_id": "obs-s2",
+                "session_id": "s2",
+                "ts": 10.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": "{}",
+            },
+        ],
+    )
+    _append_jsonl(
+        session / "tutor_calls.jsonl",
+        [
+            {
+                "ts": 20.0,
+                "session_id": "s1",
+                "trigger": "user_prompt",
+                "scenario": "everyday_support",
+                "model": "fake",
+                "tutor_input": "input",
+                "tutor_output": "Only for s1",
+            }
+        ],
+    )
+
+    moments = build_candidate_moments(flatten_sessions(load_records(tmp_path)))
+    calls_by_observation = {
+        moment.observation_id: [call.tutor_output for call in moment.tutor_calls_after]
+        for moment in moments
+    }
+    assert calls_by_observation == {
+        "obs-s1": ["Only for s1"],
+        "obs-s2": [],
+    }
 
 
 def test_user_prompt_after_default_window_is_one_minute(tmp_path):

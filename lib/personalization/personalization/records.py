@@ -113,6 +113,14 @@ def load_session_records(path: str | Path) -> SessionRecords:
         key=lambda r: r.ts,
     )
     _attach_retained_observer_screenshots(base, observations)
+    tutor_calls = sorted(
+        _parse_rows(
+            read_jsonl(base / "tutor_calls.jsonl"),
+            TutorCallRecord.from_dict,
+        ),
+        key=lambda r: r.ts,
+    )
+    _backfill_tutor_call_session_ids(observations, tutor_calls)
     return SessionRecords(
         path=str(base),
         observations=observations,
@@ -120,18 +128,49 @@ def load_session_records(path: str | Path) -> SessionRecords:
             _parse_rows(read_jsonl(base / "feedback.jsonl"), FeedbackEvent.from_dict),
             key=lambda r: r.ts,
         ),
-        tutor_calls=sorted(
-            _parse_rows(
-                read_jsonl(base / "tutor_calls.jsonl"),
-                TutorCallRecord.from_dict,
-            ),
-            key=lambda r: r.ts,
-        ),
+        tutor_calls=tutor_calls,
         decisions=sorted(
             _parse_rows(read_jsonl(base / "decisions.jsonl"), DecisionRecord.from_dict),
             key=lambda r: r.ts,
         ),
     )
+
+
+def _backfill_tutor_call_session_ids(
+    observations: list[ObservationRecord],
+    tutor_calls: list[TutorCallRecord],
+    *,
+    user_prompt_window_s: float = 60.0,
+) -> None:
+    """Repair legacy user-prompt calls whose recorder wrote a null session ID.
+
+    Old tutor records were written to the same per-run directory as observations,
+    but always used ``session_id=null``. Attribute each such call to the most
+    recent non-null observation in the request's look-back window, preferring the
+    explicit ``user_prompt`` observation emitted by older sensing builds.
+    """
+    for call in tutor_calls:
+        if call.session_id is not None or call.trigger != "user_prompt":
+            continue
+        candidates = [
+            observation
+            for observation in observations
+            if observation.session_id is not None
+            and call.follows_observation(
+                observation.ts,
+                window_s=user_prompt_window_s,
+            )
+        ]
+        if not candidates:
+            continue
+        prompted = [
+            observation
+            for observation in candidates
+            if observation.type == "user_prompt"
+        ]
+        call.session_id = max(
+            prompted or candidates, key=lambda observation: observation.ts
+        ).session_id
 
 
 def _attach_retained_observer_screenshots(

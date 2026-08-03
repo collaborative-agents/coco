@@ -1381,6 +1381,7 @@ ipcMain.handle(
           // Current-screen context is now retrieved only when the tutor calls
           // observe_screen; ordinary chat turns skip the observer entirely.
           observation: '',
+          session_id: currentSessionId,
           user_text: userText,
           image_paths: imagePaths.length ? imagePaths : null,
         },

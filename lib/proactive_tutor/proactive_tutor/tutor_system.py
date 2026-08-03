@@ -111,14 +111,17 @@ class TutorSystem:
         tutor_output: str,
         image_paths: list[str] | None,
         llm_metrics: dict | None = None,
+        *,
+        session_id: str | None = None,
+        event_ts: float | None = None,
     ) -> None:
         """Record the tutor LLM call (input + generated guidance) for training."""
         if self._recorder is None:
             return
         try:
             self._recorder.log_tutor(
-                ts=time.time(),
-                session_id=None,  # the tutor process doesn't track the Mongo session id
+                ts=time.time() if event_ts is None else event_ts,
+                session_id=session_id,
                 trigger=trigger,
                 scenario=self._scenario,
                 model=getattr(self.tutor_agent, "model", ""),
@@ -418,6 +421,8 @@ class TutorSystem:
         image_paths: list[str] | None,
         user_text: str | None,
         on_event: Callable[[dict], None] | None = None,
+        session_id: str | None = None,
+        event_ts: float | None = None,
     ) -> tuple[str, LLMCallMetrics]:
         text = (user_text or "").strip() or "Help me with what I'm doing right now."
         current_message = {"role": "user", "content": text}
@@ -448,6 +453,8 @@ class TutorSystem:
             response,
             image_paths,
             llm_metrics=metrics,
+            session_id=session_id,
+            event_ts=event_ts,
         )
         return response, metrics
 
@@ -456,6 +463,8 @@ class TutorSystem:
         *,
         trigger_reason: str,
         evidence: str,
+        session_id: str | None = None,
+        event_ts: float | None = None,
     ) -> tuple[str, LLMCallMetrics]:
         request = (
             "The desktop app requested a brief proactive check-in with the user. "
@@ -480,6 +489,8 @@ class TutorSystem:
             response,
             None,
             llm_metrics=metrics,
+            session_id=session_id,
+            event_ts=event_ts,
         )
         return response, metrics
 
@@ -493,12 +504,14 @@ class TutorSystem:
         image_paths: list[str] | None = None,
         user_text: str | None = None,
         on_event: Callable[[dict], None] | None = None,
+        session_id: str | None = None,
     ) -> str:
         guidance, _ = self.handle_user_prompt_with_metrics(
             obs=obs,
             image_paths=image_paths,
             user_text=user_text,
             on_event=on_event,
+            session_id=session_id,
         )
         return guidance
 
@@ -508,6 +521,7 @@ class TutorSystem:
         image_paths: list[str] | None = None,
         user_text: str | None = None,
         on_event: Callable[[dict], None] | None = None,
+        session_id: str | None = None,
     ) -> tuple[str, LLMCallMetrics]:
         """
         Process a user-prompt event.
@@ -524,6 +538,7 @@ class TutorSystem:
         Returns:
             Tutor guidance string.
         """
+        event_ts = time.time()
         logger.info(
             f"[USER_PROMPT] Handling user prompt event. "
             f"images={len(image_paths) if image_paths else 0}"
@@ -534,6 +549,8 @@ class TutorSystem:
                 image_paths=image_paths,
                 user_text=user_text,
                 on_event=on_event,
+                session_id=session_id,
+                event_ts=event_ts,
             )
             logger.info(f"[TUTOR] {guidance}")
             return guidance, metrics
@@ -578,7 +595,13 @@ class TutorSystem:
             on_event({"type": "text_delta", "text": guidance})
         logger.info(f"[TUTOR] {guidance}")
         self._log_tutor_call(
-            "user_prompt", text_prompt, guidance, image_paths, llm_metrics=metrics
+            "user_prompt",
+            text_prompt,
+            guidance,
+            image_paths,
+            llm_metrics=metrics,
+            session_id=session_id,
+            event_ts=event_ts,
         )
         weak_competency = None
 
@@ -603,12 +626,14 @@ class TutorSystem:
         trigger_reason: str = "struggle",
         evidence: str = "",
         teaching_depth: str = "not_applicable",
+        session_id: str | None = None,
     ) -> str:
         guidance, _ = self.handle_pause_with_metrics(
             obs=obs,
             trigger_reason=trigger_reason,
             evidence=evidence,
             teaching_depth=teaching_depth,
+            session_id=session_id,
         )
         return guidance
 
@@ -618,6 +643,7 @@ class TutorSystem:
         trigger_reason: str = "struggle",
         evidence: str = "",
         teaching_depth: str = "not_applicable",
+        session_id: str | None = None,
     ) -> tuple[str, LLMCallMetrics]:
         """
         Process a pause/idle event.
@@ -634,6 +660,7 @@ class TutorSystem:
         Returns:
             Tutor guidance string.
         """
+        event_ts = time.time()
         logger.info(
             f"[PAUSE] Handling pause event. trigger_reason={trigger_reason} "
             f"teaching_depth={teaching_depth}"
@@ -643,6 +670,8 @@ class TutorSystem:
             guidance, metrics = self._handle_everyday_pause(
                 trigger_reason=trigger_reason,
                 evidence=evidence,
+                session_id=session_id,
+                event_ts=event_ts,
             )
             logger.info(f"[PAUSE][TUTOR] {guidance}")
             return guidance, metrics
@@ -716,7 +745,15 @@ class TutorSystem:
         )
         guidance, metrics = self.tutor_agent.tutor_with_metrics(text_prompt)
         logger.info(f"[PAUSE][TUTOR] {guidance}")
-        self._log_tutor_call("pause", text_prompt, guidance, None, llm_metrics=metrics)
+        self._log_tutor_call(
+            "pause",
+            text_prompt,
+            guidance,
+            None,
+            llm_metrics=metrics,
+            session_id=session_id,
+            event_ts=event_ts,
+        )
         weak_competency = None
 
         print("\n=== Pause Guidance ===")

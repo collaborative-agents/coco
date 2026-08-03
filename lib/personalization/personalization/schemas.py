@@ -131,6 +131,27 @@ class TutorCallRecord:
     image_paths: list[str] = field(default_factory=list)
     llm_metrics: JsonDict | None = None
 
+    @property
+    def event_ts(self) -> float:
+        """Return when the tutor request started, falling back to its row timestamp."""
+        if self.llm_metrics is not None:
+            started_at = self.llm_metrics.get("started_at")
+            if isinstance(started_at, (int, float)) and not isinstance(
+                started_at, bool
+            ):
+                return float(started_at)
+        return self.ts
+
+    def follows_observation(self, observation_ts: float, *, window_s: float) -> bool:
+        """Whether an observation belongs to this call's look-back window.
+
+        Legacy observers and tutor requests ran concurrently. An observation
+        initiated before the request can therefore be persisted after the request
+        starts. Accept completion timestamps through the tutor row timestamp while
+        anchoring the look-back window at request start.
+        """
+        return self.event_ts - window_s <= observation_ts <= self.ts
+
     @classmethod
     def from_dict(cls, row: JsonDict) -> TutorCallRecord:
         return cls(

@@ -36,6 +36,7 @@ configured_model_name: str = ""
 
 class EventRequest(BaseModel):
     observation: str
+    session_id: str | None = None
     image_paths: list[str] | None = (
         None  # absolute paths of screenshots to send to the LLM
     )
@@ -477,6 +478,8 @@ async def handle_user_prompt(req: EventRequest):
             req.observation,
             req.image_paths,
             req.user_text,
+            None,
+            req.session_id,
         )
         # Execute visualization code (also blocking) and mutate the JSON.
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
@@ -510,6 +513,7 @@ async def handle_user_prompt_stream(req: EventRequest):
                 req.image_paths,
                 req.user_text,
                 publish,
+                req.session_id,
             )
         )
         try:
@@ -563,6 +567,7 @@ async def handle_pause(req: EventRequest):
             req.trigger_reason,
             req.evidence,
             req.teaching_depth,
+            req.session_id,
         )
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
         return GuidanceResponse(

@@ -114,6 +114,7 @@ def test_handle_user_prompt_with_metrics_logs_tutor_call(tmp_path):
         obs="The user is comparing two AI responses.",
         image_paths=["screen.png"],
         user_text="Explain the next step",
+        session_id="session-1",
     )
 
     assert guidance == '{"guidance": "Use metrics."}'
@@ -126,6 +127,7 @@ def test_handle_user_prompt_with_metrics_logs_tutor_call(tmp_path):
     ]
     assert len(rows) == 1
     assert rows[0]["trigger"] == "user_prompt"
+    assert rows[0]["session_id"] == "session-1"
     assert rows[0]["llm_metrics"] == metrics
     assert rows[0]["image_paths"] == ["screen.png"]
 
