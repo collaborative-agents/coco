@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { encodeCustomChatbot, encodeCustomAgent } from './observation-types';
 import './OnboardingView.css';
-import foxWorking from '../../../assets/pet.png';
-import foxStudying from '../../../assets/write1.png';
-import foxEveryday from '../../../assets/tool1.png';
+import foxWorking from '../../../assets/pet1.png';
 import foxWaiting from '../../../assets/wait1.png';
+import studentLearningIcon from '../../../assets/student_learning.png';
+import everydaySupportIcon from '../../../assets/everyday_support.png';
+import customModeIcon from '../../../assets/custom.png';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -17,13 +18,13 @@ const MODES = [
     id: 'student_learning',
     name: 'Student Learning',
     desc: 'Coco acts as an AI Tutor — guiding you to learn and solve problems yourself with hints, not answers.',
-    img: foxStudying,
+    img: studentLearningIcon,
   },
   {
     id: 'everyday_support',
     name: 'Everyday Support',
     desc: 'Coco acts as an AI Assistant — spotting tasks worth delegating and suggesting the right AI tool to do them.',
-    img: foxEveryday,
+    img: everydaySupportIcon,
   },
 ];
 
@@ -350,7 +351,11 @@ function StepMode({
         onKeyDown={(e) => e.key === 'Enter' && setSelectedMode('custom')}
         style={{ display: 'flex', alignItems: 'center', gap: 12 }}
       >
-        <span style={{ fontSize: 30, width: 46, textAlign: 'center', flexShrink: 0 }}>✏️</span>
+        <img
+          src={customModeIcon}
+          alt=""
+          style={{ width: 46, height: 46, objectFit: 'contain', flexShrink: 0 }}
+        />
         <div>
           <div className="ob-path-title">Custom</div>
           <div className="ob-path-desc" style={{ marginBottom: 0 }}>

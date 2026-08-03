@@ -44,3 +44,21 @@ def test_vllm_observer_disables_thinking(monkeypatch):
     assert captured["extra_body"] == {
         "chat_template_kwargs": {"enable_thinking": False}
     }
+    assert "reasoning_effort" not in captured
+
+
+def test_inkling_observer_disables_reasoning_effort(monkeypatch):
+    captured = {}
+
+    def fake_chat_completion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(content="{}"), {}
+
+    monkeypatch.setattr(segment_processor, "chat_completion", fake_chat_completion)
+
+    segment_processor._observe(
+        "describe the screen",
+        model="hosted_vllm/thinkingmachines/Inkling-Small:peft:262144",
+    )
+
+    assert captured["reasoning_effort"] == "none"

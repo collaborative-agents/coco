@@ -83,7 +83,7 @@ body,
   --bubble-accent-soft: rgba(99, 102, 241, 0.18);
   position: absolute;
   bottom: 24px;
-  right: 168px; /* sit just left of the 150px pet + 12px padding + 6px gap */
+  right: 162px; /* tuck the tail closer to the smaller, 90%-scale avatar */
   max-width: 220px;
   padding: 9px 12px 10px;
   background: rgba(255, 255, 255, 0.96);

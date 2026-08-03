@@ -25,6 +25,7 @@ import {
   nativeImage,
   dialog,
   screen,
+  powerMonitor,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
@@ -52,6 +53,7 @@ import {
   readConversations,
   saveConversation,
 } from './conversation-store';
+import { ObservationSleepGuard } from './observation-sleep-guard';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
 import type {
   ObservationStatus,
@@ -116,6 +118,7 @@ let tray: Tray | null = null;
 let hideAvatarMode = false;
 let avatarRendererReady = false;
 let pendingOpenHistory = false;
+const observationSleepGuard = new ObservationSleepGuard();
 
 // Hot-key screen captures (Cmd/Ctrl+Shift+Space) waiting to be shown as preview
 // thumbnails in the chat input bar. When the hot key opens a fresh chat window,
@@ -1816,6 +1819,15 @@ const startObserver = () => {
   startObservationStream({
     url: `http://127.0.0.1:${sensingPort}/observations/stream`,
     onEvent: (event) => {
+      if (observationSleepGuard.shouldSuppress(event.ts)) {
+        if (event.observation) {
+          log.info(
+            `[Power] Dropped suppressed observation status=${event.status ?? '(none)'}`,
+          );
+        }
+        return;
+      }
+
       const status = event.status;
 
       // Tier-2 friction events from the struggle/pause path arrive without an
@@ -1941,6 +1953,32 @@ const startObserver = () => {
 app
   .whenReady()
   .then(() => {
+    powerMonitor.on('suspend', () => {
+      log.info('[Power] System suspended; clearing proactive UI and cache.');
+      observationSleepGuard.suspend();
+      latestHiddenSuggestionObservationId = undefined;
+      suggestionCache.clear();
+      notificationHovered = false;
+      notificationWindow?.destroy();
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
+        avatarWindow.webContents.send('system-suspend');
+      }
+    });
+
+    powerMonitor.on('resume', () => {
+      log.info('[Power] System resumed; suppressing observations briefly.');
+      observationSleepGuard.resume();
+      latestHiddenSuggestionObservationId = undefined;
+      suggestionCache.clear();
+      notificationHovered = false;
+      notificationWindow?.destroy();
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
+        // Send this again in case the renderer was frozen before handling the
+        // suspend event.
+        avatarWindow.webContents.send('system-suspend');
+      }
+    });
+
     // Ensure default workspace directory exists
     ensureDefaultWorkspaceExists();
 

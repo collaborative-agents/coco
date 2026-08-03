@@ -540,6 +540,21 @@ function PetView() {
   }, [showHistory]);
 
   useEffect(() => {
+    const cleanupSuspend = window.electron?.ipcRenderer.on(
+      'system-suspend',
+      () => {
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        if (fadeTimer.current) clearTimeout(fadeTimer.current);
+        if (sleepTimer.current) clearTimeout(sleepTimer.current);
+        if (pulseTimer.current) clearTimeout(pulseTimer.current);
+        bubbleHoverRef.current = false;
+        bubblePinnedRef.current = false;
+        setBubble(null);
+        setPulse(null);
+        setMood('dormant');
+      },
+    );
+
     const cleanup = window.electron?.ipcRenderer.on(
       'observation-update',
       (data: any) => {
@@ -634,6 +649,7 @@ function PetView() {
     );
 
     return () => {
+      if (typeof cleanupSuspend === 'function') cleanupSuspend();
       if (typeof cleanup === 'function') cleanup();
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);

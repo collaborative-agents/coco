@@ -193,6 +193,9 @@ def _observe(
         completion_kwargs["extra_body"] = {
             "chat_template_kwargs": {"enable_thinking": False}
         }
+        hosted_model = model.removeprefix("hosted_vllm/").lower()
+        if hosted_model.startswith("thinkingmachines/inkling"):
+            completion_kwargs["reasoning_effort"] = "none"
 
     result, metrics = chat_completion(**completion_kwargs)
 

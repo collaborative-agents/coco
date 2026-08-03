@@ -14,6 +14,7 @@ export type Channels =
   | 'notification-hover-state'
   | 'set-notification-expanded'
   | 'observation-update'
+  | 'system-suspend'
   | 'shell-show-item-in-finder'
   | 'download-benchmark-file'
   | 'get-benchmark-files'
