@@ -295,14 +295,14 @@ class Screen(Observer):
             )
 
     @staticmethod
-    def _mon_for(x: float, y: float, mons: list[dict]) -> int:
+    def _mon_for(x: float, y: float, mons: list[dict]) -> int | None:
         for idx, m in enumerate(mons, 1):
             if (
                 m["left"] <= x < m["left"] + m["width"]
                 and m["top"] <= y < m["top"] + m["height"]
             ):
                 return idx
-        return idx
+        return None
 
     async def _run_in_thread(self, func, *args, **kwargs):
         """Run a function in the custom thread pool."""
@@ -418,8 +418,14 @@ class Screen(Observer):
         # Draw the cursor box at original coordinates before any resize
         if draw_box:
             draw = ImageDraw.Draw(image)
-            x1, x2 = max(0, x - 30), min(frame.width, x + 30)
-            y1, y2 = max(0, y - 20), min(frame.height, y + 20)
+            # Clamp both ends of each axis. Input callbacks can briefly report a
+            # cursor outside every display (for example while display geometry is
+            # changing), and Pillow rejects rectangles whose second coordinate is
+            # less than the first.
+            x1 = min(max(0, x - 30), frame.width - 1)
+            x2 = min(max(0, x + 30), frame.width - 1)
+            y1 = min(max(0, y - 20), frame.height - 1)
+            y2 = min(max(0, y + 20), frame.height - 1)
             draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
             del draw
 
@@ -814,6 +820,8 @@ class Screen(Observer):
                 if self._note_user_activity():
                     return  # wait for a fresh frame after waking
                 idx = self._mon_for(x, y, mons)
+                if idx is None:
+                    return
                 mon = mons[idx - self._MON_START]
                 x = x - mon["left"]
                 y = y - mon["top"]
@@ -831,7 +839,7 @@ class Screen(Observer):
                 log.info(
                     f"{typ:<6} @({x:7.1f},{y:7.1f}) → mon={idx}   {'(guarded)' if self._skip() else ''}"
                 )
-                if self._skip() or idx is None:
+                if self._skip():
                     return
 
                 async with self._frame_lock:
