@@ -13,7 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 import mss
-import Quartz
+try:
+    import Quartz
+except ImportError:
+    Quartz = None
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
 from pynput import keyboard, mouse  # still synchronous
@@ -42,6 +45,8 @@ def _get_global_bounds() -> tuple[float, float, float, float]:
     -------
     (min_x, min_y, max_x, max_y) tuple in Quartz global coordinates.
     """
+    if Quartz is None:
+        return 0.0, 0.0, 0.0, 0.0
     err, ids, cnt = Quartz.CGGetActiveDisplayList(16, None, None)  # type: ignore
     if err != Quartz.kCGErrorSuccess:  # type: ignore
         raise OSError(f"CGGetActiveDisplayList failed: {err}")
@@ -64,6 +69,8 @@ def _get_visible_windows() -> list[tuple[dict, float]]:
     is in ``[0.0, 1.0]``.  Internal system windows (Dock, WindowServer, …) are
     ignored.
     """
+    if Quartz is None:
+        return []
     _, _, _, gmax_y = _get_global_bounds()
 
     opts = (
@@ -106,6 +113,8 @@ def _get_visible_windows() -> list[tuple[dict, float]]:
 
 def _is_app_visible(names: Iterable[str]) -> bool:
     """Return *True* if **any** window from *names* is at least partially visible."""
+    if Quartz is None:
+        return False
     targets = set(names)
     return any(
         info.get("kCGWindowOwnerName", "") in targets and ratio > 0
