@@ -563,7 +563,9 @@ export default function SessionChatView() {
             const cleanText = newRawText
               .replace(/<\/?guidance>/g, '')
               .replace(/<visualization>[\s\S]*?(<\/visualization>|$)/gi, '')
-              .replace(/<example_prompt>[\s\S]*?(<\/example_prompt>|$)/gi, '');
+              .replace(/<example_prompt>[\s\S]*?(<\/example_prompt>|$)/gi, '')
+              .replace(/<html_code>[\s\S]*?(<\/html_code>|$)/gi, '')
+              .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '');
             return { ...message, rawText: newRawText, text: cleanText };
           }
           if (event.type === 'tool_call_started' && event.call) {
