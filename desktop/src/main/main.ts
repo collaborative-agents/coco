@@ -1822,6 +1822,33 @@ const startObserver = () => {
   log.info(`[Models] tutor=${tutorModel} observer=${observerModel}`);
 
   try {
+    // On Windows, electronmon can restart the Electron process without
+    // triggering before-quit, leaving Python zombie processes on their ports.
+    // Kill any remaining processes on those ports before spawning new ones.
+    if (process.platform === 'win32') {
+      const { execSync: _execSync } = require('child_process');
+      const tutorPort = process.env.TUTOR_PORT || '8081';
+      const sensingPort = process.env.SENSING_PORT || '8080';
+      for (const port of [tutorPort, sensingPort]) {
+        try {
+          const result = _execSync(
+            `netstat -ano | findstr :${port}`,
+            { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] },
+          ) as string;
+          const pids = new Set<string>();
+          for (const line of result.split('\n')) {
+            const m = line.trim().match(/\s+(\d+)$/);
+            if (m && m[1] !== '0') pids.add(m[1]);
+          }
+          for (const pid of pids) {
+            try {
+              _execSync(`taskkill /T /F /PID ${pid}`, { stdio: 'ignore' });
+              log.info(`[Startup] Killed stale PID ${pid} on port ${port}`);
+            } catch { /* already gone */ }
+          }
+        } catch { /* no process on that port */ }
+      }
+    }
     serviceManager.startAll();
   } catch (e) {
     console.warn('Failed to start services:', e);
