@@ -72,7 +72,7 @@ def _load_judge_prompt(scenario: str = "everyday_support") -> str:
     prompt_dir = {
         "student_learning": "prompts_problem_solving",
     }.get(scenario, "prompts_everyday")
-    return (Path(__file__).parent / prompt_dir / "judge.txt").read_text()
+    return (Path(__file__).parent / prompt_dir / "judge.txt").read_text(encoding="utf-8")
 
 
 _JUDGE_PROMPT: str = _load_judge_prompt()
