@@ -710,25 +710,36 @@ export class ServiceManager {
     });
 
     try {
+      // On Windows, SIGTERM only kills the direct child (uv) but not the Python
+      // subprocess it launched, leaving the port occupied. Use taskkill /T to
+      // kill the entire process tree.
+      const killTree = (pid: number, signal: 'SIGTERM' | 'SIGKILL') => {
+        if (process.platform === 'win32') {
+          try {
+            execSync(`taskkill /T /F /PID ${pid}`, { stdio: 'ignore' });
+          } catch (e) {
+            log.warn(`[ServiceManager] taskkill failed for PID ${pid}`, e);
+          }
+        } else {
+          try {
+            proc.kill(signal as any);
+          } catch (e) {
+            log.warn(`[ServiceManager] kill(${signal}) failed for ${id}`, e);
+          }
+        }
+      };
+
       // attempt graceful termination
-      try {
-        proc.kill('SIGTERM' as any);
-      } catch (e) {
-        log.warn(`[ServiceManager] failed to send SIGTERM to ${id}`, e);
-      }
+      if (proc.pid) killTree(proc.pid, 'SIGTERM');
 
       const exited = await Promise.race([exitPromise, timeoutPromise]);
 
       if (!exited && force) {
         log.warn(
-          `[ServiceManager] ${id} did not exit within ${timeoutMs}ms — sending SIGKILL`,
+          `[ServiceManager] ${id} did not exit within ${timeoutMs}ms — force killing`,
         );
-        try {
-          proc.kill('SIGKILL' as any);
-        } catch (e) {
-          log.warn(`[ServiceManager] failed to send SIGKILL to ${id}`, e);
-        }
-        // wait briefly for process to exit after SIGKILL
+        if (proc.pid) killTree(proc.pid, 'SIGKILL');
+        // wait briefly for process to exit after force kill
         await Promise.race([
           exitPromise,
           new Promise((resolve) => {
