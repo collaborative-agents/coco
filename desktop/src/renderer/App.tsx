@@ -967,19 +967,25 @@ function PetView() {
         }}
         title="Open the chat"
         onMouseDown={(e) => {
-          // JS-based drag: works even when -webkit-app-region is broken by DevTools.
-          // Only drag on primary button; skip if the click is on a no-drag child.
+          // JS-based drag using delta protocol:
+          // 'start' → main records initial window pos + cursor screen pos.
+          // 'move'  → main computes delta and sets window position smoothly.
           if (e.button !== 0) return;
           const target = e.target as HTMLElement;
           if (target.closest('button')) return;
-          const startOffsetX = e.clientX;
-          const startOffsetY = e.clientY;
+          e.preventDefault();
+
+          window.electron?.ipcRenderer.sendMessage('move-window', {
+            type: 'start',
+            startScreenX: e.screenX,
+            startScreenY: e.screenY,
+          } as any);
+
           const onMove = (mv: MouseEvent) => {
             window.electron?.ipcRenderer.sendMessage('move-window', {
+              type: 'move',
               screenX: mv.screenX,
               screenY: mv.screenY,
-              offsetX: startOffsetX,
-              offsetY: startOffsetY,
             } as any);
           };
           const onUp = () => {
