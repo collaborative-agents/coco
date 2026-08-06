@@ -970,8 +970,12 @@ function PetView() {
           // JS-based drag using delta protocol:
           // 'start' → main records initial window pos + cursor screen pos.
           // 'move'  → main computes delta and sets window position smoothly.
-          // rAF throttle: at most 1 IPC per render frame, always using the
-          // latest coords — prevents IPC queue buildup that causes post-drag drift.
+          //
+          // Windows WM_MOUSEMOVE feedback-loop fix:
+          // When win.setPosition() moves the window, Windows re-fires WM_MOUSEMOVE
+          // (because the window moved under the cursor), which Chromium converts to
+          // a mousemove DOM event — even though the physical mouse didn't move.
+          // Guard: skip IPC if screenX/Y hasn't changed since the last sent message.
           if (e.button !== 0) return;
           const target = e.target as HTMLElement;
           if (target.closest('button')) return;
@@ -986,6 +990,9 @@ function PetView() {
           let rafId: number | null = null;
           let latestScreenX = e.screenX;
           let latestScreenY = e.screenY;
+          // Track the coords of the last IPC we actually sent.
+          let lastSentX = e.screenX;
+          let lastSentY = e.screenY;
 
           const onMove = (mv: MouseEvent) => {
             latestScreenX = mv.screenX;
@@ -993,6 +1000,12 @@ function PetView() {
             if (rafId !== null) return; // already a frame pending — skip
             rafId = requestAnimationFrame(() => {
               rafId = null;
+              // Skip if the physical mouse position hasn't changed — this
+              // filters out synthetic WM_MOUSEMOVE events fired because the
+              // window moved under the cursor (not because the mouse moved).
+              if (latestScreenX === lastSentX && latestScreenY === lastSentY) return;
+              lastSentX = latestScreenX;
+              lastSentY = latestScreenY;
               window.electron?.ipcRenderer.sendMessage('move-window', {
                 type: 'move',
                 screenX: latestScreenX,
