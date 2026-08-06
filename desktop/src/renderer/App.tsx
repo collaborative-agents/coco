@@ -970,6 +970,8 @@ function PetView() {
           // JS-based drag using delta protocol:
           // 'start' → main records initial window pos + cursor screen pos.
           // 'move'  → main computes delta and sets window position smoothly.
+          // rAF throttle: at most 1 IPC per render frame, always using the
+          // latest coords — prevents IPC queue buildup that causes post-drag drift.
           if (e.button !== 0) return;
           const target = e.target as HTMLElement;
           if (target.closest('button')) return;
@@ -981,14 +983,25 @@ function PetView() {
             startScreenY: e.screenY,
           } as any);
 
+          let rafId: number | null = null;
+          let latestScreenX = e.screenX;
+          let latestScreenY = e.screenY;
+
           const onMove = (mv: MouseEvent) => {
-            window.electron?.ipcRenderer.sendMessage('move-window', {
-              type: 'move',
-              screenX: mv.screenX,
-              screenY: mv.screenY,
-            } as any);
+            latestScreenX = mv.screenX;
+            latestScreenY = mv.screenY;
+            if (rafId !== null) return; // already a frame pending — skip
+            rafId = requestAnimationFrame(() => {
+              rafId = null;
+              window.electron?.ipcRenderer.sendMessage('move-window', {
+                type: 'move',
+                screenX: latestScreenX,
+                screenY: latestScreenY,
+              } as any);
+            });
           };
           const onUp = () => {
+            if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
           };
