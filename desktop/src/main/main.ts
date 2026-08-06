@@ -713,6 +713,16 @@ ipcMain.on(
 // Forward an explicit user reaction (bubble engage/dismiss) to the sensing
 // server's /feedback endpoint, which logs it into the shared training data.
 ipcMain.removeAllListeners('training-feedback');
+// JS-based window drag: renderer sends cursor screen position on mousedown,
+// then this handler moves the avatar window to follow it.
+// This is more reliable than -webkit-app-region on Windows, particularly in
+// dev mode where DevTools presence disables CSS drag regions entirely.
+ipcMain.on('move-window', (event, { screenX, screenY, offsetX, offsetY }: { screenX: number; screenY: number; offsetX: number; offsetY: number }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  win.setPosition(Math.round(screenX - offsetX), Math.round(screenY - offsetY));
+});
+
 ipcMain.on('training-feedback', async (_event, payload) => {
   try {
     const sensingPort = process.env.SENSING_PORT || '8080';

@@ -966,6 +966,29 @@ function PetView() {
           if (e.key === 'Enter' || e.key === ' ') handleClick(e);
         }}
         title="Open the chat"
+        onMouseDown={(e) => {
+          // JS-based drag: works even when -webkit-app-region is broken by DevTools.
+          // Only drag on primary button; skip if the click is on a no-drag child.
+          if (e.button !== 0) return;
+          const target = e.target as HTMLElement;
+          if (target.closest('button')) return;
+          const startOffsetX = e.clientX;
+          const startOffsetY = e.clientY;
+          const onMove = (mv: MouseEvent) => {
+            window.electron?.ipcRenderer.sendMessage('move-window', {
+              screenX: mv.screenX,
+              screenY: mv.screenY,
+              offsetX: startOffsetX,
+              offsetY: startOffsetY,
+            } as any);
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        }}
       >
         <PetSprite mood={mood} />
         <button
