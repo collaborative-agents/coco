@@ -77,7 +77,9 @@ export type Channels =
   // Forwarded to webapp renderer to signal a help-request context
   | 'help-request'
   // Explicit user reaction (bubble engage/dismiss) → sensing /feedback
-  | 'training-feedback';
+  | 'training-feedback'
+  // JS-based window drag — more reliable than -webkit-app-region on Windows
+  | 'move-window';
 
 const electronHandler = {
   ipcRenderer: {
@@ -129,6 +131,10 @@ const electronHandler = {
   },
   dialog: {
     selectFileOrDirectory: () => ipcRenderer.invoke('select-file-or-directory'),
+  },
+  window: {
+    // Trigger JS-based window drag. Call from mousedown on the drag handle.
+    startDragging: () => ipcRenderer.send('move-window'),
   },
 };
 

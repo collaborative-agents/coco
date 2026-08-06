@@ -966,6 +966,61 @@ function PetView() {
           if (e.key === 'Enter' || e.key === ' ') handleClick(e);
         }}
         title="Open the chat"
+        onMouseDown={(e) => {
+          // JS-based drag using delta protocol:
+          // 'start' → main records initial window pos + cursor screen pos.
+          // 'move'  → main computes delta and sets window position smoothly.
+          //
+          // Windows WM_MOUSEMOVE feedback-loop fix:
+          // When win.setPosition() moves the window, Windows re-fires WM_MOUSEMOVE
+          // (because the window moved under the cursor), which Chromium converts to
+          // a mousemove DOM event — even though the physical mouse didn't move.
+          // Guard: skip IPC if screenX/Y hasn't changed since the last sent message.
+          if (e.button !== 0) return;
+          const target = e.target as HTMLElement;
+          if (target.closest('button')) return;
+          e.preventDefault();
+
+          window.electron?.ipcRenderer.sendMessage('move-window', {
+            type: 'start',
+            startScreenX: e.screenX,
+            startScreenY: e.screenY,
+          } as any);
+
+          let rafId: number | null = null;
+          let latestScreenX = e.screenX;
+          let latestScreenY = e.screenY;
+          // Track the coords of the last IPC we actually sent.
+          let lastSentX = e.screenX;
+          let lastSentY = e.screenY;
+
+          const onMove = (mv: MouseEvent) => {
+            latestScreenX = mv.screenX;
+            latestScreenY = mv.screenY;
+            if (rafId !== null) return; // already a frame pending — skip
+            rafId = requestAnimationFrame(() => {
+              rafId = null;
+              // Skip if the physical mouse position hasn't changed — this
+              // filters out synthetic WM_MOUSEMOVE events fired because the
+              // window moved under the cursor (not because the mouse moved).
+              if (latestScreenX === lastSentX && latestScreenY === lastSentY) return;
+              lastSentX = latestScreenX;
+              lastSentY = latestScreenY;
+              window.electron?.ipcRenderer.sendMessage('move-window', {
+                type: 'move',
+                screenX: latestScreenX,
+                screenY: latestScreenY,
+              } as any);
+            });
+          };
+          const onUp = () => {
+            if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        }}
       >
         <PetSprite mood={mood} />
         <button

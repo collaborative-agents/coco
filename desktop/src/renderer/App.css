@@ -38,7 +38,9 @@ body,
   width: 150px;
   height: 150px;
   flex-shrink: 0;
-  -webkit-app-region: drag;
+  /* Drag is handled by JS (onMouseDown → move-window IPC). CSS drag region
+     is intentionally disabled to avoid conflict with the JS implementation. */
+  -webkit-app-region: no-drag;
 }
 
 .pet-image {
@@ -48,7 +50,9 @@ body,
   cursor: move;
   user-select: none;
   -webkit-user-select: none;
-  -webkit-app-region: drag;
+  -webkit-user-drag: none;
+  /* No CSS drag — JS handles window movement via IPC. */
+  -webkit-app-region: no-drag;
   /* Default 90% — the action / sleep sprites read larger than the idle pet,
      so we shrink them for visual consistency. The `.pet-image-full` modifier
      opts back into 100% for sprites that already match the design size. */

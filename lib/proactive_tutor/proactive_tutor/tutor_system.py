@@ -38,7 +38,7 @@ class TutorSystem:
         prompts_dir = self._prompts_dir(scenario)
         self.tutor_agent = TutorAgent(
             model_name,
-            (prompts_dir / "tutor.txt").read_text(),
+            (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
             enable_memory_tool=scenario == "everyday_support",
         )
 
@@ -203,7 +203,7 @@ class TutorSystem:
         prompts_dir = self._prompts_dir(self._scenario)
         self.tutor_agent = TutorAgent(
             model_name,
-            (prompts_dir / "tutor.txt").read_text(),
+            (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
             enable_memory_tool=self._scenario == "everyday_support",
         )
 
@@ -225,7 +225,7 @@ class TutorSystem:
         model_name = self.tutor_agent.model
         self.tutor_agent = TutorAgent(
             model_name,
-            (prompts_dir / "tutor.txt").read_text(),
+            (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
             enable_memory_tool=scenario == "everyday_support",
         )
 

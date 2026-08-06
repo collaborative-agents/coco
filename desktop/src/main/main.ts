@@ -713,6 +713,24 @@ ipcMain.on(
 // Forward an explicit user reaction (bubble engage/dismiss) to the sensing
 // server's /feedback endpoint, which logs it into the shared training data.
 ipcMain.removeAllListeners('training-feedback');
+// JS-based window drag: delta-based positioning to avoid oscillation.
+// 'start' records the window's current screen position + cursor start position.
+// 'move' applies the delta so the window tracks the cursor smoothly.
+let _dragState: { winX: number; winY: number; startScreenX: number; startScreenY: number } | null = null;
+ipcMain.on('move-window', (event, data: { type: 'start'; startScreenX: number; startScreenY: number } | { type: 'move'; screenX: number; screenY: number }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  if (data.type === 'start') {
+    const [x, y] = win.getPosition();
+    _dragState = { winX: x, winY: y, startScreenX: data.startScreenX, startScreenY: data.startScreenY };
+  } else if (data.type === 'move' && _dragState) {
+    win.setPosition(
+      Math.round(_dragState.winX + data.screenX - _dragState.startScreenX),
+      Math.round(_dragState.winY + data.screenY - _dragState.startScreenY),
+    );
+  }
+});
+
 ipcMain.on('training-feedback', async (_event, payload) => {
   try {
     const sensingPort = process.env.SENSING_PORT || '8080';
@@ -1804,6 +1822,33 @@ const startObserver = () => {
   log.info(`[Models] tutor=${tutorModel} observer=${observerModel}`);
 
   try {
+    // On Windows, electronmon can restart the Electron process without
+    // triggering before-quit, leaving Python zombie processes on their ports.
+    // Kill any remaining processes on those ports before spawning new ones.
+    if (process.platform === 'win32') {
+      const { execSync: _execSync } = require('child_process');
+      const tutorPort = process.env.TUTOR_PORT || '8081';
+      const sensingPort = process.env.SENSING_PORT || '8080';
+      for (const port of [tutorPort, sensingPort]) {
+        try {
+          const result = _execSync(
+            `netstat -ano | findstr :${port}`,
+            { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] },
+          ) as string;
+          const pids = new Set<string>();
+          for (const line of result.split('\n')) {
+            const m = line.trim().match(/\s+(\d+)$/);
+            if (m && m[1] !== '0') pids.add(m[1]);
+          }
+          for (const pid of pids) {
+            try {
+              _execSync(`taskkill /T /F /PID ${pid}`, { stdio: 'ignore' });
+              log.info(`[Startup] Killed stale PID ${pid} on port ${port}`);
+            } catch { /* already gone */ }
+          }
+        } catch { /* no process on that port */ }
+      }
+    }
     serviceManager.startAll();
   } catch (e) {
     console.warn('Failed to start services:', e);

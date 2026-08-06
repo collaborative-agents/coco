@@ -132,6 +132,7 @@ interface ChatMessage {
   /** Correlates incremental main-process events with this pending reply. */
   requestId?: string;
   isStreaming?: boolean;
+  rawText?: string;
   /** Exact request payload retained so an error can be retried in place. */
   retryText?: string;
   retryImages?: string[];
@@ -558,7 +559,14 @@ export default function SessionChatView() {
         current.map((message) => {
           if (message.requestId !== event.requestId) return message;
           if (event.type === 'text_delta') {
-            return { ...message, text: message.text + (event.text ?? '') };
+            const newRawText = (message.rawText ?? message.text) + (event.text ?? '');
+            const cleanText = newRawText
+              .replace(/<\/?guidance>/g, '')
+              .replace(/<visualization>[\s\S]*?(<\/visualization>|$)/gi, '')
+              .replace(/<example_prompt>[\s\S]*?(<\/example_prompt>|$)/gi, '')
+              .replace(/<html_code>[\s\S]*?(<\/html_code>|$)/gi, '')
+              .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '');
+            return { ...message, rawText: newRawText, text: cleanText };
           }
           if (event.type === 'tool_call_started' && event.call) {
             return {
