@@ -140,8 +140,8 @@ def _model_completion(
 
 
 def _tool_result_content(result: Any) -> str:
-    if result.structuredContent is not None:
-        return json.dumps(result.structuredContent, ensure_ascii=False)
+    if result.structured_content is not None:
+        return json.dumps(result.structured_content, ensure_ascii=False)
     return "\n".join(str(getattr(item, "text", item)) for item in result.content)
 
 
@@ -188,7 +188,7 @@ async def _answer_turn(
                 content = _tool_result_content(result)
                 print(
                     f"[tool] returned {len(content)} characters"
-                    + (" (error)" if result.isError else ""),
+                    + (" (error)" if result.is_error else ""),
                     flush=True,
                 )
             messages.append(

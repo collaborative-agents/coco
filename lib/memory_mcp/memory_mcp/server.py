@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from memory.paths import default_memory_db_path
 from memory.store import MemoryStore
 
@@ -165,12 +165,12 @@ class AppContext:
 
 
 @asynccontextmanager
-async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
+async def app_lifespan(_server: MCPServer) -> AsyncIterator[AppContext]:
     load_dotenv()
     yield AppContext(store=MemoryStore(default_memory_db_path()))
 
 
-mcp = FastMCP("coco-memory", lifespan=app_lifespan)
+mcp = MCPServer("coco-memory", lifespan=app_lifespan)
 
 
 @mcp.tool()

@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp import Client
+from mcp.client.stdio import StdioServerParameters
 
 
 async def _call_memory_tool(
@@ -19,23 +19,22 @@ async def _call_memory_tool(
     db_path: Path | None = None,
 ) -> dict[str, Any]:
     child_env = dict(os.environ)
+    child_env["PYTHONUNBUFFERED"] = "1"
     if db_path is not None:
         child_env["COCO_MEMORY_DB_PATH"] = str(db_path.expanduser().resolve())
     server = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "memory_mcp.server"],
+        args=["-u", "-m", "memory_mcp.server"],
         env=child_env,
     )
-    async with stdio_client(server) as streams:
-        async with ClientSession(*streams) as session:
-            await session.initialize()
-            result = await session.call_tool(name, arguments)
-    if result.isError:
+    async with Client(server) as client:
+        result = await client.call_tool(name, arguments)
+    if result.is_error:
         message = "\n".join(str(getattr(item, "text", item)) for item in result.content)
         raise RuntimeError(message or f"{name} failed")
-    if result.structuredContent is None:
+    if result.structured_content is None:
         raise RuntimeError(f"{name} returned no structured content")
-    return result.structuredContent
+    return result.structured_content
 
 
 def _parser() -> argparse.ArgumentParser:
