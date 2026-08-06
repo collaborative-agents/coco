@@ -48,6 +48,7 @@ body,
   cursor: move;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-user-drag: none;
   -webkit-app-region: drag;
   /* Default 90% — the action / sleep sprites read larger than the idle pet,
      so we shrink them for visual consistency. The `.pet-image-full` modifier
