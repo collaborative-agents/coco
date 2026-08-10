@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import sys
 from pathlib import Path
 
 from memory.models import ObservationInput, PropositionDraft
 from memory.store import MemoryStore
-from memory_mcp.client import call_get_recent_observations, call_get_user_context
+from memory_mcp.client import (
+    _memory_server_parameters,
+    call_get_recent_observations,
+    call_get_user_context,
+)
 from memory_mcp.server import (
     _ago_timestamp,
     query_recent_observations,
@@ -163,6 +168,24 @@ def test_server_supports_mcp_cli_file_import() -> None:
     spec.loader.exec_module(module)
 
     assert module.mcp.name == "coco-memory"
+
+
+def test_client_uses_python_module_command_in_source_runtime(monkeypatch) -> None:
+    monkeypatch.delattr(sys, "frozen", raising=False)
+
+    server = _memory_server_parameters()
+
+    assert server.command == sys.executable
+    assert server.args == ["-m", "memory_mcp.server"]
+
+
+def test_client_uses_embedded_server_mode_in_frozen_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    server = _memory_server_parameters()
+
+    assert server.command == sys.executable
+    assert server.args == ["--memory-mcp"]
 
 
 def test_cli_client_calls_get_user_context_over_stdio(tmp_path) -> None:

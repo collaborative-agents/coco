@@ -174,7 +174,7 @@ export default function ObservationBubble({
 
       {/* Tier-1 (progress/observing): no suggestion. A passive "?" explains that
           there's nothing proactive right now and points to clicking the pet. */}
-      {!isTier3 && !showHelpButton && (
+      {!isTier3 && !showHelpButton && !suggestion && (
         <span
           className="bubble-help-badge"
           tabIndex={0}

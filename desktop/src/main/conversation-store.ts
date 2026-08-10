@@ -25,6 +25,7 @@ export interface StoredConversation {
   problem: string;
   createdAt: number;
   updatedAt: number;
+  tutorModelId?: string;
   messages: StoredChatMessage[];
 }
 
@@ -156,6 +157,7 @@ export function readConversations(): StoredConversation[] {
 export function saveConversation(input: {
   sessionId?: unknown;
   problem?: unknown;
+  tutorModelId?: unknown;
   messages?: unknown;
 }): void {
   if (
@@ -186,6 +188,10 @@ export function saveConversation(input: {
   );
   const requestedProblem =
     typeof input.problem === 'string' ? input.problem.trim() : '';
+  const tutorModelId =
+    typeof input.tutorModelId === 'string' && input.tutorModelId
+      ? input.tutorModelId
+      : existing?.tutorModelId;
   const next: StoredConversation = {
     sessionId: input.sessionId,
     title:
@@ -197,6 +203,7 @@ export function saveConversation(input: {
     problem: requestedProblem || existing?.problem || '',
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+    ...(tutorModelId ? { tutorModelId } : {}),
     messages: existing
       ? mergeConversationMessages(existing.messages, messages)
       : messages,

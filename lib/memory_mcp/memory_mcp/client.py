@@ -12,6 +12,27 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
+def _memory_server_parameters(
+    env: dict[str, str] | None = None,
+) -> StdioServerParameters:
+    """Return the memory-server command for source and frozen runtimes."""
+    if getattr(sys, "frozen", False):
+        # A PyInstaller executable is not a Python interpreter, so
+        # ``sys.executable -m memory_mcp.server`` would relaunch the frozen
+        # tutor CLI and fail while parsing ``-m``. The tutor executable exposes
+        # this dedicated mode to run the bundled MCP stdio server instead.
+        return StdioServerParameters(
+            command=sys.executable,
+            args=["--memory-mcp"],
+            env=env,
+        )
+    return StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "memory_mcp.server"],
+        env=env,
+    )
+
+
 async def _call_memory_tool(
     name: str,
     arguments: dict[str, Any],
@@ -21,11 +42,7 @@ async def _call_memory_tool(
     child_env = dict(os.environ)
     if db_path is not None:
         child_env["COCO_MEMORY_DB_PATH"] = str(db_path.expanduser().resolve())
-    server = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "memory_mcp.server"],
-        env=child_env,
-    )
+    server = _memory_server_parameters(child_env)
     async with stdio_client(server) as streams:
         async with ClientSession(*streams) as session:
             await session.initialize()

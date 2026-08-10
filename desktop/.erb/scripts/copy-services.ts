@@ -61,7 +61,7 @@ interface ProdConfig {
  * Transformation rules:
  * 1. Python services (type: "python" or command: "uv"/"python"):
  *    - Development: Use uv/python to run source code modules
- *    - Production: Use PyInstaller bundled executable (filename = service.id)
+ *    - Production: Use the service executable from the shared PyInstaller bundle
  *
  * 2. Node services (type: "node" or command: "npm"/"node"):
  *    - Development: Use npm/node to run source code
@@ -98,14 +98,28 @@ function transformServiceToProduction(service: DevServiceConfig): ProdServiceCon
 
   // Apply transformation rules based on service type
   if (isPythonService) {
-    // Python service: keep using `uv run python` (same as dev mode).
-    // PyInstaller bundles are not reliably built for all services yet, so we
-    // run directly from the monorepo source.  This requires uv + the monorepo
-    // to be present on the target machine, which is true for internal use.
-    base.command = service.command || 'uv';
-    base.args = service.args || [];
-    base.cwd = service.cwd || '${PROJECT_ROOT}';
-    base.logPath = '${ELECTRON_UI_ROOT}/logs/' + service.id + '.log';
+    // Python services are separate executables that share one PyInstaller
+    // _internal directory. They still run as independent OS processes.
+    // On Windows, PyInstaller produces .exe; on macOS/Linux, no extension.
+    const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+    const sharedServiceDir = '${SERVICE_DIST_ROOT}/coco-services';
+    base.command = `${sharedServiceDir}/${service.id}${exeSuffix}`;
+    // Strip the "uv run python -m <module>" prefix from args, keep only CLI flags.
+    const rawArgs = service.args || [];
+    const cliArgs: string[] = [];
+    let skipNext = false;
+    for (const arg of rawArgs) {
+      if (skipNext) { skipNext = false; continue; }
+      if (arg === 'run' || arg === 'python') continue;
+      if (arg === '-m') { skipNext = true; continue; }
+      if (arg.startsWith('-m')) continue; // handles "-mmodule" form
+      // Anything that looks like a dotted module name (no dash prefix) right after -m removal
+      if (!arg.startsWith('-') && arg.includes('.') && cliArgs.length === 0) continue;
+      cliArgs.push(arg);
+    }
+    base.args = cliArgs;
+    base.cwd = sharedServiceDir;
+    base.logPath = '${USER_DATA_ROOT}/logs/' + service.id + '.log';
     base.shell = service.shell ?? true;
   } else if (isNodeService) {
     // Node service: Use bundled JavaScript file
@@ -223,12 +237,11 @@ function copyWithTransform(
 }
 
 
-const serviceTasks: ServiceCopyTask[] = [
-  {
-    name: 'gemini-agent',
-    source: path.join(projectRoot, '../../third_party/gemini-cli-agent/dist-bundle'),
-    dest: path.join(serviceDistRoot, 'gemini-cli-agent'),
-  },
+interface ServiceCopyTaskDef extends ServiceCopyTask {
+  optional?: boolean;
+}
+
+const serviceTasks: ServiceCopyTaskDef[] = [
   {
     name: 'services-config',
     source: path.join(projectRoot, 'src/main/services/config.json'),
@@ -237,28 +250,29 @@ const serviceTasks: ServiceCopyTask[] = [
   },
 ];
 
+if (!fs.existsSync(serviceDistRoot)) {
+  fs.mkdirSync(serviceDistRoot, { recursive: true });
+}
 
 console.log('📦 Starting to copy services...\n');
 
 serviceTasks.forEach((task) => {
   console.log(`Processing ${task.name}...`);
 
-  // 1. Clean destination
   if (fs.existsSync(task.dest)) {
     console.log(`  🧹 Cleaning ${task.dest}`);
     rimrafSync(task.dest);
   }
 
-  // 2. Validate source exists
   if (!fs.existsSync(task.source)) {
-    console.error(`  ❌ Source not found: ${task.source}`);
-    if (task.name === 'gemini-agent') {
-      console.error(`  💡 Did you run 'npm run bundle' in the gemini-cli-agent directory?`);
+    if (task.optional) {
+      console.warn(`  ⚠️  Source not found (optional), skipping: ${task.source}`);
+      return;
     }
+    console.error(`  ❌ Source not found: ${task.source}`);
     process.exit(1);
   }
 
-  // 3. Copy (with optional transform)
   try {
     console.log(`  📋 Copying from ${task.source} to ${task.dest}`);
     copyWithTransform(task.source, task.dest, task.transform);

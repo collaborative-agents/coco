@@ -3,9 +3,8 @@ import os
 from collections.abc import Callable
 from typing import cast
 
-import cv2
 import numpy as np
-import pandas as pd
+from PIL import Image
 from py_utils.logging import init_logger
 from sensing.segment_processor import AiTutoringProcessor, SegmentProcessor
 from sensing.utils import (
@@ -210,9 +209,14 @@ def calc_diff_scores(action_nodes: list[dict]) -> list[float]:
         # print(f"Calculating MSE between {image_before} and {image_after}")
         if not image_before or not image_after:
             return MAX_DIFF
-        image1 = cv2.imread(image_before)
-        image2 = cv2.imread(image_after)
-        if image1 is None or image2 is None or image1.shape != image2.shape:
+        try:
+            with Image.open(image_before) as before:
+                image1 = np.array(before.convert("RGB"))
+            with Image.open(image_after) as after:
+                image2 = np.array(after.convert("RGB"))
+        except (OSError, ValueError):
+            return MAX_DIFF
+        if image1.shape != image2.shape:
             return MAX_DIFF
         err = np.sum((image1.astype("float") - image2.astype("float")) ** 2)
         err /= float(image1.shape[0] * image1.shape[1])
@@ -623,7 +627,7 @@ class Streamer:
         )
 
         # 5. Segment — this is the LAST consumer of screenshot files
-        #    (calc_diff_scores → cv2.imread).  After this call returns,
+        #    (calc_diff_scores → Pillow).  After this call returns,
         #    the files are no longer needed.
         segments = trigger_segmentation(
             list(self._stored_actions),
@@ -648,8 +652,8 @@ class Streamer:
                 snapshot_keeper = last_seg[-1].get("state_str", {}).get("after")
 
         # 6c. Delete ALL event screenshots from stored actions — segmentation
-        #     already read them.  Future segmentation cycles will get
-        #     cv2.imread → None → MAX_DIFF for these old transitions, which
+        #     already read them. Future segmentation cycles will get
+        #     missing paths → MAX_DIFF for these old transitions, which
         #     is fine (only recent actions need accurate diff scores).
         stale_paths: list[str] = []
         for sa in self._stored_actions:
@@ -704,22 +708,22 @@ class Streamer:
 
                 if self.periodic_delete:
                     query = text("SELECT id, content FROM observations ORDER BY id")
-                    df = pd.read_sql_query(query, connection)
-                    logger.info(f"Total {len(df)} actions from database")
+                    rows = connection.execute(query).all()
+                    logger.info(f"Total {len(rows)} actions from database")
                 else:
                     query = text(
                         "SELECT id, content FROM observations "
                         "WHERE id > :last_id AND content_type = 'input_text' "
                         "ORDER BY id"
                     )
-                    df = pd.read_sql_query(
-                        query, connection, params={"last_id": self._last_processed_id}
-                    )
-                    logger.info(f"Loaded {len(df)} actions from database")
+                    rows = connection.execute(
+                        query, {"last_id": self._last_processed_id}
+                    ).all()
+                    logger.info(f"Loaded {len(rows)} actions from database")
 
-            if not df.empty:
-                actions = df["content"].to_list()
-                observation_ids = df["id"].to_list()
+            if rows:
+                actions = [row.content for row in rows]
+                observation_ids = [row.id for row in rows]
                 if not self.periodic_delete:
                     self._last_processed_id_tmp = observation_ids[-1]
                     logger.info(

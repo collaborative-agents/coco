@@ -179,16 +179,10 @@ class MemoryEngine:
     def _complete(self, system: str, prompt: str) -> str:
         if not self.model:
             raise RuntimeError("MEMORY_MODEL is empty")
-        extra_body = (
-            {"chat_template_kwargs": {"enable_thinking": False}}
-            if self.model.startswith("hosted_vllm/")
-            else None
-        )
         return prompt_to_text(
             self.model,
             system,
             prompt,
-            extra_body=extra_body,
         )
 
     async def add_observation(self, observation: ObservationInput) -> bool:

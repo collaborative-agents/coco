@@ -23,6 +23,9 @@ export type Channels =
   | 'set-user-id'
   | 'toggle-float-window'
   | 'float-window-state'
+  | 'get-chat-content-zoom-factor'
+  | 'chat-content-zoom-factor'
+  | 'open-chat-settings'
   // Proactive session flow
   | 'session-active'
   | 'show-session-setup'
@@ -43,10 +46,18 @@ export type Channels =
   | 'hotkey-capture-ready'
   // Onboarding
   | 'onboarding-complete'
+  | 'model-configuration-complete'
+  | 'hide-onboarding'
   | 'get-profile'
+  | 'get-model-configuration'
+  | 'get-service-health'
+  | 'test-model-connection'
+  | 'save-model-configuration'
+  | 'set-chat-model'
   // Settings (post-onboarding profile edits)
   | 'save-profile'
   | 'update-settings'
+  | 'update-avatar-visibility'
   // Long-term agent memory (view/edit)
   | 'get-memory'
   | 'save-memory'
@@ -104,9 +115,6 @@ const electronHandler = {
     // Expose webUtils.getPathForFile to get the real file path in the renderer process
     // This is necessary because the File object in the browser/renderer does not expose the full path for security reasons
     getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  },
-  env: {
-    get: (key: string) => process.env[key],
   },
   benchmark: {
     downloadFile: (

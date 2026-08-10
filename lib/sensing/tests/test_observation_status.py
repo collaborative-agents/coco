@@ -27,7 +27,7 @@ def test_no_human_mistake_is_neutral():
     assert _classify_observation_status("everyday_support", observation) == "progress"
 
 
-def test_vllm_observer_disables_thinking(monkeypatch):
+def test_openai_compatible_observer_does_not_inject_provider_options(monkeypatch):
     captured = {}
 
     def fake_chat_completion(**kwargs):
@@ -41,9 +41,7 @@ def test_vllm_observer_disables_thinking(monkeypatch):
         model="hosted_vllm/Qwen/Qwen3.5-35B-A3B",
     )
 
-    assert captured["extra_body"] == {
-        "chat_template_kwargs": {"enable_thinking": False}
-    }
+    assert "extra_body" not in captured
     assert "reasoning_effort" not in captured
 
 
@@ -62,3 +60,4 @@ def test_inkling_observer_disables_reasoning_effort(monkeypatch):
     )
 
     assert captured["reasoning_effort"] == "none"
+    assert "extra_body" not in captured

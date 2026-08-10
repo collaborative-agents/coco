@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { encodeCustomChatbot, encodeCustomAgent } from './observation-types';
 import './OnboardingView.css';
 import foxWorking from '../../../assets/pet1.png';
@@ -12,6 +12,213 @@ import customModeIcon from '../../../assets/custom.png';
 const IS_MAC =
   typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 const HOTKEY_LABEL = IS_MAC ? 'Cmd + Shift + Space' : 'Ctrl + Shift + Space';
+
+const MODEL_PROVIDERS = [
+  ['gemini', 'Google Gemini'],
+  ['openai', 'OpenAI'],
+  ['anthropic', 'Anthropic'],
+  ['tinfoil', 'Tinfoil (confidential)'],
+  ['hosted_vllm', 'OpenAI-compatible endpoint'],
+  ['lm_studio', 'LM Studio (local)'],
+] as const;
+const ENDPOINT_PROVIDERS = new Set(['hosted_vllm', 'lm_studio']);
+
+interface ModelDraft {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl: string;
+}
+
+interface ConnectionTestStatus {
+  state: 'testing' | 'success' | 'error';
+  message: string;
+}
+
+function ModelFields({
+  value,
+  onChange,
+  sensing = false,
+  onTest,
+  testStatus,
+}: {
+  value: ModelDraft;
+  onChange: (next: ModelDraft) => void;
+  sensing?: boolean;
+  onTest: () => void;
+  testStatus?: ConnectionTestStatus;
+}) {
+  const update = (field: keyof ModelDraft, next: string) =>
+    onChange({ ...value, [field]: next });
+  let modelPlaceholder = sensing
+    ? 'Vision model ID (provider/model)'
+    : 'Model ID (provider/model)';
+  if (value.provider === 'hosted_vllm') {
+    modelPlaceholder = 'Exact model ID returned by /v1/models';
+  }
+  return (
+    <div className="ob-model-card">
+      <div className="ob-model-card-title">
+        {sensing ? 'Sensitive sensing model' : value.label || 'Tutor model'}
+      </div>
+      {sensing && (
+        <div className="ob-model-warning">
+          This model receives screenshots. Choose a vision-capable model and a
+          provider you trust.
+        </div>
+      )}
+      {!sensing && (
+        <input
+          className="ob-custom-input"
+          value={value.label}
+          placeholder="Display name, e.g. Claude Sonnet"
+          onChange={(event) => update('label', event.target.value)}
+        />
+      )}
+      <select
+        className="ob-custom-input"
+        value={value.provider}
+        onChange={(event) => update('provider', event.target.value)}
+      >
+        {MODEL_PROVIDERS.map(([id, label]) => (
+          <option key={id} value={id}>{label}</option>
+        ))}
+      </select>
+      <input
+        className="ob-custom-input"
+        value={value.model}
+        placeholder={modelPlaceholder}
+        onChange={(event) => update('model', event.target.value)}
+      />
+      {ENDPOINT_PROVIDERS.has(value.provider) && (
+        <input
+          className="ob-custom-input"
+          value={value.baseUrl}
+          placeholder={value.provider === 'lm_studio' ? 'Host (default localhost:1234)' : 'OpenAI-compatible base URL, ending in /v1'}
+          onChange={(event) => update('baseUrl', event.target.value)}
+        />
+      )}
+      {value.provider !== 'lm_studio' && (
+        <input
+          className="ob-custom-input"
+          type="password"
+          value={value.apiKey}
+          placeholder={value.provider === 'hosted_vllm' ? 'API key (optional)' : 'API key'}
+          autoComplete="off"
+          onChange={(event) => update('apiKey', event.target.value)}
+        />
+      )}
+      <div className="ob-connection-test-row">
+        <button
+          type="button"
+          className="ob-connection-test-btn"
+          disabled={testStatus?.state === 'testing'}
+          onClick={onTest}
+        >
+          {testStatus?.state === 'testing' ? 'Testing…' : 'Test connection'}
+        </button>
+        {testStatus?.state === 'success' && (
+          <span className="ob-connection-test-success">{testStatus.message}</span>
+        )}
+        {testStatus?.state === 'error' && (
+          <details className="ob-connection-test-error">
+            <summary>Connection failed — show details</summary>
+            <pre>{testStatus.message}</pre>
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StepModels({
+  sensing,
+  setSensing,
+  tutors,
+  setTutors,
+  defaultTutorId,
+  setDefaultTutorId,
+  error,
+  testStatuses,
+  onTest,
+}: {
+  sensing: ModelDraft;
+  setSensing: (next: ModelDraft) => void;
+  tutors: ModelDraft[];
+  setTutors: (next: ModelDraft[]) => void;
+  defaultTutorId: string;
+  setDefaultTutorId: (id: string) => void;
+  error: string;
+  testStatuses: Record<string, ConnectionTestStatus>;
+  onTest: (role: 'sensing' | 'tutor', model: ModelDraft) => void;
+}) {
+  const updateTutor = (index: number, next: ModelDraft) =>
+    setTutors(tutors.map((item, i) => (i === index ? next : item)));
+  const addTutor = () => {
+    const id = `tutor-${Date.now()}`;
+    setTutors([
+      ...tutors,
+      { id, label: '', provider: 'anthropic', model: '', apiKey: '', baseUrl: '' },
+    ]);
+  };
+  return (
+    <>
+      <div className="ob-title">Connect Coco to your models</div>
+      <div className="ob-sub">
+        The sensing model reads your screen to detect when help may be useful
+        and curate context. Tutor models generate proactive suggestions and
+        chat responses only when needed.
+      </div>
+      <ModelFields
+        value={sensing}
+        onChange={setSensing}
+        sensing
+        onTest={() => onTest('sensing', sensing)}
+        testStatus={testStatuses.sensing}
+      />
+      <div className="ob-model-section-title">Tutor models</div>
+      {tutors.map((tutor, index) => (
+        <div key={tutor.id} className="ob-model-wrap">
+          <ModelFields
+            value={tutor}
+            onChange={(next) => updateTutor(index, next)}
+            onTest={() => onTest('tutor', tutor)}
+            testStatus={testStatuses[tutor.id]}
+          />
+          <div className="ob-model-actions">
+            <label>
+              <input
+                type="radio"
+                name="default-tutor"
+                checked={defaultTutorId === tutor.id}
+                onChange={() => setDefaultTutorId(tutor.id)}
+              />{' '}Default for new chats
+            </label>
+            {tutors.length > 1 && (
+              <button
+                type="button"
+                className="ob-model-remove"
+                onClick={() => {
+                  const next = tutors.filter((item) => item.id !== tutor.id);
+                  setTutors(next);
+                  if (defaultTutorId === tutor.id) setDefaultTutorId(next[0].id);
+                }}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      <button type="button" className="ob-model-add" onClick={addTutor}>
+        + Add another tutor model
+      </button>
+      {error && <div className="ob-model-error">{error}</div>}
+    </>
+  );
+}
 
 const MODES = [
   {
@@ -452,7 +659,7 @@ function Step6({
     <>
       <div className="ob-title">Your AI toolkit</div>
       <div className="ob-sub">
-        Which AI tools do you have access to? Select all that apply — Coco will coach you on using the best of them.
+        Which AI tools do you have access to? Select all that apply — Coco also delegates to them when needed.
       </div>
 
       <div className="ob-tool-group">
@@ -550,16 +757,105 @@ function Step6({
   );
 }
 
+const MEMORY_EXAMPLES = [
+  'When I appear to be learning something, suggest useful questions or exercises I can work on.',
+  'When I am editing my own work, help me catch errors and typos, and suggest better wording or presentation when appropriate.',
+  'If I get stuck using software, give me direct instructions for how to proceed without delegating to another AI chatbot or agent.',
+  'When I appear to be working on a long-horizon, multi-step task—such as planning a trip across many tabs—proactively summarize what I have browsed so far in a polished, copy-ready format. No need to delegate this type of assistance to another AI chatbot or agent.',
+  'Watch for repetitive manual work, such as reformatting entries one by one, copying the same fields between tools, or repeating similar searches and edits. Proactively offer to automate it by drafting a ready-to-use agent prompt that includes the goal, inputs, exact steps, and desired output format.',
+];
+
+function StepMemory({
+  userName,
+  setUserName,
+  memory,
+  setMemory,
+  error,
+}: {
+  userName: string;
+  setUserName: (value: string) => void;
+  memory: string;
+  setMemory: (value: string) => void;
+  error: string;
+}) {
+  const addExample = (example: string) => {
+    const current = memory.trim();
+    if (current.includes(example)) return;
+    setMemory(current ? `${current}\n\n${example}` : example);
+  };
+
+  return (
+    <>
+      <div className="ob-title">Give Coco a head start</div>
+      <div className="ob-sub">
+        Tell Coco what to call you, then optionally share context to remember
+        across sessions.
+      </div>
+
+      <label className="ob-memory-name-label" htmlFor="ob-user-name">
+        Your name or preferred nickname
+      </label>
+      <input
+        id="ob-user-name"
+        className="ob-memory-name-input"
+        value={userName}
+        placeholder="e.g. Ada"
+        autoComplete="name"
+        onChange={(event) => setUserName(event.target.value)}
+      />
+
+      <label className="ob-memory-name-label" htmlFor="ob-initial-memory">
+        Memory <span>(optional)</span>
+      </label>
+
+      <textarea
+        id="ob-initial-memory"
+        className="ob-memory-input"
+        rows={7}
+        value={memory}
+        placeholder="What should Coco know about you?"
+        onChange={(event) => setMemory(event.target.value)}
+      />
+
+      <div className="ob-memory-examples-label">
+        Example memories — click to add
+      </div>
+      <div className="ob-memory-examples">
+        {MEMORY_EXAMPLES.map((example) => (
+          <button
+            key={example}
+            type="button"
+            className="ob-memory-example"
+            onClick={() => addExample(example)}
+          >
+            “{example}”
+          </button>
+        ))}
+      </div>
+
+      <div className="ob-memory-note">
+        Memory is stored locally and may be included in context sent to your
+        configured models. Don’t enter passwords, API keys, or other secrets.
+      </div>
+      {error && <div className="ob-model-error">{error}</div>}
+    </>
+  );
+}
+
 function Step8({
   selectedTools,
   customTool,
   customChatbotName,
   selectedMode,
+  userName,
+  memory,
 }: {
   selectedTools: string[];
   customTool: string;
   customChatbotName: string;
   selectedMode: string;
+  userName: string;
+  memory: string;
 }) {
   const allTools = [
     ...[...AI_CHATBOTS, ...AI_AGENTS].filter((t) => selectedTools.includes(t.id)).map((t) => t.label),
@@ -604,6 +900,22 @@ function Step8({
         </div>
       </div>
 
+      <div className="ob-summary-section">
+        <div className="ob-summary-label">Name</div>
+        <div className="ob-summary-chips">
+          <span className="ob-summary-chip">{userName.trim()}</span>
+        </div>
+      </div>
+
+      <div className="ob-summary-section">
+        <div className="ob-summary-label">Memory</div>
+        <div className="ob-summary-chips">
+          <span className={`ob-summary-chip ${memory.trim() ? '' : 'empty'}`}>
+            {memory.trim() ? 'Added' : 'Not provided'}
+          </span>
+        </div>
+      </div>
+
       <div className="ob-divider" />
 
       <p className="ob-summary-note">
@@ -617,8 +929,102 @@ function Step8({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function OnboardingView() {
+  const modelsOnly = new URLSearchParams(window.location.search).get('modelsOnly') === '1';
   const [step, setStep] = useState(0);
   const [showProceedModal, setShowProceedModal] = useState(false);
+  const [modelError, setModelError] = useState('');
+  const [savingModels, setSavingModels] = useState(false);
+  const [sensingModel, setSensingModel] = useState<ModelDraft>({
+    id: 'sensing', label: 'Sensing', provider: 'gemini', model: '', apiKey: '', baseUrl: '',
+  });
+  const [tutorModels, setTutorModels] = useState<ModelDraft[]>([
+    { id: 'tutor-1', label: 'Primary tutor', provider: 'anthropic', model: '', apiKey: '', baseUrl: '' },
+  ]);
+  const [defaultTutorId, setDefaultTutorId] = useState('tutor-1');
+  const [connectionTests, setConnectionTests] = useState<
+    Record<string, ConnectionTestStatus>
+  >({});
+  const [initialMemory, setInitialMemory] = useState('');
+  const [userName, setUserName] = useState('');
+  const [savingMemory, setSavingMemory] = useState(false);
+  const [memoryError, setMemoryError] = useState('');
+
+  const testModelConnection = async (
+    role: 'sensing' | 'tutor',
+    model: ModelDraft,
+  ) => {
+    const key = role === 'sensing' ? 'sensing' : model.id;
+    if (!model.model.trim()) {
+      setConnectionTests((current) => ({
+        ...current,
+        [key]: { state: 'error', message: 'Enter a model ID first.' },
+      }));
+      return;
+    }
+    setConnectionTests((current) => ({
+      ...current,
+      [key]: { state: 'testing', message: '' },
+    }));
+    const result = await window.electron?.ipcRenderer.invoke(
+      'test-model-connection',
+      {
+        role,
+        connection: {
+          id: model.id,
+          label: model.label || (role === 'sensing' ? 'Sensing' : 'Tutor'),
+          provider: model.provider,
+          model: model.model,
+          baseUrl: model.baseUrl,
+        },
+        apiKey: model.apiKey,
+      },
+    );
+    const response = result as {
+      success?: boolean;
+      message?: string;
+      error?: string;
+    } | undefined;
+    setConnectionTests((current) => ({
+      ...current,
+      [key]: response?.success
+        ? { state: 'success', message: response.message || 'Connected.' }
+        : { state: 'error', message: response?.error || 'Connection failed.' },
+    }));
+  };
+
+  useEffect(() => {
+    window.electron?.ipcRenderer
+      .invoke('get-model-configuration')
+      .then((config: any) => {
+        if (!config?.sensing || !Array.isArray(config.tutors)) return;
+        setSensingModel({
+          ...config.sensing,
+          model: String(config.sensing.model).replace(/^hosted_vllm\//, ''),
+          apiKey: '',
+          baseUrl: config.sensing.baseUrl ?? '',
+        });
+        setTutorModels(
+          config.tutors.map((item: any) => ({
+            ...item,
+            model: String(item.model).replace(/^hosted_vllm\//, ''),
+            apiKey: '',
+            baseUrl: item.baseUrl ?? '',
+          })),
+        );
+        setDefaultTutorId(config.defaultTutorId);
+      })
+      .catch(() => {});
+
+    window.electron?.ipcRenderer
+      .invoke('get-memory')
+      .then((result: any) => setInitialMemory(String(result?.memory ?? '')))
+      .catch(() => {});
+
+    window.electron?.ipcRenderer
+      .invoke('get-profile')
+      .then((profile: any) => setUserName(String(profile?.userName ?? '')))
+      .catch(() => {});
+  }, []);
 
   // Step 6 – Mode
   const [selectedMode, setSelectedMode] = useState('everyday_support');
@@ -637,29 +1043,99 @@ export default function OnboardingView() {
   const [customChatbotName, setCustomChatbotName] = useState('');
   const [customChatbotUrl, setCustomChatbotUrl] = useState('');
   const [customChatbotDesc, setCustomChatbotDesc] = useState('');
-
   const toggleTool = (id: string) =>
     setSelectedTools((prev) =>
       prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
     );
 
-  const stepKeys = [
-    'intro0',
-    'howto',
-    'ask',
-    'mode',
-    'toolkit',
-    'summary',
-  ];
+  const stepKeys = modelsOnly
+    ? ['models']
+    : [
+        'models',
+        'intro0',
+        'howto',
+        'ask',
+        'mode',
+        'toolkit',
+        'memory',
+        'summary',
+      ];
   const totalSteps = stepKeys.length;
   const currentKey = stepKeys[Math.min(step, totalSteps - 1)];
 
-  const handleNext = () => {
+  const handleNext = async () => {
+    if (currentKey === 'models') {
+      if (!sensingModel.model.trim()) {
+        setModelError('Enter a vision-capable sensing model.');
+        return;
+      }
+      if (tutorModels.some((item) => !item.label.trim() || !item.model.trim())) {
+        setModelError('Give every tutor model a name and model ID.');
+        return;
+      }
+      setSavingModels(true);
+      setModelError('');
+      const credentials: Record<string, string> = {};
+      if (sensingModel.apiKey.trim()) {
+        credentials[`sensing:${sensingModel.provider}`] = sensingModel.apiKey;
+      }
+      tutorModels.forEach((item) => {
+        if (item.apiKey.trim()) credentials[`tutor:${item.provider}`] = item.apiKey;
+      });
+      const result = await window.electron?.ipcRenderer.invoke(
+        'save-model-configuration',
+        {
+          sensing: {
+            id: 'sensing',
+            label: 'Sensing',
+            provider: sensingModel.provider,
+            model: sensingModel.model,
+            baseUrl: sensingModel.baseUrl,
+          },
+          tutors: tutorModels.map(({ apiKey, baseUrl, ...item }) => ({
+            ...item,
+            baseUrl,
+          })),
+          defaultTutorId,
+          credentials,
+        },
+      );
+      setSavingModels(false);
+      if (!(result as { success?: boolean })?.success) {
+        setModelError(
+          (result as { error?: string })?.error || 'Could not save model configuration.',
+        );
+        return;
+      }
+      if (modelsOnly) {
+        window.electron?.ipcRenderer.sendMessage('model-configuration-complete');
+        window.close();
+        return;
+      }
+    }
     if (currentKey === 'toolkit') {
       const hasChatbot = AI_CHATBOTS.some((t) => selectedTools.includes(t.id));
       const hasAgent = AI_AGENTS.some((t) => selectedTools.includes(t.id));
       if (!hasChatbot || !hasAgent) {
         setShowProceedModal(true);
+        return;
+      }
+    }
+    if (currentKey === 'memory') {
+      if (!userName.trim()) {
+        setMemoryError('Enter the name you want Coco to use.');
+        return;
+      }
+      setSavingMemory(true);
+      setMemoryError('');
+      const result = await window.electron?.ipcRenderer.invoke('save-memory', {
+        memory: initialMemory.trim(),
+      });
+      setSavingMemory(false);
+      if (!(result as { success?: boolean })?.success) {
+        setMemoryError(
+          (result as { error?: string })?.error || 'Could not save memory.',
+        );
         return;
       }
     }
@@ -669,6 +1145,7 @@ export default function OnboardingView() {
   const sendProfile = (skipped: boolean) => {
     const profile = {
       onboardingComplete: true,
+      userName: skipped ? '' : userName.trim(),
       tutorScenario: skipped ? 'everyday_support' : selectedMode,
       aiTools: skipped
         ? []
@@ -702,8 +1179,19 @@ export default function OnboardingView() {
         <div className="ob-header">
           <div className="ob-brand">
             <span className="ob-brand-dot" />
-            <span className="ob-brand-name">Getting started</span>
+            <span className="ob-brand-name">
+              {modelsOnly ? 'Model setup' : 'Getting started'}
+            </span>
           </div>
+          <button
+            type="button"
+            className="ob-close-btn"
+            aria-label="Close setup for now"
+            title="Close for now"
+            onClick={() => window.electron?.ipcRenderer.sendMessage('hide-onboarding')}
+          >
+            ×
+          </button>
         </div>
 
         {/* Progress */}
@@ -719,6 +1207,19 @@ export default function OnboardingView() {
 
         {/* Step content */}
         <div className="ob-body">
+          {currentKey === 'models' && (
+            <StepModels
+              sensing={sensingModel}
+              setSensing={setSensingModel}
+              tutors={tutorModels}
+              setTutors={setTutorModels}
+              defaultTutorId={defaultTutorId}
+              setDefaultTutorId={setDefaultTutorId}
+              error={modelError}
+              testStatuses={connectionTests}
+              onTest={testModelConnection}
+            />
+          )}
           {currentKey === 'intro0' && <Step0 />}
           {currentKey === 'howto' && <Step3 />}
           {currentKey === 'ask' && <Step4 />}
@@ -750,12 +1251,23 @@ export default function OnboardingView() {
               setCustomChatbotDesc={setCustomChatbotDesc}
             />
           )}
+          {currentKey === 'memory' && (
+            <StepMemory
+              userName={userName}
+              setUserName={setUserName}
+              memory={initialMemory}
+              setMemory={setInitialMemory}
+              error={memoryError}
+            />
+          )}
           {currentKey === 'summary' && (
             <Step8
               selectedTools={selectedTools}
               customTool={customTool}
               customChatbotName={customChatbotName}
               selectedMode={selectedMode}
+              userName={userName}
+              memory={initialMemory}
             />
           )}
         </div>
@@ -777,17 +1289,27 @@ export default function OnboardingView() {
             <button
               type="button"
               className="ob-btn ob-btn-green"
-              onClick={() => sendProfile(false)}
+              onClick={modelsOnly ? handleNext : () => sendProfile(false)}
+              disabled={savingModels}
             >
-              Start Coco 🐾
+              {modelsOnly
+                ? (savingModels ? 'Saving…' : 'Save & start Coco 🐾')
+                : 'Start Coco 🐾'}
             </button>
           ) : (
             <button
               type="button"
               className="ob-btn ob-btn-primary"
               onClick={handleNext}
+              disabled={savingModels || savingMemory}
             >
-              Next →
+              {savingModels || savingMemory
+                ? 'Saving…'
+                : currentKey === 'memory'
+                  ? initialMemory.trim()
+                    ? 'Save & continue →'
+                    : 'Continue without memory →'
+                  : 'Next →'}
             </button>
           )}
         </div>

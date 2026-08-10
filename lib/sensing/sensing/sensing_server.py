@@ -64,24 +64,44 @@ def _build_memory_engine(observer_model: str) -> MemoryEngine:
 
 
 def _notify_hotkey_captured(index: int) -> None:
-    """Fire a native macOS notification after a hot-key capture.
+    """Fire a native notification after a hot-key capture.
 
-    Uses ``osascript`` so no extra Python dependency is required.
+    Uses platform-specific mechanisms:
+    - macOS: osascript
+    - Windows: PowerShell toast notification
     Runs in a detached subprocess — failures are logged but never raise.
     """
+    import sys as _sys
+
     try:
-        script = (
-            f'display notification "Screenshot #{index} saved" '
-            f'with title "Coco Hot Key" '
-            f'subtitle "Cmd+Shift+Space captured"'
-        )
-        subprocess.Popen(
-            ["osascript", "-e", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if _sys.platform == "darwin":
+            script = (
+                f'display notification "Screenshot #{index} saved" '
+                f'with title "Coco Hot Key" '
+                f'subtitle "Cmd+Shift+Space captured"'
+            )
+            subprocess.Popen(
+                ["osascript", "-e", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        elif _sys.platform == "win32":
+            ps_script = (
+                f"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; "
+                f"$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(0); "
+                f"$text = $xml.GetElementsByTagName('text'); "
+                f"$text.Item(0).AppendChild($xml.CreateTextNode('Coco Hot Key: Screenshot #{index} saved')) > $null; "
+                f"$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
+                f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Coco').Show($toast)"
+            )
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
     except Exception as exc:
-        logger.warning(f"Could not send macOS notification: {exc}")
+        logger.warning(f"Could not send notification: {exc}")
 
 
 class TimeRangeRequest(BaseModel):
@@ -104,6 +124,7 @@ class StatusResponse(BaseModel):
     """Response model for server status."""
 
     status: str
+    service: str = "coco-sensing"
     total_actions: int
 
 
@@ -232,7 +253,7 @@ async def health_check():
     if streamer is None:
         raise HTTPException(status_code=503, detail="Streamer not initialized")
     total = await streamer.get_total_stored_actions()
-    return StatusResponse(status="healthy", total_actions=total)
+    return StatusResponse(status="healthy", service="coco-sensing", total_actions=total)
 
 
 @app.post("/guidance_delivered", response_model=StatusResponse)

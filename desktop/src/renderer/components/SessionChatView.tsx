@@ -137,14 +137,80 @@ interface ChatMessage {
   retryImages?: string[];
 }
 
+function copyableMessageText(message: ChatMessage): string {
+  if (message.role === 'tutor' && !message.isError) {
+    return parseGuidance(message.text).text;
+  }
+  return message.text;
+}
+
+function messageCopyKey(message: ChatMessage, index: number): string {
+  return `${message.role}:${message.id ?? message.ts ?? index}`;
+}
+
 interface SavedConversation {
   sessionId: string;
   title?: string;
   problem: string;
   createdAt: number;
   updatedAt: number;
+  tutorModelId?: string;
   messages: ChatMessage[];
 }
+
+interface TutorModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  baseUrl?: string;
+}
+
+interface ServiceHealth {
+  connected: boolean;
+  status: string;
+  detail?: string;
+  totalActions?: number;
+  modelAssessment?: {
+    status: 'verified' | 'failed' | 'legacy_unassessed' | 'not_configured';
+    detail: string;
+  };
+}
+
+interface ServiceHealthView {
+  checkedAt: number;
+  sensing: ServiceHealth;
+  tutor: ServiceHealth;
+}
+
+interface ConnectionTestStatus {
+  state: 'testing' | 'success' | 'error';
+  message: string;
+}
+
+const MODEL_PROVIDER_OPTIONS = [
+  ['gemini', 'Google Gemini'],
+  ['openai', 'OpenAI'],
+  ['anthropic', 'Anthropic'],
+  ['tinfoil', 'Tinfoil'],
+  ['hosted_vllm', 'OpenAI-compatible endpoint'],
+  ['lm_studio', 'LM Studio'],
+] as const;
+const MODEL_ENDPOINT_PROVIDERS = new Set(['hosted_vllm', 'lm_studio']);
+
+const blankSensingModel = (): TutorModelOption => ({
+  id: 'sensing',
+  label: 'Sensing',
+  provider: 'gemini',
+  model: '',
+});
+
+const blankTutorModel = (): TutorModelOption => ({
+  id: 'tutor-1',
+  label: 'Primary tutor',
+  provider: 'anthropic',
+  model: '',
+});
 
 // crypto.randomUUID needs a secure context; fall back for safety.
 const makeMessageId = (): string =>
@@ -179,24 +245,34 @@ const S: Record<string, React.CSSProperties> = {
     boxShadow: '0 8px 32px rgba(0,0,0,0.18)', border: `1px solid ${BORDER}`,
     color: '#111827',
   },
+  contentViewport: { flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' },
+  scalableContent: { display: 'flex', flexDirection: 'column', minHeight: 0, transformOrigin: 'top left' },
   header: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
+    display: 'flex', alignItems: 'center', gap: 8, padding: '9px 10px',
     background: '#f9fafb', borderBottom: `1px solid ${BORDER}`,
     WebkitAppRegion: 'drag', // draggable region for the frameless window
   } as React.CSSProperties,
-  brand: { display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, fontSize: 13, color: '#374151' },
-  statusDot: { width: 8, height: 8, borderRadius: '50%', background: '#22c55e' },
-  sub: { fontSize: 11, color: '#9ca3af', fontWeight: 400 },
-  headerBtns: { marginLeft: 'auto', display: 'flex', gap: 2, WebkitAppRegion: 'no-drag' } as React.CSSProperties,
+  brand: { display: 'flex', alignItems: 'center', gap: 7, flex: '1 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', fontWeight: 700, fontSize: 13, color: '#374151' },
+  statusDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
+  sub: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, color: '#9ca3af', fontWeight: 400 },
+  healthHeaderButton: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', fontFamily: FONT, fontSize: 11, lineHeight: 1.2, fontWeight: 700, whiteSpace: 'nowrap', WebkitAppRegion: 'no-drag' } as React.CSSProperties,
+  headerBtns: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, WebkitAppRegion: 'no-drag' } as React.CSSProperties,
+  modelSelect: {
+    width: 120, minWidth: 120, maxWidth: 120,
+    border: `1px solid ${ACCENT_BORDER}`, background: '#fff',
+    color: ACCENT, borderRadius: 7, padding: '3px 6px', fontSize: 11,
+    fontFamily: FONT, WebkitAppRegion: 'no-drag',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  } as React.CSSProperties,
   iconBtn: {
     border: 'none', background: 'transparent', cursor: 'pointer',
-    fontSize: 15, color: '#9ca3af', padding: '3px 7px', borderRadius: 7,
+    fontSize: 15, color: '#9ca3af', padding: '3px 5px', borderRadius: 7,
   },
   iconBtnActive: { background: ACCENT_BG, color: ACCENT },
   newSessionBtn: {
     border: `1px solid ${ACCENT_BORDER}`, background: '#fff', cursor: 'pointer',
     fontSize: 11.5, color: ACCENT, padding: '3px 8px', borderRadius: 7,
-    fontFamily: FONT, fontWeight: 600,
+    fontFamily: FONT, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
   },
   historyPanel: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#fff' },
   historyPanelHeader: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', borderBottom: `1px solid ${BORDER}` },
@@ -223,6 +299,8 @@ const S: Record<string, React.CSSProperties> = {
   exampleBtn: { marginTop: 6, border: `1px solid ${ACCENT_BORDER}`, background: '#fff', borderRadius: 8, padding: '3px 9px', fontSize: 11, cursor: 'pointer', color: ACCENT },
   viz: { marginTop: 8, width: '100%', height: 280, border: `1px solid ${BORDER}`, borderRadius: 10, background: '#fff' },
   composer: { borderTop: `1px solid ${BORDER}`, padding: 10, background: '#fff' },
+  composerModelRow: { display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 },
+  composerModelLabel: { color: '#6b7280', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' },
   pendingContext: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '6px 8px', border: `1px solid ${ACCENT_BORDER}`, borderRadius: 8, background: ACCENT_BG, color: ACCENT, fontSize: 11.5 },
   pendingContextText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   pendingContextX: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 2px', fontFamily: FONT, fontSize: 14, lineHeight: 1 },
@@ -236,6 +314,9 @@ const S: Record<string, React.CSSProperties> = {
   hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
   hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
   feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
+  userMessageActions: { display: 'flex', justifyContent: 'flex-end', marginTop: 3 },
+  copyMessageBtn: { border: 'none', background: 'transparent', borderRadius: 6, padding: '1px 5px', color: '#9ca3af', fontFamily: FONT, fontSize: 10.5, lineHeight: '18px', cursor: 'pointer' },
+  copyMessageBtnDone: { color: '#16a34a', fontWeight: 700 },
   metricRow: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, color: '#6b7280', fontSize: 10.5 },
   metricChip: { border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 6, padding: '1px 5px', lineHeight: 1.35 },
   toolStack: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 7 },
@@ -254,6 +335,17 @@ const S: Record<string, React.CSSProperties> = {
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   // Settings panel (mirrors the onboarding toolkit step)
   settings: { borderBottom: `1px solid ${BORDER}`, background: '#ffffff', padding: '14px', maxHeight: 360, overflowY: 'auto' },
+  healthList: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 },
+  healthRow: { display: 'flex', alignItems: 'flex-start', gap: 8, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px' },
+  healthDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, marginTop: 4 },
+  healthName: { fontSize: 12.5, fontWeight: 700, color: '#374151' },
+  healthDetail: { fontSize: 10.5, color: '#9ca3af', marginTop: 2 },
+  healthActions: { display: 'flex', alignItems: 'center', gap: 9, marginBottom: 14 },
+  connectionTestRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  connectionTestButton: { border: `1px solid ${ACCENT_BORDER}`, background: '#fff', color: ACCENT, borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
+  connectionTestSuccess: { color: '#16a34a', fontSize: 11.5, fontWeight: 700 },
+  connectionTestError: { width: '100%', color: '#b91c1c', fontSize: 11.5 },
+  connectionTestErrorText: { maxHeight: 140, overflow: 'auto', margin: '6px 0 0', padding: 8, borderRadius: 7, background: '#fef2f2', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', fontSize: 10.5 },
   toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
   toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
   toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
@@ -459,6 +551,7 @@ export default function SessionChatView() {
   const [startingNewSession, setStartingNewSession] = useState(false);
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
+  const [contentZoomFactor, setContentZoomFactor] = useState(1);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -474,10 +567,30 @@ export default function SessionChatView() {
     aiTools: [],
     hideAvatar: false,
   });
+  const [tutorModels, setTutorModels] = useState<TutorModelOption[]>([]);
+  const [currentTutorModelId, setCurrentTutorModelId] = useState('');
+  const [switchingModel, setSwitchingModel] = useState(false);
+  const [sensingModel, setSensingModel] = useState<TutorModelOption>(
+    blankSensingModel,
+  );
+  const [defaultTutorModelId, setDefaultTutorModelId] = useState('');
+  const [modelCredentials, setModelCredentials] = useState<Record<string, string>>({});
+  const [modelConfigLoading, setModelConfigLoading] = useState(true);
+  const [modelLoadError, setModelLoadError] = useState('');
+  const [modelSaveError, setModelSaveError] = useState('');
+  const [modelSavedFlash, setModelSavedFlash] = useState(false);
+  const [serviceHealth, setServiceHealth] = useState<ServiceHealthView | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthError, setHealthError] = useState('');
+  const [connectionTests, setConnectionTests] = useState<
+    Record<string, ConnectionTestStatus>
+  >({});
   // Editable draft of the settings, synced from the loaded profile.
   const [editScenario, setEditScenario] = useState('everyday_support');
   const [editTools, setEditTools] = useState<string[]>([]);
   const [editHideAvatar, setEditHideAvatar] = useState(false);
+  const [avatarSaving, setAvatarSaving] = useState(false);
+  const [avatarSaveError, setAvatarSaveError] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
   // "+ Custom" tool forms (mirrors the onboarding toolkit step).
   const [showAddChatbot, setShowAddChatbot] = useState(false);
@@ -493,11 +606,47 @@ export default function SessionChatView() {
   const [memoryFlash, setMemoryFlash] = useState(false);
   // One thumbs vote per tutor message, keyed by message id.
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
+  const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   const pendingContextRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const problemRef = useRef('');
+
+  useEffect(() => {
+    const applyZoomFactor = (value: unknown) => {
+      const factor = Number(value);
+      if (Number.isFinite(factor) && factor > 0) setContentZoomFactor(factor);
+    };
+    window.electron?.ipcRenderer
+      .invoke('get-chat-content-zoom-factor')
+      .then(applyZoomFactor)
+      .catch(() => {});
+    const cleanup = window.electron?.ipcRenderer.on(
+      'chat-content-zoom-factor',
+      applyZoomFactor,
+    );
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  const refreshServiceHealth = useCallback(async (forceModelTest = false) => {
+    setHealthLoading(true);
+    setHealthError('');
+    try {
+      const result = await window.electron?.ipcRenderer.invoke(
+        'get-service-health',
+        { forceModelTest },
+      ) as ServiceHealthView | undefined;
+      if (!result?.sensing || !result?.tutor) {
+        throw new Error('No health response received.');
+      }
+      setServiceHealth(result);
+    } catch (error) {
+      setHealthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHealthLoading(false);
+    }
+  }, []);
 
   // Keep each active conversation on disk. A short debounce avoids a write for
   // every streaming token while still preserving completed turns promptly.
@@ -530,6 +679,20 @@ export default function SessionChatView() {
       latency_s: m.ts ? (Date.now() - m.ts) / 1000 : null,
       text: m.text,
     });
+  };
+
+  const copyMessage = async (message: ChatMessage, key: string) => {
+    const text = copyableMessageText(message).trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageKey(key);
+      window.setTimeout(() => {
+        setCopiedMessageKey((current) => (current === key ? null : current));
+      }, 1500);
+    } catch {
+      // Leave the button unchanged if the OS clipboard rejects the write.
+    }
   };
 
   const scrollToBottom = useCallback(() => {
@@ -711,10 +874,12 @@ export default function SessionChatView() {
   // Session context from main. A new sessionId resets the conversation.
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('session-init', (data: any) => {
-      const { sessionId, problemStatement } = (data ?? {}) as {
+      const { sessionId, problemStatement, tutorModelId } = (data ?? {}) as {
         sessionId?: string;
         problemStatement?: string;
+        tutorModelId?: string;
       };
+      if (tutorModelId) setCurrentTutorModelId(tutorModelId);
       if (sessionId && sessionId !== sessionIdRef.current) {
         if (sessionIdRef.current && messagesRef.current.length > 0) {
           window.electron?.ipcRenderer
@@ -766,6 +931,40 @@ export default function SessionChatView() {
   // Load the user's onboarding profile (mode + AI tools) for the Settings panel.
   useEffect(() => {
     window.electron?.ipcRenderer
+      .invoke('get-model-configuration')
+      .then((config: any) => {
+        if (!config?.sensing || !Array.isArray(config.tutors) || config.tutors.length === 0) {
+          const tutor = blankTutorModel();
+          setTutorModels([tutor]);
+          setDefaultTutorModelId(tutor.id);
+          setModelLoadError(
+            'No saved model configuration was found. Configure the sensing and tutor models below.',
+          );
+          return;
+        }
+        setTutorModels(config.tutors.map((model: TutorModelOption) => ({
+          ...model,
+          model: model.model.replace(/^hosted_vllm\//, ''),
+        })));
+        setSensingModel({
+          ...config.sensing,
+          model: String(config.sensing.model).replace(/^hosted_vllm\//, ''),
+        });
+        setDefaultTutorModelId(config.defaultTutorId || '');
+        setCurrentTutorModelId((current) => current || config.defaultTutorId || '');
+      })
+      .catch((error: unknown) => {
+        const tutor = blankTutorModel();
+        setTutorModels([tutor]);
+        setDefaultTutorModelId(tutor.id);
+        setModelLoadError(
+          `Could not load saved model settings: ${
+            error instanceof Error ? error.message : String(error)
+          }. You can configure them below.`,
+        );
+      })
+      .finally(() => setModelConfigLoading(false));
+    window.electron?.ipcRenderer
       .invoke('get-profile')
       .then((p: any) => {
         if (!p) return;
@@ -781,6 +980,110 @@ export default function SessionChatView() {
       })
       .catch(() => {});
   }, []);
+
+  const switchTutorModel = async (modelId: string) => {
+    if (!modelId || modelId === currentTutorModelId || switchingModel) return;
+    setSwitchingModel(true);
+    const result = await window.electron?.ipcRenderer.invoke('set-chat-model', {
+      modelId,
+    });
+    if ((result as { success?: boolean })?.success) {
+      setCurrentTutorModelId(modelId);
+      if (sessionIdRef.current && messagesRef.current.length > 0) {
+        window.electron?.ipcRenderer
+          .invoke('save-chat-conversation', {
+            sessionId: sessionIdRef.current,
+            problem: problemRef.current,
+            messages: messagesRef.current,
+          })
+          .catch(() => {});
+      }
+    }
+    setSwitchingModel(false);
+  };
+
+  const testSettingsModelConnection = async (
+    role: 'sensing' | 'tutor',
+    model: TutorModelOption,
+  ) => {
+    const key = role === 'sensing' ? 'sensing' : model.id;
+    if (!model.model.trim()) {
+      setConnectionTests((current) => ({
+        ...current,
+        [key]: { state: 'error', message: 'Enter a model ID first.' },
+      }));
+      return;
+    }
+    setConnectionTests((current) => ({
+      ...current,
+      [key]: { state: 'testing', message: '' },
+    }));
+    try {
+      const result = await window.electron?.ipcRenderer.invoke(
+        'test-model-connection',
+        {
+          role,
+          connection: {
+            id: model.id,
+            label: model.label || (role === 'sensing' ? 'Sensing' : 'Tutor'),
+            provider: model.provider,
+            model: model.model,
+            baseUrl: model.baseUrl,
+          },
+          apiKey: modelCredentials[`${role}:${model.provider}`] ?? '',
+        },
+      ) as { success?: boolean; message?: string; error?: string } | undefined;
+      setConnectionTests((current) => ({
+        ...current,
+        [key]: result?.success
+          ? { state: 'success', message: result.message || 'Connected.' }
+          : { state: 'error', message: result?.error || 'Connection failed.' },
+      }));
+    } catch (error) {
+      setConnectionTests((current) => ({
+        ...current,
+        [key]: {
+          state: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  };
+
+  const saveModelSettings = async () => {
+    if (modelConfigLoading) return;
+    setModelSaveError('');
+    if (!sensingModel.model.trim()) {
+      setModelSaveError('Enter a vision-capable sensing model.');
+      return;
+    }
+    if (
+      tutorModels.length === 0 ||
+      tutorModels.some((model) => !model.label.trim() || !model.model.trim())
+    ) {
+      setModelSaveError('Add at least one tutor with a display name and model ID.');
+      return;
+    }
+    const result = await window.electron?.ipcRenderer.invoke(
+      'save-model-configuration',
+      {
+        sensing: sensingModel,
+        tutors: tutorModels,
+        defaultTutorId: defaultTutorModelId,
+        credentials: modelCredentials,
+      },
+    );
+    if (!(result as { success?: boolean })?.success) {
+      setModelSaveError(
+        (result as { error?: string })?.error || 'Could not save model settings.',
+      );
+      return;
+    }
+    setModelCredentials({});
+    setModelLoadError('');
+    setModelSavedFlash(true);
+    setTimeout(() => setModelSavedFlash(false), 1500);
+  };
 
   const toggleEditTool = (id: string) =>
     setEditTools((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
@@ -824,9 +1127,34 @@ export default function SessionChatView() {
     }
   };
 
+  const updateAvatarVisibility = async (hideAvatar: boolean) => {
+    if (avatarSaving) return;
+    const previousValue = editHideAvatar;
+    setEditHideAvatar(hideAvatar);
+    setAvatarSaving(true);
+    setAvatarSaveError('');
+    try {
+      const result = await window.electron?.ipcRenderer.invoke(
+        'update-avatar-visibility',
+        { hideAvatar },
+      );
+      if (!(result as { success?: boolean })?.success) {
+        throw new Error(
+          (result as { error?: string })?.error ||
+          'Could not update desktop avatar visibility.',
+        );
+      }
+      setProfile((current) => ({ ...current, hideAvatar }));
+    } catch (error) {
+      setEditHideAvatar(previousValue);
+      setAvatarSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAvatarSaving(false);
+    }
+  };
+
   const dirty =
     editScenario !== profile.scenario ||
-    editHideAvatar !== profile.hideAvatar ||
     editTools.length !== profile.aiTools.length ||
     editTools.some((t) => !profile.aiTools.includes(t));
 
@@ -842,6 +1170,26 @@ export default function SessionChatView() {
       })
       .catch(() => {});
   }, [showSettings]);
+
+  useEffect(() => {
+    void refreshServiceHealth();
+    const interval = window.setInterval(() => {
+      void refreshServiceHealth();
+    }, 30000);
+    return () => window.clearInterval(interval);
+  }, [refreshServiceHealth]);
+
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on(
+      'open-chat-settings',
+      () => {
+        setShowHistory(false);
+        setReviewing(null);
+        setShowSettings(true);
+      },
+    );
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
 
   const saveMemory = async () => {
     const res = await window.electron?.ipcRenderer.invoke('save-memory', { memory: memoryDraft });
@@ -926,6 +1274,9 @@ export default function SessionChatView() {
           sessionIdRef.current = conversation.sessionId;
           setProblem(conversation.problem);
           setMessages(conversation.messages);
+          setCurrentTutorModelId(
+            result.tutorModelId || conversation.tutorModelId || currentTutorModelId,
+          );
           setRatings({});
           setReviewing(null);
           setShowHistory(false);
@@ -1009,12 +1360,113 @@ export default function SessionChatView() {
       message.role === 'tutor' &&
       message.toolCalls?.some((call) => call.status === 'running'),
   );
+  const selectedTutorModel = tutorModels.find(
+    (model) => model.id === currentTutorModelId,
+  );
+  const selectedTutorProvider = MODEL_PROVIDER_OPTIONS.find(
+    ([id]) => id === selectedTutorModel?.provider,
+  )?.[1] ?? selectedTutorModel?.provider;
+  const selectedTutorTooltip = selectedTutorModel
+    ? [
+        selectedTutorModel.label,
+        `Provider: ${selectedTutorProvider}`,
+        `Model: ${selectedTutorModel.model}`,
+        ...(selectedTutorModel.baseUrl
+          ? [`Endpoint: ${selectedTutorModel.baseUrl}`]
+          : []),
+      ].join('\n')
+    : 'Tutor model for this conversation';
+  const sensingUnavailable = serviceHealth?.sensing.connected === false;
+  const tutorUnavailable = serviceHealth?.tutor.connected === false;
+  const serviceUnavailable = sensingUnavailable || tutorUnavailable;
+  const modelUnavailable = Boolean(serviceHealth && [
+    serviceHealth.sensing,
+    serviceHealth.tutor,
+  ].some((health) => health.modelAssessment?.status === 'failed'));
+  const modelsVerified = Boolean(serviceHealth && [
+    serviceHealth.sensing,
+    serviceHealth.tutor,
+  ].every((health) => health.modelAssessment?.status === 'verified'));
+  const modelConfigurationIssue = Boolean(serviceHealth && [
+    serviceHealth.sensing,
+    serviceHealth.tutor,
+  ].some((health) =>
+    health.modelAssessment?.status === 'legacy_unassessed' ||
+    health.modelAssessment?.status === 'not_configured'));
+  const chatHealthLabel = serviceUnavailable
+    ? 'Service issue'
+    : modelUnavailable
+      ? 'Model issue'
+      : modelConfigurationIssue
+        ? 'Configure models'
+        : serviceHealth
+          ? (modelsVerified ? 'Connected' : 'Services reachable')
+          : healthLoading
+            ? 'Checking health…'
+            : 'Health unknown';
+  const chatHealthColor = serviceUnavailable || modelUnavailable
+    ? '#dc2626'
+    : modelConfigurationIssue
+      ? '#b45309'
+      : modelsVerified
+        ? '#16a34a'
+        : '#6b7280';
+  const chatHealthTitle = serviceUnavailable
+    ? [
+        sensingUnavailable ? 'Sensing server is not reachable.' : '',
+        tutorUnavailable ? 'Tutor agent is not reachable.' : '',
+        'Click to open Settings.',
+      ].filter(Boolean).join(' ')
+    : modelUnavailable
+      ? [
+          serviceHealth?.sensing.modelAssessment?.status === 'failed'
+            ? `Sensing model: ${serviceHealth.sensing.modelAssessment.detail}`
+            : '',
+          serviceHealth?.tutor.modelAssessment?.status === 'failed'
+            ? `Tutor model: ${serviceHealth.tutor.modelAssessment.detail}`
+            : '',
+          'Click to open Settings.',
+        ].filter(Boolean).join(' ')
+      : modelConfigurationIssue
+        ? 'A saved model configuration is required. Click to open Settings.'
+        : serviceHealth
+          ? 'Local services and configured models passed their connection tests.'
+          : 'Checking local service health.';
+  const hasChatHealthIssue = serviceUnavailable || modelUnavailable || modelConfigurationIssue;
 
   return (
     <div style={S.root}>
-      <div style={S.header}>
+      <div
+        role="banner"
+        style={S.header}
+      >
         <span style={S.brand}>
-          <span style={S.statusDot} /> Coco <span style={S.sub}>· Session active</span>
+          <span
+            role="status"
+            aria-label={chatHealthLabel}
+            style={{ ...S.statusDot, background: chatHealthColor }}
+            title={chatHealthTitle}
+          />
+          Coco
+          {hasChatHealthIssue ? (
+            <button
+              type="button"
+              style={{ ...S.healthHeaderButton, color: chatHealthColor }}
+              title={chatHealthTitle}
+              aria-label={`${chatHealthLabel}. Open Settings`}
+              onClick={() => {
+                setShowHistory(false);
+                setReviewing(null);
+                setShowSettings(true);
+              }}
+            >
+              · {chatHealthLabel}
+            </button>
+          ) : (
+            <span style={S.sub} title={chatHealthTitle}>
+              · {chatHealthLabel}
+            </span>
+          )}
         </span>
         <div style={S.headerBtns}>
           <button
@@ -1068,15 +1520,374 @@ export default function SessionChatView() {
         </div>
       </div>
 
+      <div style={S.contentViewport}>
+        <div
+          data-testid="chat-scalable-content"
+          style={{
+            ...S.scalableContent,
+            transform: `scale(${contentZoomFactor})`,
+            width: `${100 / contentZoomFactor}%`,
+            height: `${100 / contentZoomFactor}%`,
+          }}
+        >
+
       {showSettings && (
         <div style={S.settings}>
+          <div style={S.groupLabel}>Health</div>
+          <div style={S.helpText}>
+            Checks Coco's local services and sends short real requests to the
+            configured models. The sensing test includes a small test image.
+          </div>
+          <div style={S.healthList}>
+            {([
+              ['sensing', 'Sensing server', serviceHealth?.sensing],
+              ['tutor', 'Tutor agent', serviceHealth?.tutor],
+            ] as const).map(([key, label, health]) => {
+              const serviceStatusLabel = health
+                ? `${health.connected ? 'Connected' : 'Not connected'} (service)`
+                : `${healthLoading ? 'Checking…' : 'Not checked'} (service)`;
+              const modelAssessment = health?.modelAssessment;
+              const modelStatusLabel = modelAssessment
+                ? modelAssessment.status === 'verified'
+                  ? 'Connected (model)'
+                  : modelAssessment.status === 'failed'
+                    ? 'Not connected (model)'
+                    : modelAssessment.status === 'not_configured'
+                      ? 'Not configured (model)'
+                      : 'Not assessed (model)'
+                : `${healthLoading ? 'Checking…' : 'Not checked'} (model)`;
+              const modelDetail = modelAssessment?.detail
+                ?.replace(/^Connected\s*[—-]\s*/i, '')
+                .replace(/^Connected\.?$/i, '');
+              const details = [
+                serviceStatusLabel,
+                health?.detail,
+                `${modelStatusLabel}${modelDetail ? ` — ${modelDetail}` : ''}`,
+              ].filter(Boolean);
+              const hasHealthIssue = Boolean(
+                health && (
+                  !health.connected || modelAssessment?.status === 'failed'
+                ),
+              );
+              const isFullyConnected = Boolean(
+                health?.connected && modelAssessment?.status === 'verified',
+              );
+              return (
+                <div
+                  key={key}
+                  style={S.healthRow}
+                  aria-label={`${label}: ${serviceStatusLabel}; ${modelStatusLabel}`}
+                >
+                  <span
+                    style={{
+                      ...S.healthDot,
+                      background: health
+                        ? (hasHealthIssue
+                          ? '#ef4444'
+                          : isFullyConnected
+                            ? '#22c55e'
+                            : '#f59e0b')
+                        : '#d1d5db',
+                    }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={S.healthName}>{label}</div>
+                    <div style={{
+                      ...S.healthDetail,
+                      color: hasHealthIssue
+                        ? '#dc2626'
+                        : isFullyConnected
+                          ? '#16a34a'
+                          : health
+                            ? '#b45309'
+                            : undefined,
+                    }}>
+                      {details.join(' · ')}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={S.healthActions}>
+            <button
+              type="button"
+              style={{ ...S.addBtn, ...(healthLoading ? S.sendBtnDisabled : {}) }}
+              disabled={healthLoading}
+              onClick={() => void refreshServiceHealth(true)}
+            >
+              {healthLoading ? 'Checking…' : 'Check again'}
+            </button>
+            {serviceHealth && !healthLoading && (
+              <span style={S.healthDetail}>
+                Checked {new Date(serviceHealth.checkedAt).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+          {healthError && (
+            <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
+              Health check failed: {healthError}
+            </div>
+          )}
+          <div style={S.sectionDivider} />
+
+          <div style={S.groupLabel}>Models &amp; providers</div>
+          <div style={S.helpText}>
+            The sensing model receives screenshots. Saving changes restarts the local sensing and tutor services.
+          </div>
+          {modelConfigLoading && (
+            <div style={{ ...S.helpText, marginTop: 8 }}>Loading model settings…</div>
+          )}
+          {modelLoadError && (
+            <div style={{ color: '#b45309', fontSize: 11.5, margin: '8px 0' }}>
+              {modelLoadError}
+            </div>
+          )}
+              <div style={S.customForm}>
+                <select
+                  style={S.customInput}
+                  value={sensingModel.provider}
+                  onChange={(event) => setSensingModel({
+                    ...sensingModel,
+                    provider: event.target.value,
+                  })}
+                >
+                  {MODEL_PROVIDER_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>{label}</option>
+                  ))}
+                </select>
+                <input
+                  style={S.customInput}
+                  value={sensingModel.model}
+                  placeholder={sensingModel.provider === 'hosted_vllm'
+                    ? 'Exact model ID returned by /v1/models'
+                    : 'Vision-capable sensing model'}
+                  onChange={(event) => setSensingModel({
+                    ...sensingModel,
+                    model: event.target.value,
+                  })}
+                />
+                {MODEL_ENDPOINT_PROVIDERS.has(sensingModel.provider) && (
+                  <input
+                    style={S.customInput}
+                    value={sensingModel.baseUrl ?? ''}
+                    placeholder={sensingModel.provider === 'hosted_vllm'
+                      ? 'OpenAI-compatible base URL, ending in /v1'
+                      : 'LM Studio host'}
+                    onChange={(event) => setSensingModel({
+                      ...sensingModel,
+                      baseUrl: event.target.value,
+                    })}
+                  />
+                )}
+                {sensingModel.provider !== 'lm_studio' && (
+                  <input
+                    style={S.customInput}
+                    type="password"
+                    value={modelCredentials[`sensing:${sensingModel.provider}`] ?? ''}
+                    placeholder={sensingModel.provider === 'hosted_vllm'
+                      ? 'Endpoint API key (optional; blank keeps the saved key)'
+                      : 'Replace sensing API key (leave blank to keep it)'}
+                    onChange={(event) => setModelCredentials((current) => ({
+                      ...current,
+                      [`sensing:${sensingModel.provider}`]: event.target.value,
+                    }))}
+                  />
+                )}
+                <div style={S.connectionTestRow}>
+                  <button
+                    type="button"
+                    style={{
+                      ...S.connectionTestButton,
+                      ...(connectionTests.sensing?.state === 'testing'
+                        ? S.sendBtnDisabled
+                        : {}),
+                    }}
+                    aria-label="Test sensing model connection"
+                    disabled={connectionTests.sensing?.state === 'testing'}
+                    onClick={() => void testSettingsModelConnection(
+                      'sensing',
+                      sensingModel,
+                    )}
+                  >
+                    {connectionTests.sensing?.state === 'testing'
+                      ? 'Testing…'
+                      : 'Test connection'}
+                  </button>
+                  {connectionTests.sensing?.state === 'success' && (
+                    <span style={S.connectionTestSuccess}>
+                      {connectionTests.sensing.message}
+                    </span>
+                  )}
+                  {connectionTests.sensing?.state === 'error' && (
+                    <details style={S.connectionTestError}>
+                      <summary>Connection failed — show details</summary>
+                      <pre style={S.connectionTestErrorText}>
+                        {connectionTests.sensing.message}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+              </div>
+
+              <div style={S.helpText}>
+                Tutor models answer in chat. Configure multiple models, choose
+                a default, and switch between them anytime.
+              </div>
+              {tutorModels.map((model, index) => (
+                <div key={model.id} style={S.customForm}>
+                  <input
+                    style={S.customInput}
+                    value={model.label}
+                    placeholder="Display name"
+                    onChange={(event) => setTutorModels((current) =>
+                      current.map((item, i) => i === index
+                        ? { ...item, label: event.target.value }
+                        : item))}
+                  />
+                  <select
+                    style={S.customInput}
+                    value={model.provider}
+                    onChange={(event) => setTutorModels((current) =>
+                      current.map((item, i) => i === index
+                        ? { ...item, provider: event.target.value }
+                        : item))}
+                  >
+                    {MODEL_PROVIDER_OPTIONS.map(([id, label]) => (
+                      <option key={id} value={id}>{label}</option>
+                    ))}
+                  </select>
+                  <input
+                    style={S.customInput}
+                    value={model.model}
+                    placeholder={model.provider === 'hosted_vllm'
+                      ? 'Exact model ID returned by /v1/models'
+                      : 'Tutor model ID'}
+                    onChange={(event) => setTutorModels((current) =>
+                      current.map((item, i) => i === index
+                        ? { ...item, model: event.target.value }
+                        : item))}
+                  />
+                  {MODEL_ENDPOINT_PROVIDERS.has(model.provider) && (
+                    <input
+                      style={S.customInput}
+                      value={model.baseUrl ?? ''}
+                      placeholder={model.provider === 'hosted_vllm'
+                        ? 'OpenAI-compatible base URL, ending in /v1'
+                        : 'LM Studio host'}
+                      onChange={(event) => setTutorModels((current) =>
+                        current.map((item, i) => i === index
+                          ? { ...item, baseUrl: event.target.value }
+                          : item))}
+                    />
+                  )}
+                  {model.provider !== 'lm_studio' && (
+                    <input
+                      style={S.customInput}
+                      type="password"
+                      value={modelCredentials[`tutor:${model.provider}`] ?? ''}
+                      placeholder={model.provider === 'hosted_vllm'
+                        ? 'Endpoint API key (optional; blank keeps the saved key)'
+                        : 'Replace tutor API key (leave blank to keep it)'}
+                      onChange={(event) => setModelCredentials((current) => ({
+                        ...current,
+                        [`tutor:${model.provider}`]: event.target.value,
+                      }))}
+                    />
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
+                    <label>
+                      <input
+                        type="radio"
+                        checked={defaultTutorModelId === model.id}
+                        onChange={() => setDefaultTutorModelId(model.id)}
+                      />{' '}Default
+                    </label>
+                    {tutorModels.length > 1 && (
+                      <button
+                        type="button"
+                        style={{ border: 'none', background: 'none', color: '#b91c1c', cursor: 'pointer' }}
+                        onClick={() => {
+                          const next = tutorModels.filter((item) => item.id !== model.id);
+                          setTutorModels(next);
+                          if (defaultTutorModelId === model.id) setDefaultTutorModelId(next[0].id);
+                        }}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  <div style={S.connectionTestRow}>
+                    <button
+                      type="button"
+                      style={{
+                        ...S.connectionTestButton,
+                        ...(connectionTests[model.id]?.state === 'testing'
+                          ? S.sendBtnDisabled
+                          : {}),
+                      }}
+                      aria-label={`Test ${model.label || 'tutor model'} connection`}
+                      disabled={connectionTests[model.id]?.state === 'testing'}
+                      onClick={() => void testSettingsModelConnection('tutor', model)}
+                    >
+                      {connectionTests[model.id]?.state === 'testing'
+                        ? 'Testing…'
+                        : 'Test connection'}
+                    </button>
+                    {connectionTests[model.id]?.state === 'success' && (
+                      <span style={S.connectionTestSuccess}>
+                        {connectionTests[model.id].message}
+                      </span>
+                    )}
+                    {connectionTests[model.id]?.state === 'error' && (
+                      <details style={S.connectionTestError}>
+                        <summary>Connection failed — show details</summary>
+                        <pre style={S.connectionTestErrorText}>
+                          {connectionTests[model.id].message}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                style={{ ...S.addBtn, marginBottom: 12 }}
+                onClick={() => {
+                  const id = `tutor-${Date.now()}`;
+                  setTutorModels((current) => [
+                    ...current,
+                    { id, label: '', provider: 'anthropic', model: '' },
+                  ]);
+                }}
+              >
+                + Add tutor model
+              </button>
+              <div style={{ ...S.saveRow, marginBottom: 14 }}>
+                <button
+                  type="button"
+                  style={S.saveBtn}
+                  disabled={modelConfigLoading}
+                  onClick={saveModelSettings}
+                >
+                  Save model settings
+                </button>
+                {modelSavedFlash && <span style={S.saved}>✓ Saved</span>}
+              </div>
+              {modelSaveError && (
+                <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
+                  {modelSaveError}
+                </div>
+              )}
+              <div style={S.sectionDivider} />
           <div style={S.groupLabel}>Desktop</div>
           <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
             <input
               id="hide-desktop-avatar"
               type="checkbox"
               checked={editHideAvatar}
-              onChange={(e) => setEditHideAvatar(e.target.checked)}
+              disabled={avatarSaving}
+              onChange={(e) => void updateAvatarVisibility(e.target.checked)}
             />
             <span>
               <strong style={S.toggleTitle}>Hide desktop avatar</strong>
@@ -1086,6 +1897,14 @@ export default function SessionChatView() {
               </span>
             </span>
           </label>
+          {avatarSaving && (
+            <div style={{ ...S.helpText, marginTop: -8 }}>Applying…</div>
+          )}
+          {avatarSaveError && (
+            <div style={{ color: '#b91c1c', fontSize: 11.5, margin: '-8px 0 12px' }}>
+              {avatarSaveError}
+            </div>
+          )}
 
           <div style={S.sectionDivider} />
 
@@ -1309,17 +2128,37 @@ export default function SessionChatView() {
           // eslint-disable-next-line react/no-array-index-key
           <div key={i} style={m.role === 'user' ? S.userRow : S.tutorRow}>
             {m.role === 'user' ? (
-              <div style={S.userBubble}>
-                {m.text}
-                {m.images && m.images.length > 0 && (
-                  <div style={S.thumbRow}>
-                    {m.images.map((src, j) => (
-                      // eslint-disable-next-line react/no-array-index-key
-                      <img key={j} src={src} alt="pasted" style={S.thumb} />
-                    ))}
+              <>
+                <div style={S.userBubble}>
+                  {m.text}
+                  {m.images && m.images.length > 0 && (
+                    <div style={S.thumbRow}>
+                      {m.images.map((src, j) => (
+                        // eslint-disable-next-line react/no-array-index-key
+                        <img key={j} src={src} alt="pasted" style={S.thumb} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {m.text.trim() && (
+                  <div style={S.userMessageActions}>
+                    <button
+                      type="button"
+                      style={{
+                        ...S.copyMessageBtn,
+                        ...(copiedMessageKey === messageCopyKey(m, i)
+                          ? S.copyMessageBtnDone
+                          : {}),
+                      }}
+                      aria-label="Copy user message"
+                      title="Copy message"
+                      onClick={() => void copyMessage(m, messageCopyKey(m, i))}
+                    >
+                      {copiedMessageKey === messageCopyKey(m, i) ? 'Copied ✓' : 'Copy'}
+                    </button>
                   </div>
                 )}
-              </div>
+              </>
             ) : (
               <>
                 <div style={S.tutorAvatar}>C</div>
@@ -1359,28 +2198,44 @@ export default function SessionChatView() {
                       tutorMetrics={m.tutorMetrics}
                     />
                   )}
-                  {!m.isError && m.id && (
+                  {(m.text.trim() || (!m.isError && m.id)) && (
                     <div style={S.feedbackRow}>
-                      {(['up', 'down'] as const).map((dir) => (
+                      {m.text.trim() && (
                         <button
-                          key={dir}
                           type="button"
-                          aria-label={dir === 'up' ? 'Helpful' : 'Not helpful'}
-                          title={dir === 'up' ? 'Helpful' : 'Not helpful'}
-                          disabled={!!ratings[m.id as string]}
                           style={{
-                            ...S.feedbackBtn,
-                            ...(ratings[m.id as string] === dir
-                              ? S.feedbackBtnRated
-                              : ratings[m.id as string]
-                                ? S.feedbackBtnLocked
-                                : {}),
+                            ...S.copyMessageBtn,
+                            ...(copiedMessageKey === messageCopyKey(m, i)
+                              ? S.copyMessageBtnDone
+                              : {}),
                           }}
-                          onClick={() => rateMessage(m, dir)}
+                          aria-label="Copy tutor message"
+                          title="Copy message"
+                          onClick={() => void copyMessage(m, messageCopyKey(m, i))}
                         >
-                          {dir === 'up' ? '👍' : '👎'}
+                          {copiedMessageKey === messageCopyKey(m, i) ? 'Copied ✓' : 'Copy'}
                         </button>
-                      ))}
+                      )}
+                      {!m.isError && m.id && (['up', 'down'] as const).map((dir) => (
+                          <button
+                            key={dir}
+                            type="button"
+                            aria-label={dir === 'up' ? 'Helpful' : 'Not helpful'}
+                            title={dir === 'up' ? 'Helpful' : 'Not helpful'}
+                            disabled={!!ratings[m.id as string]}
+                            style={{
+                              ...S.feedbackBtn,
+                              ...(ratings[m.id as string] === dir
+                                ? S.feedbackBtnRated
+                                : ratings[m.id as string]
+                                  ? S.feedbackBtnLocked
+                                  : {}),
+                            }}
+                            onClick={() => rateMessage(m, dir)}
+                          >
+                            {dir === 'up' ? '👍' : '👎'}
+                          </button>
+                        ))}
                     </div>
                   )}
                 </div>
@@ -1430,6 +2285,23 @@ export default function SessionChatView() {
             ))}
           </div>
         )}
+        {tutorModels.length > 0 && (
+          <div style={S.composerModelRow} data-testid="composer-model-selector">
+            <span style={S.composerModelLabel}>Tutor model</span>
+            <select
+              style={S.modelSelect}
+              aria-label="Tutor model"
+              title={selectedTutorTooltip}
+              value={currentTutorModelId}
+              disabled={switchingModel || sending}
+              onChange={(event) => switchTutorModel(event.target.value)}
+            >
+              {tutorModels.map((model) => (
+                <option key={model.id} value={model.id}>{model.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div style={S.inputRow}>
           <textarea
             style={S.textarea}
@@ -1455,6 +2327,8 @@ export default function SessionChatView() {
       </div>
         </>
       )}
+        </div>
+      </div>
     </div>
   );
 }

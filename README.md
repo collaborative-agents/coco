@@ -44,14 +44,10 @@ Coco is a *collaboration layer* that sits between you and the AI tools you alrea
 git clone https://github.com/collaborative-agents/coco.git
 cd coco
 
-# 2. Configure model and API key
-cp .env.example .env
-#   then edit .env
-
-# 3. Install packages for the Python services
+# 2. Install packages for the Python services
 uv sync
 
-# 4. Launch the desktop app
+# 3. Launch the desktop app
 cd desktop
 npm install
 npm start

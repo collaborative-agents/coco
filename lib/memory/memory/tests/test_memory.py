@@ -18,7 +18,9 @@ def _obs(identifier: str, content: str) -> ObservationInput:
     return ObservationInput(id=identifier, content=content, created_at=time.time())
 
 
-def test_hosted_vllm_engine_disables_thinking(monkeypatch, tmp_path):
+def test_openai_compatible_engine_does_not_inject_provider_options(
+    monkeypatch, tmp_path
+):
     captured = {}
 
     def fake_prompt_to_text(model, system, prompt, *, extra_body=None):
@@ -38,9 +40,7 @@ def test_hosted_vllm_engine_disables_thinking(monkeypatch, tmp_path):
     )
 
     assert engine._complete("system", "prompt") == "{}"
-    assert captured["extra_body"] == {
-        "chat_template_kwargs": {"enable_thinking": False}
-    }
+    assert captured["extra_body"] is None
 
 
 def test_store_searches_propositions_and_returns_evidence(tmp_path):

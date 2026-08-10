@@ -9,6 +9,380 @@ import {
 import SessionChatView from '../renderer/components/SessionChatView';
 
 describe('deferred suggestion context', () => {
+  it('shows editable model settings when no saved configuration is available', async () => {
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async () => null),
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(screen.getByTitle('Settings'));
+
+    expect(screen.getByText('Models & providers')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No saved model configuration was found/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText('Vision-capable sensing model'),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Tutor model ID')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Configure multiple models, choose a default/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Save model settings' }),
+    ).toBeEnabled();
+  });
+
+  it('keeps the tutor selector width fixed and exposes full model details', async () => {
+    const invoke = jest.fn(async (channel: string, payload?: any) => {
+      if (channel === 'get-model-configuration') {
+        return {
+          sensing: {
+            id: 'sensing',
+            label: 'Sensing',
+            provider: 'gemini',
+            model: 'gemini/gemini-vision',
+          },
+          tutors: [{
+            id: 'primary',
+            label: 'A much longer primary tutor display name',
+            provider: 'hosted_vllm',
+            model: 'hosted_vllm/org/tutor-model',
+            baseUrl: 'https://models.example.test/v1',
+          }],
+          defaultTutorId: 'primary',
+        };
+      }
+      if (channel === 'test-model-connection') {
+        return {
+          success: true,
+          message: payload.role === 'sensing'
+            ? 'Connected — text and image input accepted.'
+            : 'Connected — text input accepted.',
+        };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    const selector = await screen.findByRole('combobox', {
+      name: 'Tutor model',
+    });
+
+    expect(selector).toHaveStyle({ width: '120px' });
+    expect(screen.getByRole('banner')).not.toContainElement(selector);
+    expect(screen.getByTestId('composer-model-selector')).toContainElement(selector);
+    expect(selector).toHaveAttribute(
+      'title',
+      expect.stringContaining('A much longer primary tutor display name'),
+    );
+    expect(selector).toHaveAttribute(
+      'title',
+      expect.stringContaining('Provider: OpenAI-compatible endpoint'),
+    );
+    expect(selector).toHaveAttribute(
+      'title',
+      expect.stringContaining('Model: org/tutor-model'),
+    );
+    expect(selector).toHaveAttribute(
+      'title',
+      expect.stringContaining('Endpoint: https://models.example.test/v1'),
+    );
+
+    fireEvent.click(screen.getByTitle('Settings'));
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Test sensing model connection',
+    }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'test-model-connection',
+        expect.objectContaining({
+          role: 'sensing',
+          connection: expect.objectContaining({
+            model: 'gemini/gemini-vision',
+          }),
+        }),
+      );
+      expect(
+        screen.getByText('Connected — text and image input accepted.'),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Test A much longer primary tutor display name connection',
+    }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'test-model-connection',
+        expect.objectContaining({
+          role: 'tutor',
+          connection: expect.objectContaining({
+            model: 'org/tutor-model',
+          }),
+        }),
+      );
+      expect(screen.getByText('Connected — text input accepted.'))
+        .toBeInTheDocument();
+    });
+  });
+
+  it('scales chat content without scaling the header', async () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-chat-content-zoom-factor') return 1;
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('get-chat-content-zoom-factor');
+    });
+    await act(async () => {
+      listeners.get('chat-content-zoom-factor')?.(2);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-scalable-content')).toHaveStyle({
+        transform: 'scale(2)',
+        width: '50%',
+        height: '50%',
+      });
+    });
+    expect(screen.getByRole('banner')).not.toHaveStyle({
+      transform: 'scale(2)',
+    });
+  });
+
+  it('shows sensing and tutor health independently and allows a refresh', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-service-health') {
+        return {
+          checkedAt: 1753200000000,
+          sensing: {
+            connected: true,
+            status: 'healthy',
+            totalActions: 12,
+            modelAssessment: {
+              status: 'verified',
+              detail: 'Connected — text and image input accepted.',
+            },
+          },
+          tutor: {
+            connected: false,
+            status: 'unavailable',
+            detail: 'Service is not running.',
+            modelAssessment: {
+              status: 'failed',
+              detail: 'The tutor model rejected the API key.',
+            },
+          },
+        };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Service issue. Open Settings',
+      }),
+    );
+
+    expect(
+      await screen.findByLabelText(
+        'Sensing server: Connected (service); Connected (model)',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(
+        'Tutor agent: Not connected (service); Not connected (model)',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/actions processed/)).not.toBeInTheDocument();
+    expect(screen.getByText(/text and image input accepted/)).toBeInTheDocument();
+    expect(screen.getByText(/Service is not running/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => {
+      expect(
+        invoke.mock.calls.filter(([channel]) => channel === 'get-service-health'),
+      ).toHaveLength(2);
+      expect(invoke).toHaveBeenLastCalledWith('get-service-health', {
+        forceModelTest: true,
+      });
+    });
+  });
+
+  it('shows missing model configuration in the chat header', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-service-health') {
+        const modelAssessment = {
+          status: 'not_configured',
+          detail: 'No model configuration was found.',
+        };
+        return {
+          checkedAt: 1753200000000,
+          sensing: { connected: true, status: 'healthy', modelAssessment },
+          tutor: { connected: true, status: 'healthy', modelAssessment },
+        };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    const warning = await screen.findByRole('button', {
+      name: 'Configure models. Open Settings',
+    });
+    expect(warning).toHaveStyle({ color: '#b45309' });
+
+    fireEvent.click(warning);
+    expect(screen.getByText('Models & providers')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No saved model configuration was found/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows a failed real model check in the chat header', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-service-health') {
+        return {
+          checkedAt: 1753200000000,
+          sensing: {
+            connected: true,
+            status: 'healthy',
+            modelAssessment: {
+              status: 'verified',
+              detail: 'Connected — text and image input accepted.',
+            },
+          },
+          tutor: {
+            connected: true,
+            status: 'healthy',
+            modelAssessment: {
+              status: 'failed',
+              detail: 'The API key was rejected.',
+            },
+          },
+        };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    const warning = await screen.findByRole('button', {
+      name: 'Model issue. Open Settings',
+    });
+    expect(warning).toHaveStyle({ color: '#dc2626' });
+    expect(warning).toHaveAttribute(
+      'title',
+      expect.stringContaining('The API key was rejected.'),
+    );
+  });
+
+  it('applies desktop avatar visibility immediately', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-profile') {
+        return {
+          tutorScenario: 'everyday_support',
+          aiTools: [],
+          hideAvatar: false,
+        };
+      }
+      if (channel === 'update-avatar-visibility') {
+        return { success: true };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(screen.getByTitle('Settings'));
+    const checkbox = screen.getByRole('checkbox', {
+      name: /Hide desktop avatar/,
+    });
+    fireEvent.click(checkbox);
+
+    expect(checkbox).toBeChecked();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update-avatar-visibility', {
+        hideAvatar: true,
+      });
+      expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    });
+  });
+
+  it('opens the settings panel from the tray event', async () => {
+    const listeners = new Map<string, (data?: unknown) => void>();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data?: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async () => null),
+      },
+    };
+
+    render(<SessionChatView />);
+    expect(screen.queryByText('Models & providers')).not.toBeInTheDocument();
+
+    await act(async () => {
+      listeners.get('open-chat-settings')?.();
+    });
+
+    expect(screen.getByText('Models & providers')).toBeInTheDocument();
+    expect(screen.getByText('Health')).toBeInTheDocument();
+  });
+
   it('opens and resumes a past conversation from the chat header', async () => {
     const invoke = jest.fn(async (channel: string) => {
       if (channel === 'get-chat-conversations') {
@@ -115,6 +489,11 @@ describe('deferred suggestion context', () => {
 
   it('restores the active transcript after a renderer reload', async () => {
     const listeners = new Map<string, (data: unknown) => void>();
+    const writeText = jest.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
     const savedConversation = {
       sessionId: 'active-session',
       problem: 'Review prior literature',
@@ -163,6 +542,19 @@ describe('deferred suggestion context', () => {
     expect(
       screen.getByText('from huggingface_hub import snapshot_download'),
     ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy tutor message' }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        savedConversation.messages[1].text.trim(),
+      );
+      expect(screen.getByText('Copied ✓')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy user message' }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenLastCalledWith(savedConversation.messages[0].text);
+    });
   });
 
   it('waits for the user to send a message before calling the tutor', async () => {

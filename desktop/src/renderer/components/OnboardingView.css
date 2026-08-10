@@ -62,6 +62,25 @@
   letter-spacing: 0.06em;
 }
 
+.ob-close-btn {
+  -webkit-app-region: no-drag;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 20px;
+  line-height: 28px;
+  cursor: pointer;
+}
+
+.ob-close-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
 .ob-skip-btn {
   font-size: 13px;
   color: #9ca3af;
@@ -622,6 +641,194 @@
   font-family: 'PT Sans', sans-serif;
 }
 .ob-custom-input:focus { border-color: #204A79; }
+
+/* ── Provider/model setup ── */
+.ob-model-card {
+  border: 1.5px solid #dbe4f0;
+  background: #f8faff;
+  border-radius: 10px;
+  padding: 11px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ob-model-card-title { font-size: 13px; font-weight: 700; color: #204A79; }
+.ob-model-warning {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 7px;
+  padding: 7px 8px;
+}
+.ob-model-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #204A79;
+  margin: 13px 0 7px;
+}
+.ob-model-wrap { margin-bottom: 10px; }
+.ob-model-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+  font-size: 11.5px;
+  color: #6b7280;
+}
+.ob-model-remove,
+.ob-model-add {
+  border: none;
+  background: none;
+  color: #204A79;
+  cursor: pointer;
+  font: inherit;
+}
+.ob-model-add { font-size: 12.5px; font-weight: 700; padding: 3px 0; }
+.ob-model-remove { color: #b91c1c; }
+.ob-model-error {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  color: #b91c1c;
+  background: #fef2f2;
+  font-size: 12px;
+}
+.ob-connection-test-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.ob-connection-test-btn {
+  flex-shrink: 0;
+  border: 1px solid #BCD0FC;
+  background: #ffffff;
+  color: #204A79;
+  border-radius: 7px;
+  padding: 5px 9px;
+  font: 600 11.5px 'PT Sans', sans-serif;
+  cursor: pointer;
+}
+.ob-connection-test-btn:disabled { opacity: 0.55; cursor: default; }
+.ob-connection-test-success {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  white-space: nowrap;
+  padding-top: 6px;
+}
+.ob-connection-test-success { color: #15803d; }
+.ob-connection-test-error {
+  flex: 1;
+  min-width: 0;
+  color: #b91c1c;
+  font-size: 11px;
+  padding-top: 5px;
+}
+.ob-connection-test-error summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.ob-connection-test-error pre {
+  max-height: 180px;
+  margin: 6px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: #fef2f2;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* ── Optional initial memory ── */
+.ob-memory-name-label {
+  display: block;
+  margin: 10px 0 5px;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ob-memory-name-label:first-of-type { margin-top: 0; }
+.ob-memory-name-label span {
+  color: #9ca3af;
+  font-weight: 400;
+}
+.ob-memory-name-input {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1.5px solid #d1d5db;
+  border-radius: 9px;
+  padding: 8px 11px;
+  color: #374151;
+  background: #ffffff;
+  font: 13px/1.5 'PT Sans', sans-serif;
+  outline: none;
+}
+.ob-memory-name-input:focus {
+  border-color: #204A79;
+  box-shadow: 0 0 0 3px rgba(32, 74, 121, 0.1);
+}
+.ob-memory-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border: 1.5px solid #d1d5db;
+  border-radius: 9px;
+  padding: 10px 11px;
+  color: #374151;
+  background: #ffffff;
+  font: 13px/1.5 'PT Sans', sans-serif;
+  outline: none;
+}
+.ob-memory-input:focus {
+  border-color: #204A79;
+  box-shadow: 0 0 0 3px rgba(32, 74, 121, 0.1);
+}
+.ob-memory-examples-label {
+  margin: 12px 0 6px;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ob-memory-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ob-memory-example {
+  width: 100%;
+  border: 1px solid #dbe5f5;
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: #4b5563;
+  background: #f8faff;
+  font: 12px/1.35 'PT Sans', sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+.ob-memory-example:hover {
+  border-color: #BCD0FC;
+  background: #E9EFFF;
+}
+.ob-memory-note {
+  margin-top: 10px;
+  border-radius: 7px;
+  padding: 8px 9px;
+  color: #6b7280;
+  background: #f3f4f6;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
 
 /* ═══════════════════════════════════════════════
    Step 7 – Learning path cards
