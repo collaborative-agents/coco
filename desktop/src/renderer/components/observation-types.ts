@@ -13,6 +13,7 @@ export type ObservationStatus =
   | 'inefficient'
   | 'ai_struggle'
   | 'observing'
+  | 'support_needed'
   | 'discernment_opportunity';
 
 export interface LLMCallMetrics {
@@ -82,6 +83,10 @@ export interface ObservationEvent {
   ts?: number;
   scenario?: string;
   applying_ai_output?: string;
+  /** Brief evidence behind need_support. */
+  rationale?: string;
+  /** Observer's explicit personalized intervention decision. */
+  need_support?: 'yes' | 'no';
   /** Stable id of the observer call that produced this event (for feedback joins). */
   observation_id?: string;
   llm_metrics?: LLMCallMetrics;
@@ -226,6 +231,7 @@ export const STATUS_TO_MOOD: Record<ObservationStatus, PetMood> = {
   inefficient: 'tool',             // AI-could-help theme
   ai_struggle: 'tool',             // AI tool theme
   observing: 'idle',               // neutral default
+  support_needed: 'tool',          // personalized observer says help is useful now
   discernment_opportunity: 'tool', // just applied AI output — review nudge incoming
 };
 
@@ -277,6 +283,12 @@ export const PHRASES: Record<ObservationStatus, string[]> = {
     'Monitoring in the background',
     'Still tracking — looking good',
   ],
+  support_needed: [
+    'I found a moment where I may be able to help',
+    'I may have something useful for this',
+    'Looks like some support could help here',
+    'I can help with what you’re doing now',
+  ],
   discernment_opportunity: [
     'You just applied AI output — quick review recommended',
     'AI content applied — worth a scan before moving on',
@@ -291,6 +303,7 @@ export const STATUS_LABEL: Record<ObservationStatus, string> = {
   inefficient: 'AI could help',
   ai_struggle: 'AI hiccup',
   observing: 'Watching',
+  support_needed: 'Support available',
   discernment_opportunity: 'Review AI output',
 };
 
@@ -334,7 +347,7 @@ export function cleanObservation(raw: string): string {
 }
 
 // ── Activity lanes ───────────────────────────────────────────────────────────
-// The 7 raw statuses collapse into 4 user-facing "lanes". Lanes are the unit
+// Raw statuses collapse into 4 user-facing "lanes". Lanes are the unit
 // the Activity panel speaks in: they drive dot colors, the flow timeline, and
 // every rolled-up metric, so timeline / dots / counts can never drift apart.
 
@@ -343,6 +356,7 @@ export type ActivityLane = 'flow' | 'watching' | 'focus' | 'assist';
 export const STATUS_TO_LANE: Record<ObservationStatus, ActivityLane> = {
   progress: 'flow', // producing, on track
   observing: 'watching', // neutral background
+  support_needed: 'assist', // personalized observer recommends assistance
   stuck: 'focus', // slowed down — a hard, normal part of working
   mistake: 'focus', // worth a second look
   inefficient: 'assist', // AI could help

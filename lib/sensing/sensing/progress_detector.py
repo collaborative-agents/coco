@@ -224,6 +224,31 @@ class ProgressJudgment:
         )
 
 
+def _apply_everyday_support_decision(
+    judgment: ProgressJudgment, observer_output: str
+) -> bool:
+    """Make a valid everyday observer decision authoritative for delivery.
+
+    The judge remains useful for trigger classification and trajectory context,
+    but it must not flip the personalized multimodal observer's explicit binary
+    decision. Returns ``True`` when a valid decision was found and applied.
+    """
+    from sensing.segment_processor import (  # late import avoids module cycle
+        _extract_need_support,
+        _extract_support_rationale,
+    )
+
+    need_support = _extract_need_support(observer_output)
+    if need_support is None:
+        return False
+
+    judgment.should_intervene = need_support == "yes"
+    rationale = _extract_support_rationale(observer_output)
+    if rationale:
+        judgment.evidence = rationale
+    return True
+
+
 # ---------------------------------------------------------------------------
 # ProgressDetector
 # ---------------------------------------------------------------------------
@@ -524,6 +549,23 @@ class ProgressDetector:
             competency_counts=competency_counts,
         )
         judgment = await asyncio.to_thread(self._run_judge, user_text)
+
+        # Everyday support uses the observer's explicit, personalized
+        # ``need_support`` decision as the source of truth. The text-only judge
+        # classifies the trigger but cannot override that binary decision. When
+        # a fresh observation was unavailable, fall back to the newest report
+        # from the rolling history.
+        if self._scenario == "everyday_support":
+            support_source = fresh_obs
+            if not support_source and recent_obs:
+                support_source = str(recent_obs[-1].get("obs", ""))
+            if support_source and _apply_everyday_support_decision(
+                judgment, support_source
+            ):
+                logger.debug(
+                    "ProgressDetector: applied authoritative everyday "
+                    f"need_support decision={judgment.should_intervene}"
+                )
 
         # 7. Log and (maybe) fire.
         decision_id = uuid.uuid4().hex

@@ -14,9 +14,52 @@ from __future__ import annotations
 import pytest
 from sensing.progress_detector import (
     ProgressJudgment,
+    _apply_everyday_support_decision,
     _lenient_json_loads,
     _salvage_truncated_judgment,
 )
+
+
+def test_everyday_need_support_overrides_judge_and_uses_rationale():
+    judgment = ProgressJudgment(
+        making_progress=True,
+        should_intervene=False,
+        evidence="Judge disagreed.",
+        trigger_type="delegation",
+    )
+    observer_output = (
+        '{"need_support":"yes","rationale":"The user has repeated the same '
+        'failed action across several frames."}'
+    )
+
+    assert _apply_everyday_support_decision(judgment, observer_output) is True
+    assert judgment.should_intervene is True
+    assert judgment.evidence == (
+        "The user has repeated the same failed action across several frames."
+    )
+
+
+def test_everyday_no_support_prevents_judge_fire():
+    judgment = ProgressJudgment(should_intervene=True, evidence="Old evidence.")
+
+    assert (
+        _apply_everyday_support_decision(
+            judgment,
+            '{"need_support":"no","rationale":"The user is progressing normally."}',
+        )
+        is True
+    )
+    assert judgment.should_intervene is False
+    assert judgment.evidence == "The user is progressing normally."
+
+
+def test_everyday_missing_decision_leaves_judgment_unchanged():
+    judgment = ProgressJudgment(should_intervene=True, evidence="Keep this.")
+
+    assert _apply_everyday_support_decision(judgment, '{"status":"stuck"}') is False
+    assert judgment.should_intervene is True
+    assert judgment.evidence == "Keep this."
+
 
 # ---------------------------------------------------------------------------
 # _lenient_json_loads

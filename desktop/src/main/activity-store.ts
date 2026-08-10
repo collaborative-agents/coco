@@ -26,6 +26,7 @@ const TRACKED_STATUSES = new Set<ObservationStatus>([
   'inefficient',
   'ai_struggle',
   'observing',
+  'support_needed',
   'discernment_opportunity',
 ]);
 

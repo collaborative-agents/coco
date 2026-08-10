@@ -93,4 +93,98 @@ def test_recent_observations_treats_thumbs_down_as_negative_feedback():
     block = processor._recent_observations_block()
 
     assert "user rated the resulting help as NEGATIVE" in block
-    assert 'classify similar observations as "progress"' in block
+    assert 'set need_support to "no"' in block
+
+
+@pytest.mark.asyncio
+async def test_everyday_context_keeps_personalized_memory_block():
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {
+            "memory": "Prefer concise help and avoid interrupting normal reading.",
+            "conversation_history": ["[2026-08-10 10:00:00] [User]: Help me"],
+        },
+    )
+    http_client = SimpleNamespace(get=AsyncMock(return_value=response))
+    processor = AiTutoringProcessor(
+        http_client=http_client,
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+        scenario="everyday_support",
+    )
+    processor.set_session_active(True)
+
+    context = await processor._build_context_prompt()
+
+    assert (
+        "<memory>\nPrefer concise help and avoid interrupting normal reading.\n</memory>"
+        in context
+    )
+    assert "<conversation_history>" not in context
+    prompt = segment_processor._load_observer_prompt("everyday_support")
+    assert "<memory>" in prompt
+    assert "</memory>" in prompt
+
+
+@pytest.mark.asyncio
+async def test_everyday_observer_input_omits_user_input(monkeypatch):
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+        scenario="everyday_support",
+    )
+    processor._build_context_prompt = AsyncMock(
+        return_value="<memory>\n(no memory yet)\n</memory>\n\n"
+    )
+    processor._collect_images = lambda text: (text, [])
+    captured = {}
+
+    def fake_observe(text_prompt, *_args, **_kwargs):
+        captured["text_prompt"] = text_prompt
+        return '{"need_support":"no"}', {}
+
+    monkeypatch.setattr(segment_processor, "_observe", fake_observe)
+
+    await processor._handle_observation(
+        type="user_prompt",
+        user_text="This should not be included in everyday observer input.",
+    )
+
+    assert "<user_input" not in captured["text_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_student_observer_input_keeps_conversation_and_user_input(monkeypatch):
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {
+            "problem_statement": "Solve the exercise",
+            "conversation_history": ["[2026-08-10 10:00:00] [User]: My attempt"],
+        },
+    )
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(get=AsyncMock(return_value=response)),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+        scenario="student_learning",
+    )
+    processor.set_session_active(True)
+    processor._collect_images = lambda text: (text, [])
+    captured = {}
+
+    def fake_observe(text_prompt, *_args, **_kwargs):
+        captured["text_prompt"] = text_prompt
+        return "{}", {}
+
+    monkeypatch.setattr(segment_processor, "_observe", fake_observe)
+
+    await processor._handle_observation(type="user_prompt", user_text="My new attempt")
+
+    assert "<conversation_history>" in captured["text_prompt"]
+    assert "[User]: My attempt" in captured["text_prompt"]
+    assert "<user_input" in captured["text_prompt"]
+    assert "My new attempt" in captured["text_prompt"]

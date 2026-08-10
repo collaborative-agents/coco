@@ -275,6 +275,51 @@ def _extract_task_label(observation: str) -> str | None:
     return intent[:120]
 
 
+def _extract_need_support(observation: str) -> str | None:
+    """Return the observer's normalized ``need_support`` decision.
+
+    The everyday observer is instructed to emit ``"yes"`` or ``"no"``. A
+    small set of boolean-like values is accepted as a compatibility measure for
+    models that serialize the decision as a JSON boolean instead. Unknown or
+    missing values return ``None`` so legacy observer schemas can still follow
+    the status/inference path below.
+    """
+    raw = _extract_json_block(observation)
+    if raw is None:
+        return None
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+
+    value = obj.get("need_support")
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    normalized = str(value or "").strip().lower()
+    if normalized in {"yes", "true", "1"}:
+        return "yes"
+    if normalized in {"no", "false", "0"}:
+        return "no"
+    return None
+
+
+def _extract_support_rationale(observation: str) -> str | None:
+    """Return the everyday observer's support rationale, when present."""
+    raw = _extract_json_block(observation)
+    if raw is None:
+        return None
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    rationale = str(obj.get("rationale") or "").strip()
+    return rationale or None
+
+
 _EXPLICIT_STATUS_VALUES = {
     "progress",
     "mistake",
@@ -282,6 +327,7 @@ _EXPLICIT_STATUS_VALUES = {
     "ai_struggle",
     "stuck",
     "observing",
+    "support_needed",
 }
 
 
@@ -297,6 +343,7 @@ def _classify_observation_status(
         "inefficient"    — worker-upskilling inefficiency pattern detected
         "ai_struggle"    — legacy worker-upskilling AI-tool problem detected
         "task_complete"  — observer judged the task to be finished (session active only)
+        "support_needed" — everyday observer explicitly reported need_support=yes
         "observing"      — couldn't parse / no scenario fields recognized
 
     For the worker scenario the observer now emits an explicit ``status`` field
@@ -339,6 +386,17 @@ def _classify_observation_status(
         if not (obj.get("stuck") or obj.get("mistakes")):
             return "observing"
         return "progress"
+
+    # The personalized everyday observer owns the binary support decision. Use
+    # it before consulting legacy status fields so its new compact schema drives
+    # the actionable UI directly. ``no`` is intentionally mapped to the neutral
+    # observing state: it may mean smooth progress, normal browsing, or simply
+    # insufficient evidence, and the compact schema does not distinguish them.
+    need_support = _extract_need_support(observation)
+    if need_support == "yes":
+        return "support_needed"
+    if need_support == "no":
+        return "observing"
 
     # Worker / "ai_upskilling" schema.
     # 1. Prefer the explicit ``status`` field added in the updated observer prompt.
@@ -747,11 +805,11 @@ class AiTutoringProcessor(SegmentProcessor):
     ) -> None:
         if not self._obs_subscribers:
             return
-        # Pause / struggle events are mechanical signals that the user is stuck —
-        # bypass the JSON classifier (the observation text for these may not even
-        # be JSON, e.g. the prefixed "[Struggle trigger — …]" string from
-        # ProgressDetector._fire).
-        if type_ in ("pause", "struggle"):
+        # Judge-generated struggle events are mechanical signals and may contain
+        # prefixed non-JSON text, so keep their explicit stuck presentation.
+        # Everyday pause observations, however, contain an authoritative
+        # ``need_support`` decision and must flow through the normal classifier.
+        if type_ == "struggle":
             status = "stuck"
         else:
             status = _classify_observation_status(
@@ -770,6 +828,8 @@ class AiTutoringProcessor(SegmentProcessor):
         # single decision path and one set of timing/cooldown knobs.
 
         applying_ai_output = _extract_applying_ai_output(observation)
+        need_support = _extract_need_support(observation)
+        support_rationale = _extract_support_rationale(observation)
 
         event: dict = {
             "type": type_,
@@ -788,6 +848,10 @@ class AiTutoringProcessor(SegmentProcessor):
             event["task_label"] = task_label
         if applying_ai_output is not None:
             event["applying_ai_output"] = applying_ai_output
+        if support_rationale is not None:
+            event["rationale"] = support_rationale
+        if need_support is not None:
+            event["need_support"] = need_support
 
         for q in self._obs_subscribers:
             try:
@@ -1030,6 +1094,15 @@ class AiTutoringProcessor(SegmentProcessor):
         obs, text, metrics = await self._handle_observation(type="pause")
         self._log(f"[PAUSE OBSERVATION] {obs}\n")
 
+        # In the new everyday schema, idle is merely context—not an automatic
+        # request to interrupt. Respect an explicit no-support decision.
+        if self._scenario == "everyday_support" and _extract_need_support(obs) == "no":
+            logger.info(
+                "AiTutoringProcessor: suppressing pause intervention because "
+                "observer reported need_support=no"
+            )
+            return
+
         payload = {
             "data": {
                 "data_type": "pause_detected",
@@ -1061,13 +1134,16 @@ class AiTutoringProcessor(SegmentProcessor):
         recent_block = self._recent_observations_block(n=3)
         if recent_block:
             text += recent_block + "\n"
-        now_ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
-        if type == "pause":
-            text += f'<user_input timestamp="{now_ts}">(The user has been idle.)</user_input>'
-        elif type == "user_prompt":
-            text += f'<user_input timestamp="{now_ts}">{user_text or ""}</user_input>'
-        elif type == "snapshot":
-            text += f'<user_input timestamp="{now_ts}">(Periodic background snapshot)</user_input>'
+        if self._scenario != "everyday_support":
+            now_ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+            if type == "pause":
+                text += f'<user_input timestamp="{now_ts}">(The user has been idle.)</user_input>'
+            elif type == "user_prompt":
+                text += (
+                    f'<user_input timestamp="{now_ts}">{user_text or ""}</user_input>'
+                )
+            elif type == "snapshot":
+                text += f'<user_input timestamp="{now_ts}">(Periodic background snapshot)</user_input>'
 
         # Collect rolling snapshot images (these will be cleaned up after use).
         text_prompt, snapshot_image_paths = self._collect_images(text)
@@ -1237,8 +1313,8 @@ class AiTutoringProcessor(SegmentProcessor):
         "shown": "shown to user — no response (ignored)",
         "thumbs_up": "user rated the resulting help 👍",
         "thumbs_down": (
-            "user rated the resulting help as NEGATIVE — classify similar "
-            'observations as "progress"'
+            "user rated the resulting help as NEGATIVE — set need_support to "
+            '"no" for similar activity'
         ),
     }
 
@@ -1257,8 +1333,8 @@ class AiTutoringProcessor(SegmentProcessor):
             "<recent_observations>",
             "Your last few observations and how the user reacted to the bubble each "
             "one triggered. Do NOT re-raise a suggestion the user just DISMISSED. "
-            "A NEGATIVE rating means the resulting help was not useful: classify "
-            'similar observations as "progress". Only re-flag after a dismissal or '
+            "A NEGATIVE rating means the resulting help was not useful: set "
+            'need_support to "no" for similar activity. Only re-flag after a dismissal or '
             "negative rating if the situation has materially changed (a new task, "
             "new app, or genuinely different issue or opportunity).",
         ]
@@ -1303,6 +1379,8 @@ class AiTutoringProcessor(SegmentProcessor):
             ctx_block = f"<problem_statement>\n{problem}\n</problem_statement>"
         else:
             ctx_block = f"<memory>\n{memory or '(no memory yet)'}\n</memory>"
+        if self._scenario == "everyday_support":
+            return f"{ctx_block}\n\n"
         return (
             f"{ctx_block}\n\n"
             f"<conversation_history>\n{conv_block}\n</conversation_history>\n\n"

@@ -1606,6 +1606,7 @@ const PRECOMPUTE_STATUSES = new Set([
   'mistake',
   'inefficient',
   'ai_struggle',
+  'support_needed',
   'discernment_opportunity',
 ]);
 // Build the list of Open buttons for a delegate suggestion from the user's

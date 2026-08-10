@@ -62,6 +62,7 @@ const TIER2_STATUSES = new Set<ObservationStatus>([
   'mistake',
   'inefficient',
   'ai_struggle',
+  'support_needed',
   'discernment_opportunity',
 ]);
 

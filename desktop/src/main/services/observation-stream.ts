@@ -29,6 +29,10 @@ export interface ObservationEvent {
   image_paths?: string[];
   /** "yes"/"no" — whether the user is applying AI output (discernment opportunities). */
   applying_ai_output?: string;
+  /** Brief evidence behind the support decision. */
+  rationale?: string;
+  /** Explicit personalized support decision from the everyday observer. */
+  need_support?: 'yes' | 'no';
   llm_metrics?: LLMCallMetrics;
 }
 
