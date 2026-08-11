@@ -68,6 +68,7 @@ class InstantSuggestionRequest(BaseModel):
     task_label: str | None = None
     scenario: str = "everyday_support"
     ai_tools: list[str] = []
+    retrieved_context: dict | None = None
 
 
 class InstantSuggestionResponse(BaseModel):
@@ -459,6 +460,7 @@ async def suggestion_instant(req: InstantSuggestionRequest):
             configured_model_name,
             tutor.memory if tutor is not None else TutorSystem._load_memory(),
             req.image_paths,
+            req.retrieved_context,
         )
         result["llm_metrics"] = llm_metrics
         return InstantSuggestionResponse(**result)

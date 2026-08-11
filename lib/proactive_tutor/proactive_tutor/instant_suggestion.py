@@ -12,6 +12,7 @@ Two kinds of suggestion are produced (decided by the LLM):
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -67,6 +68,7 @@ def _build_user_prompt(
     ai_tools: list[str],
     memory: str = "",
     has_screenshots: bool = False,
+    retrieved_context: dict | None = None,
 ) -> str:
     parts: list[str] = []
     if task_label:
@@ -74,6 +76,12 @@ def _build_user_prompt(
     parts.append(f"<observation>\n{observation}\n</observation>")
     if memory:
         parts.append(f"<memory>\n{memory}\n</memory>")
+    if retrieved_context:
+        parts.append(
+            "<retrieved_context>\n"
+            f"{json.dumps(retrieved_context, ensure_ascii=False)}\n"
+            "</retrieved_context>"
+        )
     if has_screenshots:
         parts.append(
             "<screenshots>\n"
@@ -155,9 +163,17 @@ def generate_instant_suggestion(
     model: str,
     memory: str = "",
     image_paths: list[str] | None = None,
+    retrieved_context: dict | None = None,
 ) -> dict:
     suggestion, _ = generate_instant_suggestion_with_metrics(
-        observation, task_label, scenario, ai_tools, model, memory, image_paths
+        observation,
+        task_label,
+        scenario,
+        ai_tools,
+        model,
+        memory,
+        image_paths,
+        retrieved_context,
     )
     return suggestion
 
@@ -170,6 +186,7 @@ def generate_instant_suggestion_with_metrics(
     model: str,
     memory: str = "",
     image_paths: list[str] | None = None,
+    retrieved_context: dict | None = None,
 ) -> tuple[dict, LLMCallMetrics]:
     """Generate a single ready-to-use suggestion for *observation*.
 
@@ -184,14 +201,16 @@ def generate_instant_suggestion_with_metrics(
         ai_tools or [],
         memory=memory,
         has_screenshots=bool(image_paths),
+        retrieved_context=retrieved_context,
     )
-    # Instant suggestions may retrieve relevant long-term or recent activity,
-    # but never inspect the live screen: their observation/screenshots were
-    # already captured by the proactive sensing flow.
+    # Sensing pre-retrieves memory for need_support=yes observations directly
+    # from MemoryStore. Instant suggestions do not expose another memory tool or
+    # inspect the live screen: their context and screenshots were already
+    # captured by the proactive sensing flow.
     agent = TutorAgent(
         model,
         INSTANT_SYSTEM_PROMPT,
-        enable_memory_tool=True,
+        enable_memory_tool=False,
         enable_screen_tool=False,
     )
     raw, metrics = agent.tutor_with_metrics(

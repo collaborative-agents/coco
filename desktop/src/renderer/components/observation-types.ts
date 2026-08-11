@@ -356,7 +356,7 @@ export type ActivityLane = 'flow' | 'watching' | 'focus' | 'assist';
 export const STATUS_TO_LANE: Record<ObservationStatus, ActivityLane> = {
   progress: 'flow', // producing, on track
   observing: 'watching', // neutral background
-  support_needed: 'assist', // personalized observer recommends assistance
+  support_needed: 'focus', // personalized observer found a moment needing attention
   stuck: 'focus', // slowed down — a hard, normal part of working
   mistake: 'focus', // worth a second look
   inefficient: 'assist', // AI could help
@@ -380,7 +380,16 @@ export const LANE_COLOR: Record<ActivityLane, string> = {
   assist: '#6366f1', // blue/violet
 };
 
-export function laneOf(status: ObservationStatus): ActivityLane {
+export function laneOf(
+  status: ObservationStatus,
+  needSupport?: ObservationEvent['need_support'],
+): ActivityLane {
+  // The everyday observer's explicit decision is authoritative. Its compact
+  // schema replaced the legacy friction categories, so a stale/compatibility
+  // status must not make History show a Focus moment or AI assist that
+  // contradicts need_support.
+  if (needSupport === 'yes') return 'focus';
+  if (needSupport === 'no') return 'watching';
   return STATUS_TO_LANE[status] ?? 'watching';
 }
 
@@ -391,6 +400,8 @@ export interface ActivityRecord {
   /** Unix timestamp (seconds). */
   ts: number;
   status: ObservationStatus;
+  /** Explicit observer decision used to classify the History lane. */
+  need_support?: ObservationEvent['need_support'];
   /** Cleaned, human-readable observation text. */
   observation: string;
   /** Stable join key for updating this record when the user reacts later. */

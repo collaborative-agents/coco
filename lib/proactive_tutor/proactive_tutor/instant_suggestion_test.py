@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-import json
-
-from external_api.litellm_api import (
-    FunctionCall,
-    LiteLLMMessage,
-    TextContent,
-    ToolCall,
-)
+from external_api.litellm_api import LiteLLMMessage, TextContent
 from proactive_tutor import instant_suggestion
 from proactive_tutor.agents import tutor as tutor_module
 
@@ -32,29 +25,13 @@ def _metrics(call_id: str) -> dict:
     }
 
 
-def test_instant_suggestion_can_retrieve_memory_before_generating(
-    monkeypatch,
-) -> None:
-    responses = iter(
-        [
-            LiteLLMMessage(
-                role="assistant",
-                tool_calls=[
-                    ToolCall(
-                        id="call-1",
-                        function=FunctionCall(
-                            name="get_user_context",
-                            arguments=json.dumps(
-                                {
-                                    "query": "status update tone",
-                                    "limit": 3,
-                                    "evidence_limit": 1,
-                                }
-                            ),
-                        ),
-                    )
-                ],
-            ),
+def test_instant_suggestion_does_not_expose_memory_or_screen_tools(monkeypatch) -> None:
+    calls: list[tuple[list[dict], str]] = []
+
+    def fake_completion(messages, **kwargs):
+        calls.append(([dict(message) for message in messages], kwargs["operation"]))
+        assert kwargs.get("tools") is None
+        return (
             LiteLLMMessage(
                 role="assistant",
                 content=[
@@ -68,26 +45,9 @@ def test_instant_suggestion_can_retrieve_memory_before_generating(
                     )
                 ],
             ),
-        ]
-    )
-    calls: list[tuple[list[dict], str]] = []
+            _metrics("instant-direct"),
+        )
 
-    async def fake_memory_mcp(**kwargs):
-        assert kwargs["query"] == "status update tone"
-        return {
-            "count": 1,
-            "results": [
-                {
-                    "text": "The user prefers concise, direct status updates.",
-                }
-            ],
-        }
-
-    def fake_completion(messages, **kwargs):
-        calls.append(([dict(message) for message in messages], kwargs["operation"]))
-        return next(responses), _metrics(f"instant-{len(calls)}")
-
-    monkeypatch.setattr(tutor_module, "call_get_user_context", fake_memory_mcp)
     monkeypatch.setattr(
         tutor_module,
         "chat_completion",
@@ -104,15 +64,11 @@ def test_instant_suggestion_can_retrieve_memory_before_generating(
 
     assert result["kind"] == "content"
     assert result["copyText"] == "Quick update: the launch checklist is on track."
-    assert "get_user_context" in calls[0][0][0]["content"]
+    assert "get_user_context" not in calls[0][0][0]["content"]
     assert "observe_screen" not in calls[0][0][0]["content"]
-    assert "concise, direct status updates" in calls[1][0][-1]["content"]
-    assert [operation for _, operation in calls] == [
-        "instant_suggestion",
-        "instant_suggestion",
-    ]
-    assert metrics["total_tokens"] == 10
-    assert metrics["tool_calls"][0]["name"] == "get_user_context"
+    assert [operation for _, operation in calls] == ["instant_suggestion"]
+    assert metrics["total_tokens"] == 5
+    assert metrics["tool_calls"] == []
 
 
 def test_instant_suggestion_skips_memory_when_not_needed(monkeypatch) -> None:
@@ -152,4 +108,62 @@ def test_instant_suggestion_skips_memory_when_not_needed(monkeypatch) -> None:
     )
 
     assert result["copyText"] == "Sounds good—thank you!"
+    assert metrics["tool_calls"] == []
+
+
+def test_instant_suggestion_uses_preretrieved_context_without_memory_tool(
+    monkeypatch,
+) -> None:
+    captured: list[list[dict]] = []
+
+    def fake_completion(messages, **kwargs):
+        captured.append([dict(message) for message in messages])
+        assert kwargs.get("tools") is None
+        return (
+            LiteLLMMessage(
+                role="assistant",
+                content=[
+                    TextContent(
+                        text=(
+                            "<suggestion><kind>content</kind>"
+                            "<title>Reply to Olga</title>"
+                            "<body>Hi Olga, thanks for checking in.</body>"
+                            "</suggestion>"
+                        )
+                    )
+                ],
+            ),
+            _metrics("instant-preretrieved"),
+        )
+
+    monkeypatch.setattr(tutor_module, "chat_completion", fake_completion)
+    retrieved_context = {
+        "query": "Reply to recruiter Outlook internship check-in",
+        "results": [
+            {
+                "id": 42,
+                "text": "Olga previously asked about the internship end date.",
+                "evidence": {
+                    "id": "obs-1",
+                    "content": "The user reviewed Olga's extension email.",
+                },
+            }
+        ],
+    }
+
+    result, metrics = instant_suggestion.generate_instant_suggestion_with_metrics(
+        observation="The user is drafting a reply to Olga.",
+        task_label="Reply to the recruiter",
+        scenario="everyday_support",
+        ai_tools=[],
+        model="test-model",
+        retrieved_context=retrieved_context,
+    )
+
+    assert result["copyText"] == "Hi Olga, thanks for checking in."
+    assert "<retrieved_context>" in captured[0][-1]["content"]
+    assert (
+        "Olga previously asked about the internship end date."
+        in captured[0][-1]["content"]
+    )
     assert metrics["tool_calls"] == []

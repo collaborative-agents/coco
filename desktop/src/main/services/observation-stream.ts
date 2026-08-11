@@ -33,6 +33,24 @@ export interface ObservationEvent {
   rationale?: string;
   /** Explicit personalized support decision from the everyday observer. */
   need_support?: 'yes' | 'no';
+  /** Relevance-ranked memory retrieved by sensing for an instant suggestion. */
+  retrieved_context?: {
+    query: string;
+    results: Array<{
+      id: number;
+      text: string;
+      confidence?: number | null;
+      durability?: number | null;
+      score: number;
+      evidence?: {
+        id: string;
+        content: string;
+        created_at: number;
+        observation_type: string;
+        session_id?: string | null;
+      } | null;
+    }>;
+  };
   llm_metrics?: LLMCallMetrics;
 }
 

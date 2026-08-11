@@ -8,6 +8,7 @@ from sensing.segment_processor import (
     AiTutoringProcessor,
     _classify_observation_status,
     _extract_need_support,
+    _retrieve_instant_suggestion_context,
 )
 
 
@@ -62,12 +63,86 @@ def test_broadcast_surfaces_support_decision_and_rationale():
         }
     )
 
-    processor._broadcast_observation("snapshot", observation)
+    retrieved_context = {
+        "query": "Fix the build The user is blocked by a recurring error.",
+        "results": [{"id": 7, "text": "A related build failed previously."}],
+    }
+    processor._broadcast_observation(
+        "snapshot", observation, retrieved_context=retrieved_context
+    )
 
     event = queue.get_nowait()
     assert event["status"] == "support_needed"
     assert event["need_support"] == "yes"
     assert event["rationale"] == "The same build error has persisted across frames."
+    assert event["retrieved_context"] == retrieved_context
+
+
+def test_retrieves_three_propositions_with_one_evidence_for_support_need():
+    evidence = SimpleNamespace(
+        id="evidence-1",
+        content='{"observation":"A related earlier task."}',
+        created_at=123.0,
+        observation_type="snapshot",
+        session_id="session-1",
+    )
+    hits = [
+        SimpleNamespace(
+            proposition=SimpleNamespace(
+                id=index,
+                text=f"Relevant proposition {index}",
+                confidence=8,
+                decay=5,
+            ),
+            score=1.0 / index,
+            observations=[evidence],
+        )
+        for index in range(1, 4)
+    ]
+    store = SimpleNamespace(search=MagicMock(return_value=hits))
+    observer_output = json.dumps(
+        {
+            "observation": "The user is drafting a detailed reply in Outlook.",
+            "user_intent": "Reply to the recruiter",
+            "need_support": "yes",
+            "rationale": "The reply needs several missing details.",
+        }
+    )
+
+    context = _retrieve_instant_suggestion_context(
+        store, observer_output, end_time=456.0
+    )
+
+    assert context is not None
+    assert context["query"] == (
+        "Reply to the recruiter The user is drafting a detailed reply in Outlook."
+    )
+    assert len(context["results"]) == 3
+    assert context["results"][0]["evidence"]["id"] == "evidence-1"
+    store.search.assert_called_once_with(
+        context["query"],
+        limit=3,
+        end_time=456.0,
+        include_observations=1,
+    )
+
+
+def test_skips_instant_context_retrieval_when_support_is_not_needed():
+    store = SimpleNamespace(search=MagicMock())
+
+    context = _retrieve_instant_suggestion_context(
+        store,
+        json.dumps(
+            {
+                "observation": "The user is reading normally.",
+                "user_intent": "Review a document",
+                "need_support": "no",
+            }
+        ),
+    )
+
+    assert context is None
+    store.search.assert_not_called()
 
 
 def test_pause_broadcast_uses_explicit_support_status():

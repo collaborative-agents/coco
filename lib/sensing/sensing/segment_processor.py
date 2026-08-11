@@ -32,7 +32,7 @@ from pathlib import Path
 import httpx
 from external_api.llm import chat_completion
 from external_api.types import LLMCallMetrics
-from memory import MemoryEngine, ObservationInput
+from memory import MemoryEngine, MemoryStore, ObservationInput
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 from sensing.language import ActionNode, SequenceNode, annotate_high_level_nodes
@@ -318,6 +318,85 @@ def _extract_support_rationale(observation: str) -> str | None:
         return None
     rationale = str(obj.get("rationale") or "").strip()
     return rationale or None
+
+
+def _retrieve_instant_suggestion_context(
+    store: MemoryStore,
+    observer_output: str,
+    *,
+    end_time: float | None = None,
+) -> dict | None:
+    """Retrieve historical context for an actionable everyday observation.
+
+    The instant-suggestion path deliberately performs this lookup in sensing,
+    where the observer's authoritative ``need_support`` decision is available,
+    instead of paying the cost of an agent-driven MCP tool call. The query is
+    the observer's intent followed by its observation, and each of the top
+    three propositions carries at most one supporting raw observation.
+    """
+    if _extract_need_support(observer_output) != "yes":
+        return None
+
+    raw = _extract_json_block(observer_output)
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    intent = str(parsed.get("user_intent") or "").strip()
+    observation = str(parsed.get("observation") or "").strip()
+    query = " ".join(part for part in (intent, observation) if part)
+    if not query:
+        return None
+
+    started_at = time.perf_counter()
+    try:
+        hits = store.search(
+            query,
+            limit=3,
+            end_time=end_time,
+            include_observations=1,
+        )
+    except Exception as exc:
+        logger.warning(f"Could not retrieve instant-suggestion context: {exc}")
+        return None
+    logger.info(
+        "Instant-suggestion context retrieval returned "
+        f"{len(hits)} proposition(s) in "
+        f"{(time.perf_counter() - started_at) * 1000:.1f}ms"
+    )
+
+    results: list[dict] = []
+    for hit in hits:
+        proposition = hit.proposition
+        evidence = hit.observations[0] if hit.observations else None
+        results.append(
+            {
+                "id": proposition.id,
+                "text": proposition.text,
+                "confidence": proposition.confidence,
+                "durability": proposition.decay,
+                "score": round(hit.score, 6),
+                "evidence": (
+                    {
+                        "id": evidence.id,
+                        "content": evidence.content,
+                        "created_at": evidence.created_at,
+                        "observation_type": evidence.observation_type,
+                        "session_id": evidence.session_id,
+                    }
+                    if evidence is not None
+                    else None
+                ),
+            }
+        )
+    if not results:
+        return None
+    return {"query": query, "results": results}
 
 
 _EXPLICIT_STATUS_VALUES = {
@@ -802,6 +881,7 @@ class AiTutoringProcessor(SegmentProcessor):
         observation_id: str | None = None,
         llm_metrics: dict | None = None,
         image_paths: list[str] | None = None,
+        retrieved_context: dict | None = None,
     ) -> None:
         if not self._obs_subscribers:
             return
@@ -852,6 +932,8 @@ class AiTutoringProcessor(SegmentProcessor):
             event["rationale"] = support_rationale
         if need_support is not None:
             event["need_support"] = need_support
+        if retrieved_context is not None:
+            event["retrieved_context"] = retrieved_context
 
         for q in self._obs_subscribers:
             try:
@@ -1177,13 +1259,24 @@ class AiTutoringProcessor(SegmentProcessor):
         )
         print(f"[HANDLE OBSERVATION] type: {type}, obs: {obs}")
         self._last_observation_id = observation_id
+        observation_ts = time.time()
+
+        retrieved_context: dict | None = None
+        memory_store = getattr(self._memory_engine, "store", None)
+        if memory_store is not None and _extract_need_support(obs) == "yes":
+            retrieved_context = await asyncio.to_thread(
+                _retrieve_instant_suggestion_context,
+                memory_store,
+                obs,
+                end_time=observation_ts,
+            )
 
         # Record the observer call for training BEFORE cleanup, so screenshot
         # retention (when enabled) can copy the files the observer actually saw.
         if self._recorder is not None:
             self._recorder.log_observation(
                 observation_id=observation_id,
-                ts=time.time(),
+                ts=observation_ts,
                 obs_type=type or "unknown",
                 observer_input=text_prompt,
                 observer_output=obs,
@@ -1201,7 +1294,7 @@ class AiTutoringProcessor(SegmentProcessor):
                     ObservationInput(
                         id=observation_id,
                         content=obs,
-                        created_at=time.time(),
+                        created_at=observation_ts,
                         observation_type=type or "unknown",
                         session_id=self._memory_session_id,
                         scenario=self._scenario,
@@ -1256,6 +1349,7 @@ class AiTutoringProcessor(SegmentProcessor):
             observation_id=observation_id,
             llm_metrics=metrics,
             image_paths=suggestion_image_paths,
+            retrieved_context=retrieved_context,
         )
         return obs, text, metrics
 

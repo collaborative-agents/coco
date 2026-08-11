@@ -37,6 +37,7 @@ import { configureServiceModelArguments } from './services/model-arguments';
 import {
   startObservationStream,
   stopObservationStream,
+  type ObservationEvent,
 } from './services/observation-stream';
 import {
   consumeTutorStream,
@@ -1666,6 +1667,7 @@ function precomputeSuggestion(event: {
   task_label?: string;
   scenario?: string;
   image_paths?: string[];
+  retrieved_context?: ObservationEvent['retrieved_context'];
 }): Promise<InstantSuggestion | null> | undefined {
   const id = event.observation_id;
   if (!id) return undefined;
@@ -1686,6 +1688,7 @@ function precomputeSuggestion(event: {
         task_label: event.task_label ?? null,
         scenario: event.scenario || scenario,
         ai_tools: aiTools,
+        retrieved_context: event.retrieved_context ?? null,
       },
       { timeout: SUGGESTION_REQUEST_TIMEOUT_MS },
     )
@@ -2639,6 +2642,7 @@ const startObserver = () => {
         appendActivity({
           ts: event.ts ?? Math.floor(Date.now() / 1000),
           status: status as ObservationStatus,
+          need_support: event.need_support,
           observation: cleanObservation(event.observation),
           observation_id: event.observation_id,
           proactive_support: PRECOMPUTE_STATUSES.has(status)

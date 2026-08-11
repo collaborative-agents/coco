@@ -361,7 +361,7 @@ function ActivityPanel({
         <ul className="obs-history-list">
           {dayRecords.map((e, i) => {
             const isOpen = expanded.has(i);
-            const lane = laneOf(e.status);
+            const lane = laneOf(e.status, e.need_support);
             const label = STATUS_LABEL[e.status] ?? STATUS_LABEL.observing;
             const supportOpen = openSupport.has(i);
             const supportKey = e.observation_id ?? `${e.ts}-${i}`;
@@ -624,6 +624,7 @@ function PetView() {
         // local state so the open panel updates live without a re-fetch.
         const record: ActivityRecord = {
           status: incomingStatus,
+          need_support: event.need_support,
           observation: cleanObservation(event.observation),
           ts: event.ts ?? Math.floor(Date.now() / 1000),
           observation_id: event.observation_id,
@@ -640,7 +641,8 @@ function PetView() {
           if (
             prev.length > 0 &&
             prev[0].observation === record.observation &&
-            prev[0].status === record.status
+            prev[0].status === record.status &&
+            prev[0].need_support === record.need_support
           ) {
             return prev;
           }

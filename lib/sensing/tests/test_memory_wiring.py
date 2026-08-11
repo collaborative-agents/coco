@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sensing import segment_processor, sensing_server
@@ -71,6 +71,67 @@ async def test_ai_processor_persists_generated_observation(monkeypatch):
     assert persisted.observation_type == "snapshot"
     assert persisted.session_id == "session-1"
     assert persisted.scenario == "everyday_support"
+
+
+@pytest.mark.asyncio
+async def test_ai_processor_retrieves_context_for_support_event(monkeypatch):
+    evidence = SimpleNamespace(
+        id="past-observation",
+        content='{"observation":"The user handled a similar email."}',
+        created_at=100.0,
+        observation_type="snapshot",
+        session_id="past-session",
+    )
+    hit = SimpleNamespace(
+        proposition=SimpleNamespace(
+            id=9,
+            text="The recruiter previously asked for an updated end date.",
+            confidence=9,
+            decay=6,
+        ),
+        score=0.91,
+        observations=[evidence],
+    )
+    store = SimpleNamespace(search=MagicMock(return_value=[hit]))
+    memory_engine = SimpleNamespace(
+        store=store,
+        add_observation=AsyncMock(return_value=True),
+    )
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+        memory_engine=memory_engine,
+    )
+    queue = processor.subscribe_observations()
+    processor._build_context_prompt = AsyncMock(return_value="context")
+    processor._collect_images = lambda text: (text, [])
+    monkeypatch.setattr(
+        segment_processor,
+        "_observe",
+        lambda *_args, **_kwargs: (
+            '{"observation":"The user is drafting a reply in Outlook.",'
+            '"user_intent":"Reply to the recruiter",'
+            '"rationale":"The detailed questions need a response.",'
+            '"need_support":"yes"}',
+            {},
+        ),
+    )
+
+    await processor._handle_observation(type="snapshot")
+
+    event = queue.get_nowait()
+    assert event["retrieved_context"]["results"][0]["id"] == 9
+    assert event["retrieved_context"]["results"][0]["evidence"]["id"] == (
+        "past-observation"
+    )
+    query = "Reply to the recruiter The user is drafting a reply in Outlook."
+    assert event["retrieved_context"]["query"] == query
+    store.search.assert_called_once()
+    assert store.search.call_args.args == (query,)
+    assert store.search.call_args.kwargs["limit"] == 3
+    assert store.search.call_args.kwargs["include_observations"] == 1
 
 
 def test_recent_observations_treats_thumbs_down_as_negative_feedback():

@@ -32,7 +32,7 @@ export interface TimelineSegment {
 export interface DaySummary {
   /** Total attributed (non-idle) time. */
   activeSec: number;
-  /** Time spent in the flow lane. */
+  /** Time spent progressing or neutrally watching. */
   flowSec: number;
   /** flowSec / activeSec as a 0–100 integer. */
   flowPct: number;
@@ -78,7 +78,7 @@ export function buildSegments(
     const cap = Math.min(rec.ts + MAX_SEGMENT_SEC, nowSec);
     const end = next ? Math.min(next.ts, cap) : cap;
     segments.push({
-      lane: laneOf(rec.status),
+      lane: laneOf(rec.status, rec.need_support),
       startTs: rec.ts,
       endTs: Math.max(end, rec.ts),
       observation: rec.observation,
@@ -102,10 +102,14 @@ export function summarizeDay(
   for (const seg of segments) {
     const dur = seg.endTs - seg.startTs;
     activeSec += dur;
-    if (seg.lane === 'flow') flowSec += dur;
+    if (seg.lane === 'flow' || seg.lane === 'watching') flowSec += dur;
   }
-  const focusCount = inDay.filter((r) => laneOf(r.status) === 'focus').length;
-  const assistCount = inDay.filter((r) => laneOf(r.status) === 'assist').length;
+  const focusCount = inDay.filter(
+    (r) => laneOf(r.status, r.need_support) === 'focus',
+  ).length;
+  const assistCount = inDay.filter(
+    (r) => laneOf(r.status, r.need_support) === 'assist',
+  ).length;
 
   return {
     activeSec,
