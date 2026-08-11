@@ -135,6 +135,7 @@ interface ChatMessage {
   /** Exact request payload retained so an error can be retried in place. */
   retryText?: string;
   retryImages?: string[];
+  retryHotkeyImages?: string[];
 }
 
 function copyableMessageText(message: ChatMessage): string {
@@ -306,6 +307,7 @@ const S: Record<string, React.CSSProperties> = {
   pendingContextX: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 2px', fontFamily: FONT, fontSize: 14, lineHeight: 1 },
   pending: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   pendingThumbWrap: { position: 'relative' },
+  imagePreviewButton: { display: 'block', border: 'none', borderRadius: 8, padding: 0, background: 'transparent', cursor: 'zoom-in' },
   pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
   inputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
   textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
@@ -608,6 +610,7 @@ export default function SessionChatView() {
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
   const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const pendingHotkeyImagesRef = useRef<Set<string>>(new Set());
   const sessionIdRef = useRef<string | null>(null);
   const pendingContextRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -695,6 +698,12 @@ export default function SessionChatView() {
     }
   };
 
+  const openImagePreview = (imageDataUrl: string) => {
+    window.electron?.ipcRenderer.sendMessage('open-image-preview', {
+      imageDataUrl,
+    });
+  };
+
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
       if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -772,13 +781,19 @@ export default function SessionChatView() {
   }, [scrollToBottom]);
 
   const submitTutorRequest = useCallback(
-    async (requestId: string, userText: string, images: string[]) => {
+    async (
+      requestId: string,
+      userText: string,
+      images: string[],
+      hotkeyImages: string[] = [],
+    ) => {
       setSending(true);
       scrollToBottom();
       const res = await window.electron?.ipcRenderer.invoke('send-chat-message', {
         requestId,
         userText,
         images,
+        hotkeyImages,
       });
       const r = res as {
         streamed?: boolean;
@@ -818,7 +833,7 @@ export default function SessionChatView() {
   // Core send: append the user turn and an empty tutor turn immediately. The
   // latter is filled by chat-stream-event updates while the IPC request runs.
   const sendMessage = useCallback(
-    async (text: string, images: string[]) => {
+    async (text: string, images: string[], hotkeyImages: string[] = []) => {
       const trimmed = text.trim();
       if (!trimmed && images.length === 0) return;
       const requestId = makeMessageId();
@@ -837,11 +852,12 @@ export default function SessionChatView() {
           toolCalls: [],
           retryText: userText,
           retryImages: images,
+          retryHotkeyImages: hotkeyImages,
         },
       ]);
       pendingContextRef.current = null;
       setPendingContextLabel(null);
-      await submitTutorRequest(requestId, userText, images);
+      await submitTutorRequest(requestId, userText, images, hotkeyImages);
     },
     [submitTutorRequest],
   );
@@ -852,6 +868,7 @@ export default function SessionChatView() {
       const previousRequestId = message.requestId;
       const requestId = makeMessageId();
       const images = message.retryImages ?? [];
+      const hotkeyImages = message.retryHotkeyImages ?? [];
       setMessages((current) =>
         current.map((item) =>
           item.requestId === previousRequestId
@@ -866,7 +883,12 @@ export default function SessionChatView() {
             : item,
         ),
       );
-      await submitTutorRequest(requestId, message.retryText, images);
+      await submitTutorRequest(
+        requestId,
+        message.retryText,
+        images,
+        hotkeyImages,
+      );
     },
     [sending, startingNewSession, submitTutorRequest],
   );
@@ -895,6 +917,7 @@ export default function SessionChatView() {
         setRatings({});
         setInput('');
         setPendingImages([]);
+        pendingHotkeyImagesRef.current.clear();
         setSending(false);
         pendingContextRef.current = null;
         setPendingContextLabel(null);
@@ -1228,7 +1251,10 @@ export default function SessionChatView() {
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('hotkey-capture', (data: any) => {
       const url = (data ?? {}).imageDataUrl as string | undefined;
-      if (url) setPendingImages((prev) => [...prev, url]);
+      if (url) {
+        pendingHotkeyImagesRef.current.add(url);
+        setPendingImages((prev) => [...prev, url]);
+      }
     });
     // Tell main the listener is live so it can flush any capture that arrived
     // while this window was still loading (e.g. the hot key just opened it).
@@ -1254,6 +1280,12 @@ export default function SessionChatView() {
   const handleSend = () => {
     if (sending || startingNewSession) return;
     const imgs = pendingImages;
+    const hotkeyImgs = imgs.filter((src) =>
+      pendingHotkeyImagesRef.current.has(src),
+    );
+    const clearSentHotkeyImages = () => {
+      hotkeyImgs.forEach((src) => pendingHotkeyImagesRef.current.delete(src));
+    };
     const text = input;
     setInput('');
     setPendingImages([]);
@@ -1281,7 +1313,8 @@ export default function SessionChatView() {
           setReviewing(null);
           setShowHistory(false);
           setSending(false);
-          sendMessage(text, imgs);
+          sendMessage(text, imgs, hotkeyImgs);
+          clearSentHotkeyImages();
         })
         .catch(() => {
           setInput(text);
@@ -1290,7 +1323,8 @@ export default function SessionChatView() {
         });
       return;
     }
-    sendMessage(text, imgs);
+    sendMessage(text, imgs, hotkeyImgs);
+    clearSentHotkeyImages();
   };
 
   const handleNewSession = async () => {
@@ -2135,7 +2169,16 @@ export default function SessionChatView() {
                     <div style={S.thumbRow}>
                       {m.images.map((src, j) => (
                         // eslint-disable-next-line react/no-array-index-key
-                        <img key={j} src={src} alt="pasted" style={S.thumb} />
+                        <button
+                          key={j}
+                          type="button"
+                          style={S.imagePreviewButton}
+                          aria-label={`Preview message attachment ${j + 1}`}
+                          title="Preview attachment"
+                          onClick={() => openImagePreview(src)}
+                        >
+                          <img src={src} alt={`Attachment ${j + 1}`} style={S.thumb} />
+                        </button>
                       ))}
                     </div>
                   )}
@@ -2273,11 +2316,24 @@ export default function SessionChatView() {
             {pendingImages.map((src, i) => (
               // eslint-disable-next-line react/no-array-index-key
               <div key={i} style={S.pendingThumbWrap}>
-                <img src={src} alt="pending" style={S.thumb} />
+                <button
+                  type="button"
+                  style={S.imagePreviewButton}
+                  aria-label={`Preview attached image ${i + 1}`}
+                  title="Preview image"
+                  onClick={() => openImagePreview(src)}
+                >
+                  <img src={src} alt={`Attachment ${i + 1}`} style={S.thumb} />
+                </button>
                 <button
                   type="button"
                   style={S.pendingX}
-                  onClick={() => setPendingImages((prev) => prev.filter((_, j) => j !== i))}
+                  aria-label={`Remove attached image ${i + 1}`}
+                  title="Remove image"
+                  onClick={() => {
+                    pendingHotkeyImagesRef.current.delete(src);
+                    setPendingImages((prev) => prev.filter((_, j) => j !== i));
+                  }}
                 >
                   ×
                 </button>

@@ -543,7 +543,7 @@ class SnapshotBuffer:
 
 
 class HotKeyBuffer:
-    """Session-persistent buffer of user-flagged screenshots (Cmd+Shift+H captures).
+    """Session-persistent buffer of user-flagged screenshots (hotkey captures).
 
     Unlike ``SnapshotBuffer`` (rolling, auto-managed), captures here are kept
     for the entire session and are never deleted by the sensing pipeline — they
@@ -1240,9 +1240,11 @@ class AiTutoringProcessor(SegmentProcessor):
             )
             text_prompt += (
                 f'\n<screenshots type="hotkey">\n'
-                f"The user explicitly flagged {len(hk_paths)} screenshot(s) using "
-                f"the hot-key shortcut (Cmd+Shift+H). These represent the specific "
-                f"UI state the user wants guidance on. Images appear after the "
+                f"IMPORTANT IMAGE PROVENANCE: the user explicitly captured "
+                f"{len(hk_paths)} screenshot(s) using the hot-key shortcut "
+                f"(Cmd+Shift+Space). These are deliberate user-selected captures, "
+                f"not periodic background screenshots. Treat them as the primary "
+                f"visual reference for the user's request. They appear after the "
                 f"current-state snapshots in the order listed below.\n"
                 f"{hk_lines}\n"
                 f"</screenshots>"

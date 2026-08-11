@@ -42,6 +42,11 @@ export type Channels =
   | 'resume-chat-conversation'
   // Hot-key screen capture → preview thumbnail in the chat input bar
   | 'hotkey-capture'
+  // Full-display image preview shared by pending and sent chat attachments
+  | 'open-image-preview'
+  | 'image-preview'
+  | 'image-preview-ready'
+  | 'close-image-preview'
   // Renderer → main: chat's hot-key listener is mounted; flush buffered captures
   | 'hotkey-capture-ready'
   // Onboarding

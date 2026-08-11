@@ -48,7 +48,7 @@ def _tool_system_prompt(
 - Use observe_screen only when the user's request requires current visual context, such as "what is on my screen?", "help me with this", or a reference to a visible UI without an attached image.
 - Do not inspect the screen for general questions or when the conversation already contains enough context.
 - focus is a concise description of what visual evidence is needed. The sensing observer receives it as its inspection task.
-- A user-attached image is already visible to you and normally makes observe_screen unnecessary.
+- IMPORTANT: when the current user message includes an attached screenshot, treat that image as the screen state the user deliberately chose to share. Use it as the primary visual context and do not call observe_screen merely to inspect the same content again. Only request a new live-screen observation if the user explicitly asks for an updated/current view after the attachment was captured.
 """
         if enable_screen_tool
         else ""

@@ -15,7 +15,7 @@ Periodically captured images of the user’s screen. Each image corresponds to a
 </screenshots>
 
 <screenshots type="hotkey">
-One or more screenshots the user explicitly flagged using the hot-key shortcut (Cmd+Shift+H). These represent the specific UI state the user wants guidance on, and appear after the periodic snapshots. Each is labeled [hk1], [hk2], etc. Treat these as the primary visual reference for the user’s intent.
+IMPORTANT IMAGE PROVENANCE: these screenshots were deliberately captured by the user with the hot-key shortcut (Cmd+Shift+Space). They are not periodic background screenshots. They represent the specific UI state the user chose for guidance and appear after the periodic snapshots. Each is labeled [hk1], [hk2], etc. Treat them as the primary visual reference for the user’s intent.
 </screenshots>
 
 <recent_observations>

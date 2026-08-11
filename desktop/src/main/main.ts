@@ -133,9 +133,12 @@ class AppUpdater {
 //                     created on demand, hidden (not destroyed) on close so the
 //                     conversation survives a reopen. Talks only to the local
 //                     tutor/sensing servers — no external backend or WebSocket.
+// imagePreviewWindow: full-display preview for pending and sent chat images.
 // sessionSetupWindow: small floating window for proactive session config
 let avatarWindow: BrowserWindow | null = null;
 let chatWindow: BrowserWindow | null = null;
+let imagePreviewWindow: BrowserWindow | null = null;
+let imagePreviewDataUrl: string | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
 let latestHiddenSuggestionObservationId: string | undefined;
@@ -498,6 +501,50 @@ const showChatPanel = () => {
   ) {
     avatarWindow.show();
   }
+};
+
+const openImagePreviewWindow = (
+  sourceWindow: BrowserWindow | null,
+  imageDataUrl: string,
+) => {
+  imagePreviewDataUrl = imageDataUrl;
+  const display = sourceWindow
+    ? screen.getDisplayMatching(sourceWindow.getBounds())
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+
+  if (imagePreviewWindow && !imagePreviewWindow.isDestroyed()) {
+    imagePreviewWindow.setBounds(display.bounds);
+    if (!imagePreviewWindow.webContents.isLoadingMainFrame()) {
+      imagePreviewWindow.webContents.send('image-preview', { imageDataUrl });
+      imagePreviewWindow.show();
+      imagePreviewWindow.focus();
+    }
+    return;
+  }
+
+  imagePreviewWindow = new BrowserWindow({
+    show: false,
+    ...display.bounds,
+    frame: false,
+    transparent: false,
+    backgroundColor: '#111827',
+    alwaysOnTop: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    webPreferences: { preload: preloadPath() },
+  });
+  imagePreviewWindow.setAlwaysOnTop(true, 'floating');
+  imagePreviewWindow.loadURL(
+    `${resolveHtmlPath('index.html')}?view=image-preview`,
+  );
+  imagePreviewWindow.on('closed', () => {
+    imagePreviewWindow = null;
+    imagePreviewDataUrl = null;
+  });
 };
 
 const openChatSettings = () => {
@@ -2059,24 +2106,48 @@ ipcMain.handle(
       requestId,
       userText,
       images,
-    }: { requestId: string; userText: string; images?: string[] },
+      hotkeyImages,
+    }: {
+      requestId: string;
+      userText: string;
+      images?: string[];
+      hotkeyImages?: string[];
+    },
   ) => {
     const tutorPort = process.env.TUTOR_PORT || '8081';
 
     // Persist any pasted images to temp files for the tutor's vision call.
     const imagePaths: string[] = [];
+    const hotkeyImageSet = new Set(hotkeyImages ?? []);
+    let hotkeyImageCount = 0;
     for (const dataUrl of images ?? []) {
       const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/.exec(dataUrl);
       if (!m) continue;
       const ext = m[1].split('/')[1]?.split('+')[0] || 'png';
-      const file = path.join(os.tmpdir(), `coco-paste-${randomUUID()}.${ext}`);
+      const isHotkeyCapture = hotkeyImageSet.has(dataUrl);
+      const sourceLabel = isHotkeyCapture ? 'hotkey' : 'paste';
+      const file = path.join(
+        os.tmpdir(),
+        `coco-${sourceLabel}-${randomUUID()}.${ext}`,
+      );
       try {
         fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
         imagePaths.push(file);
+        if (isHotkeyCapture) hotkeyImageCount += 1;
       } catch (err) {
         log.warn(`[Chat] Failed to write pasted image: ${(err as Error).message}`);
       }
     }
+
+    const contextualizedUserText = hotkeyImageCount > 0
+      ? [
+          '<hotkey_screenshot_context>',
+          `${hotkeyImageCount} attached image${hotkeyImageCount === 1 ? ' was' : 's were'} deliberately captured by the user with Coco's screenshot hotkey.`,
+          'Treat the attached hotkey capture as the primary visual state the user chose for this request. Do not call observe_screen merely to capture or inspect the same screen again. Only request a new live-screen observation if the user explicitly asks for an updated view after this capture.',
+          '</hotkey_screenshot_context>',
+          userText,
+        ].filter(Boolean).join('\n')
+      : userText;
 
     try {
       await consumeTutorStream(
@@ -2086,7 +2157,7 @@ ipcMain.handle(
           // observe_screen; ordinary chat turns skip the observer entirely.
           observation: '',
           session_id: currentSessionId,
-          user_text: userText,
+          user_text: contextualizedUserText,
           image_paths: imagePaths.length ? imagePaths : null,
         },
         (streamEvent: TutorStreamEvent) => {
@@ -2124,6 +2195,51 @@ ipcMain.handle(
     }
   },
 );
+
+ipcMain.removeAllListeners('open-image-preview');
+ipcMain.on('open-image-preview', (event, payload: unknown) => {
+  const imageDataUrl = (payload as { imageDataUrl?: unknown } | null)
+    ?.imageDataUrl;
+  if (
+    typeof imageDataUrl !== 'string' ||
+    !imageDataUrl.startsWith('data:image/')
+  ) {
+    log.warn('[ImagePreview] Ignored an invalid image preview request.');
+    return;
+  }
+  openImagePreviewWindow(
+    BrowserWindow.fromWebContents(event.sender),
+    imageDataUrl,
+  );
+});
+
+ipcMain.removeAllListeners('image-preview-ready');
+ipcMain.on('image-preview-ready', (event) => {
+  if (
+    !imagePreviewWindow ||
+    imagePreviewWindow.isDestroyed() ||
+    imagePreviewWindow.webContents.id !== event.sender.id ||
+    !imagePreviewDataUrl
+  ) {
+    return;
+  }
+  imagePreviewWindow.webContents.send('image-preview', {
+    imageDataUrl: imagePreviewDataUrl,
+  });
+  imagePreviewWindow.show();
+  imagePreviewWindow.focus();
+});
+
+ipcMain.removeAllListeners('close-image-preview');
+ipcMain.on('close-image-preview', (event) => {
+  if (
+    imagePreviewWindow &&
+    !imagePreviewWindow.isDestroyed() &&
+    imagePreviewWindow.webContents.id === event.sender.id
+  ) {
+    imagePreviewWindow.close();
+  }
+});
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');

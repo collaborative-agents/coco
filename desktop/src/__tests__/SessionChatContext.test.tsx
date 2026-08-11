@@ -707,4 +707,95 @@ describe('deferred suggestion context', () => {
     expect(screen.queryByText('Coco is thinking…')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Helpful' })).toBeInTheDocument();
   });
+
+  it('opens desktop previews for pending and sent image attachments', async () => {
+    const listeners = new Map<string, (data: any) => void>();
+    const sendMessage = jest.fn();
+    const healthyService = {
+      connected: true,
+      status: 'healthy',
+      modelAssessment: { status: 'verified', detail: 'Connected.' },
+    };
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-model-configuration') {
+        return {
+          sensing: {
+            id: 'sensing',
+            label: 'Sensing',
+            provider: 'gemini',
+            model: 'gemini/vision',
+          },
+          tutors: [
+            {
+              id: 'primary',
+              label: 'Primary',
+              provider: 'anthropic',
+              model: 'anthropic/tutor',
+            },
+          ],
+          defaultTutorId: 'primary',
+        };
+      }
+      if (channel === 'get-service-health') {
+        return {
+          checkedAt: Date.now(),
+          sensing: healthyService,
+          tutor: healthyService,
+        };
+      }
+      if (channel === 'send-chat-message') {
+        return { guidance: 'I can see the attachment.' };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: any) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage,
+        invoke,
+      },
+    };
+    render(<SessionChatView />);
+    await screen.findByRole('combobox', { name: 'Tutor model' });
+
+    const imageDataUrl = 'data:image/png;base64,cHJldmlldw==';
+    act(() => {
+      listeners.get('hotkey-capture')?.({ imageDataUrl });
+    });
+    sendMessage.mockClear();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Preview attached image 1',
+      }),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith('open-image-preview', {
+      imageDataUrl,
+    });
+    sendMessage.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'send-chat-message',
+        expect.objectContaining({
+          images: [imageDataUrl],
+          hotkeyImages: [imageDataUrl],
+        }),
+      );
+    });
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Preview message attachment 1',
+      }),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith('open-image-preview', {
+      imageDataUrl,
+    });
+  });
 });

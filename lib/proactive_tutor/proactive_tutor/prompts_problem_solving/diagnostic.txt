@@ -26,7 +26,7 @@ Why the tutor is intervening proactively — includes trigger type, judge eviden
 </intervention_context>
 
 <screenshots type="hotkey">
-One or more screenshots the student explicitly captured using the hot-key shortcut (Cmd+Shift+H). Each is labeled [hk1], [hk2], etc. These show the specific UI state the student wants guidance on. Images appear after the text content.
+IMPORTANT IMAGE PROVENANCE: these screenshots were deliberately captured by the student with the hot-key shortcut (Cmd+Shift+Space). They are not periodic background screenshots. Each is labeled [hk1], [hk2], etc. These show the specific UI state the student wants guidance on and appear after the text content.
 </screenshots>
 
 Your responsibilities:

@@ -388,7 +388,7 @@ def _encode_image_data_url(image_path: str) -> str | None:
 async def trigger_hotkey_capture():
     """Manually trigger a hot-key capture (frontend fallback).
 
-    Normally the Cmd+Shift+H global listener fires this automatically.
+    Normally the Cmd+Shift+Space global listener fires this automatically.
     This endpoint lets the UI trigger a capture when the browser window
     is in focus and the OS-level shortcut is unavailable.
     """
