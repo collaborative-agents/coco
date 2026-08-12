@@ -27,6 +27,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -38,6 +39,9 @@ from py_utils.training_recorder import TrainingRecorder
 from sensing.language import ActionNode, SequenceNode, annotate_high_level_nodes
 
 logger = init_logger(__name__)
+
+DEFAULT_SNAPSHOT_MAX_AGE_SECONDS = 5 * 60
+RECENT_PROPOSITION_LIMIT = 3
 
 # ---------------------------------------------------------------------------
 # Local Snapshot type (was imported from proactive_tutor.tutor_types)
@@ -374,6 +378,11 @@ def _retrieve_instant_suggestion_context(
     for hit in hits:
         proposition = hit.proposition
         evidence = hit.observations[0] if hit.observations else None
+        evidence_content = (
+            _past_observation_without_rationale(evidence.content)
+            if evidence is not None
+            else ""
+        )
         results.append(
             {
                 "id": proposition.id,
@@ -384,12 +393,12 @@ def _retrieve_instant_suggestion_context(
                 "evidence": (
                     {
                         "id": evidence.id,
-                        "content": evidence.content,
+                        "content": evidence_content,
                         "created_at": evidence.created_at,
                         "observation_type": evidence.observation_type,
                         "session_id": evidence.session_id,
                     }
-                    if evidence is not None
+                    if evidence is not None and evidence_content
                     else None
                 ),
             }
@@ -540,6 +549,49 @@ class SnapshotBuffer:
 
     def history(self, last_n: int | None = None) -> list[Snapshot]:
         return self.buffer if last_n is None else self.buffer[-last_n:]
+
+
+def _snapshot_timestamp_seconds(timestamp: str) -> float | None:
+    """Parse the epoch or ISO timestamp attached to a rolling screenshot."""
+    try:
+        return float(timestamp)
+    except (TypeError, ValueError):
+        try:
+            return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            return None
+
+
+def _past_observation_without_rationale(observer_output: str) -> str:
+    """Return structured prior state without carrying forward model reasoning.
+
+    Previous rationales are decisions made against an older screen. Reinjecting
+    them makes speculative reasoning look like fresh evidence and can anchor the
+    next observer call. Malformed outputs are omitted rather than copied raw.
+    """
+    raw = _extract_json_block(observer_output)
+    if raw is None:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+
+    def strip_reasoning(value):
+        if isinstance(value, dict):
+            return {
+                key: strip_reasoning(item)
+                for key, item in value.items()
+                if key.lower() not in {"rationale", "reasoning"}
+            }
+        if isinstance(value, list):
+            return [strip_reasoning(item) for item in value]
+        return value
+
+    sanitized = strip_reasoning(parsed)
+    return json.dumps(sanitized, ensure_ascii=False)
 
 
 class HotKeyBuffer:
@@ -714,6 +766,7 @@ class AiTutoringProcessor(SegmentProcessor):
         tutor_url: str,
         ai_tutor_output_log: str,
         snapshot_buffer_max_size: int = 6,
+        snapshot_max_age_seconds: float = DEFAULT_SNAPSHOT_MAX_AGE_SECONDS,
         *,
         observer_model: str,
         scenario: str = "everyday_support",
@@ -723,6 +776,7 @@ class AiTutoringProcessor(SegmentProcessor):
         self.tutor_url = tutor_url.rstrip("/")
         self.ai_tutor_output_log = ai_tutor_output_log
         self.snapshot_buffer = SnapshotBuffer(max_size=snapshot_buffer_max_size)
+        self._snapshot_max_age_seconds = max(0.0, snapshot_max_age_seconds)
         self._image_num: int = 0
         self._observer_model = observer_model
         self._scenario = scenario
@@ -771,6 +825,7 @@ class AiTutoringProcessor(SegmentProcessor):
         tutor_url: str,
         ai_tutor_output_log: str,
         snapshot_buffer_max_size: int = 6,
+        snapshot_max_age_seconds: float = DEFAULT_SNAPSHOT_MAX_AGE_SECONDS,
         *,
         observer_model: str,
         scenario: str = "everyday_support",
@@ -789,6 +844,7 @@ class AiTutoringProcessor(SegmentProcessor):
             tutor_url=tutor_url,
             ai_tutor_output_log=ai_tutor_output_log,
             snapshot_buffer_max_size=snapshot_buffer_max_size,
+            snapshot_max_age_seconds=snapshot_max_age_seconds,
             observer_model=observer_model,
             scenario=scenario,
             memory_engine=memory_engine,
@@ -1211,6 +1267,13 @@ class AiTutoringProcessor(SegmentProcessor):
         from datetime import datetime as _dt
 
         text = await self._build_context_prompt()
+        # Recent propositions summarize a longer horizon of user activity than
+        # the immediately preceding observer outputs. Keep the two layers
+        # separate so recency is useful without presenting memory as current
+        # screen truth.
+        propositions_block = await self._recent_propositions_block()
+        if propositions_block:
+            text += propositions_block + "\n"
         # In-context memory: recent observations + how the user reacted, so the
         # observer doesn't re-raise a suggestion the user just dismissed.
         recent_block = self._recent_observations_block(n=3)
@@ -1435,13 +1498,58 @@ class AiTutoringProcessor(SegmentProcessor):
             "new app, or genuinely different issue or opportunity).",
         ]
         for i, entry in enumerate(recent, start=1):
+            sanitized = _past_observation_without_rationale(str(entry.get("obs", "")))
+            if not sanitized:
+                continue
             age = max(0.0, now - float(entry.get("ts", now)))
             oid = entry.get("observation_id")
             reaction = self._reactions.get(oid or "")
             label = self._REACTION_LABEL.get(reaction, "no feedback recorded")  # type: ignore
             lines.append(f"[{i}] t-{age:.0f}s  reaction={label}")
-            lines.append(f"    {str(entry.get('obs', '')).strip()}")
+            lines.append(f"    {sanitized}")
         lines.append("</recent_observations>")
+        return "\n".join(lines) if len(lines) > 3 else ""
+
+    async def _recent_propositions_block(
+        self, n: int = RECENT_PROPOSITION_LIMIT
+    ) -> str:
+        """Load recent memory propositions as broader, longer-term context."""
+        if self._scenario != "everyday_support" or n <= 0:
+            return ""
+        store = getattr(self._memory_engine, "store", None)
+        if store is None:
+            return ""
+        now = time.time()
+        try:
+            hits = await asyncio.to_thread(
+                store.search,
+                "",
+                limit=n,
+                end_time=now,
+                include_observations=0,
+            )
+        except Exception as exc:
+            logger.warning(f"Could not load recent propositions: {exc}")
+            return ""
+        if not hits:
+            return ""
+        lines = [
+            "<recent_propositions>",
+            "These are broader, longer-term summaries of recent user activities "
+            "from memory. They cover a longer horizon than <recent_observations>. "
+            "Use them only for continuity; current screenshots and recent "
+            "observations are stronger evidence of what the user is doing now.",
+        ]
+        for index, hit in enumerate(hits, start=1):
+            proposition = hit.proposition
+            age = max(0.0, now - float(proposition.updated_at))
+            lines.append(
+                f"[{index}] t-{age:.0f}s proposition_id={proposition.id} "
+                f"confidence={proposition.confidence} "
+                f"durability={proposition.decay}"
+            )
+            lines.append(f"    {proposition.text.strip()}")
+        lines.append("</recent_propositions>")
         return "\n".join(lines)
 
     async def _build_context_prompt(self) -> str:
@@ -1484,13 +1592,39 @@ class AiTutoringProcessor(SegmentProcessor):
 
     def _collect_images(self, text_prompt: str) -> tuple[str, list[str]]:
         if self.snapshot_buffer.obs_history:
-            obs_joined = "\n".join(self.snapshot_buffer.obs_history)
-            text_prompt += (
-                f"\n<previous_observations>\n{obs_joined}\n</previous_observations>\n"
-            )
+            sanitized_history = [
+                _past_observation_without_rationale(item)
+                for item in self.snapshot_buffer.obs_history
+            ]
+            sanitized_history = [item for item in sanitized_history if item]
+            if sanitized_history:
+                obs_joined = "\n".join(sanitized_history)
+                text_prompt += (
+                    f"\n<previous_observations>\n{obs_joined}"
+                    "\n</previous_observations>\n"
+                )
             self.snapshot_buffer.obs_history.clear()
         n = self._image_num
-        snaps = self.snapshot_buffer.history(n)
+        candidates = self.snapshot_buffer.history(n)
+        cutoff = time.time() - self._snapshot_max_age_seconds
+        snaps: list[Snapshot] = []
+        stale: list[Snapshot] = []
+        for snapshot in candidates:
+            captured_at = _snapshot_timestamp_seconds(snapshot.timestamp)
+            if captured_at is None or captured_at < cutoff:
+                stale.append(snapshot)
+            else:
+                snaps.append(snapshot)
+        if stale:
+            logger.info(
+                "Dropping %d stale or undated screenshot(s) from observer input "
+                "(maximum age %.0fs)",
+                len(stale),
+                self._snapshot_max_age_seconds,
+            )
+            self._cleanup_consumed_screenshots(
+                [snapshot.image_path for snapshot in stale]
+            )
         if snaps:
             snap_lines = "\n".join(
                 f"  [{s.timestamp}] Screenshot {i + 1} of {len(snaps)}"

@@ -77,7 +77,11 @@ async def test_ai_processor_persists_generated_observation(monkeypatch):
 async def test_ai_processor_retrieves_context_for_support_event(monkeypatch):
     evidence = SimpleNamespace(
         id="past-observation",
-        content='{"observation":"The user handled a similar email."}',
+        content=(
+            '{"observation":"The user handled a similar email.",'
+            '"user_intent":"Reply to the recruiter",'
+            '"rationale":"An old inference that must not be reused."}'
+        ),
         created_at=100.0,
         observation_type="snapshot",
         session_id="past-session",
@@ -88,6 +92,7 @@ async def test_ai_processor_retrieves_context_for_support_event(monkeypatch):
             text="The recruiter previously asked for an updated end date.",
             confidence=9,
             decay=6,
+            updated_at=time.time(),
         ),
         score=0.91,
         observations=[evidence],
@@ -126,12 +131,20 @@ async def test_ai_processor_retrieves_context_for_support_event(monkeypatch):
     assert event["retrieved_context"]["results"][0]["evidence"]["id"] == (
         "past-observation"
     )
+    retrieved_evidence = event["retrieved_context"]["results"][0]["evidence"]
+    assert "Reply to the recruiter" in retrieved_evidence["content"]
+    assert "rationale" not in retrieved_evidence["content"]
+    assert "old inference" not in retrieved_evidence["content"]
     query = "Reply to the recruiter The user is drafting a reply in Outlook."
     assert event["retrieved_context"]["query"] == query
-    store.search.assert_called_once()
-    assert store.search.call_args.args == (query,)
-    assert store.search.call_args.kwargs["limit"] == 3
-    assert store.search.call_args.kwargs["include_observations"] == 1
+    assert store.search.call_count == 2
+    recent_call, relevant_call = store.search.call_args_list
+    assert recent_call.args == ("",)
+    assert recent_call.kwargs["limit"] == 3
+    assert recent_call.kwargs["include_observations"] == 0
+    assert relevant_call.args == (query,)
+    assert relevant_call.kwargs["limit"] == 3
+    assert relevant_call.kwargs["include_observations"] == 1
 
 
 def test_recent_observations_treats_thumbs_down_as_negative_feedback():
@@ -155,6 +168,113 @@ def test_recent_observations_treats_thumbs_down_as_negative_feedback():
 
     assert "user rated the resulting help as NEGATIVE" in block
     assert 'set need_support to "no"' in block
+
+
+def test_recent_observations_omit_past_rationale():
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+    )
+    processor._observation_history.append(
+        {
+            "ts": time.time(),
+            "type": "snapshot",
+            "obs": (
+                '{"observation":"The user is reading a shared deck.",'
+                '"user_intent":"Review the slides",'
+                '"rationale":"Assume they plan to rewrite it",'
+                '"reasoning":"This older decision should also be removed",'
+                '"need_support":"no"}'
+            ),
+            "observation_id": "observation-1",
+        }
+    )
+
+    block = processor._recent_observations_block()
+
+    assert "The user is reading a shared deck." in block
+    assert "Review the slides" in block
+    assert "rationale" not in block
+    assert "reasoning" not in block
+    assert "Assume they plan to rewrite it" not in block
+
+
+def test_collect_images_drops_stale_screenshots_and_past_rationale(monkeypatch):
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="",
+        observer_model="provider/observer",
+        snapshot_max_age_seconds=300,
+    )
+    monkeypatch.setattr(segment_processor.time, "time", lambda: 1_000.0)
+    processor._add_snapshot("old.jpg", "600")
+    processor._add_snapshot("fresh.jpg", "950")
+    processor.snapshot_buffer.obs_history.append(
+        '{"observation":"Prior state",'
+        '"rationale":"A stale inference",'
+        '"need_support":"no"}'
+    )
+
+    prompt, image_paths = processor._collect_images("context")
+
+    assert image_paths == ["fresh.jpg"]
+    assert "old.jpg" not in prompt
+    assert "[950] Screenshot 1 of 1" in prompt
+    assert "Prior state" in prompt
+    assert "rationale" not in prompt
+    assert "A stale inference" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_observer_receives_recent_propositions_as_longer_term_context(
+    monkeypatch,
+):
+    hit = SimpleNamespace(
+        proposition=SimpleNamespace(
+            id=12,
+            text="The user recently reviewed a colleague's internship presentation.",
+            confidence=8,
+            decay=5,
+            updated_at=980.0,
+        )
+    )
+    store = SimpleNamespace(search=MagicMock(return_value=[hit]))
+    memory_engine = SimpleNamespace(
+        store=store,
+        add_observation=AsyncMock(return_value=True),
+    )
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+        memory_engine=memory_engine,
+    )
+    processor._build_context_prompt = AsyncMock(return_value="<memory />\n")
+    processor._collect_images = lambda text: (text, [])
+    monkeypatch.setattr(segment_processor.time, "time", lambda: 1_000.0)
+    captured = {}
+
+    def fake_observe(text_prompt, *_args, **_kwargs):
+        captured["text_prompt"] = text_prompt
+        return '{"need_support":"no"}', {}
+
+    monkeypatch.setattr(segment_processor, "_observe", fake_observe)
+
+    await processor._handle_observation(type="snapshot")
+
+    assert "<recent_propositions>" in captured["text_prompt"]
+    assert "broader, longer-term summaries" in captured["text_prompt"]
+    assert "colleague's internship presentation" in captured["text_prompt"]
+    store.search.assert_called_once_with(
+        "",
+        limit=3,
+        end_time=1_000.0,
+        include_observations=0,
+    )
 
 
 @pytest.mark.asyncio
