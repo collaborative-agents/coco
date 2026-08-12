@@ -174,6 +174,7 @@ export function NotificationBubble({
   suggestion,
   onSuggestionAction,
   onChatAboutSuggestion,
+  onOpenCocoChat,
   suggestionRating,
   onRateSuggestion,
   copyConfirmed,
@@ -192,6 +193,7 @@ export function NotificationBubble({
   suggestion?: InstantSuggestion;
   onSuggestionAction?: (toolId: string | null) => void;
   onChatAboutSuggestion?: () => void;
+  onOpenCocoChat?: () => void;
   suggestionRating?: 'up' | 'down' | null;
   onRateSuggestion?: (rating: 'up' | 'down') => void;
   copyConfirmed?: boolean;
@@ -295,7 +297,7 @@ export function NotificationBubble({
                   suggestionRating === rating ? ' is-rated' : ''
                 }`}
                 aria-label={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
-                disabled={suggestionRating != null}
+                disabled={suggestionRating === rating}
                 onClick={() => onRateSuggestion?.(rating)}
               >
                 {rating === 'up' ? '👍' : '👎'}
@@ -304,18 +306,19 @@ export function NotificationBubble({
           </div>
           <button
             type="button"
+            className="toast-action toast-coco-chat-action"
+            onClick={onOpenCocoChat}
+            autoFocus
+          >
+            Open Coco Chat
+          </button>
+          <button
+            type="button"
             className="toast-action"
             onClick={() => onSuggestionAction?.(null)}
             disabled={copyConfirmed}
           >
             {copyConfirmed ? 'Copied ✓' : 'Copy prompt'}
-          </button>
-          <button
-            type="button"
-            className="toast-action toast-chat-action"
-            onClick={onChatAboutSuggestion}
-          >
-            Chat about it
           </button>
           {(suggestion.availableTools ?? []).map((tool) => (
             <button
@@ -343,7 +346,7 @@ export function NotificationBubble({
                     aria-label={
                       rating === 'up' ? 'Good suggestion' : 'Not helpful'
                     }
-                    disabled={suggestionRating != null}
+                    disabled={suggestionRating === rating}
                     onClick={() => onRateSuggestion?.(rating)}
                   >
                     {rating === 'up' ? '👍' : '👎'}
@@ -422,12 +425,13 @@ export default function NotificationView() {
 
   const rateInstantSuggestion = (rating: 'up' | 'down') => {
     if (
-      suggestionRating ||
+      suggestionRating === rating ||
       !payload.observationId ||
       !payload.suggestion
     ) {
       return;
     }
+    const previousRating = suggestionRating;
     setSuggestionRating(rating);
     const ratedAt = Math.floor(Date.now() / 1000);
     ipc?.sendMessage('activity-support-rated', {
@@ -437,6 +441,7 @@ export default function NotificationView() {
     });
     ipc?.sendMessage('training-feedback', {
       kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
+      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
       surface: 'notification',
       observation_id: payload.observationId,
       status: payload.status,
@@ -590,6 +595,20 @@ export default function NotificationView() {
     window.close();
   };
 
+  const handleOpenCocoChat = () => {
+    if (!payload.suggestion) return;
+    ipc?.sendMessage('chat-about-suggestion', {
+      observationId: payload.observationId,
+      status: payload.status,
+      rawObservation: payload.rawObservation,
+      suggestion: payload.suggestion,
+      surface: 'notification',
+      copyPromptToInput: true,
+    });
+    setVisible(false);
+    window.close();
+  };
+
   return (
     <div className="notification-root">
       <NotificationBubble
@@ -604,6 +623,7 @@ export default function NotificationView() {
         suggestion={payload.suggestion}
         onSuggestionAction={handleSuggestionAction}
         onChatAboutSuggestion={handleChatAboutSuggestion}
+        onOpenCocoChat={handleOpenCocoChat}
         suggestionRating={suggestionRating}
         onRateSuggestion={rateInstantSuggestion}
         copyConfirmed={copyConfirmed}

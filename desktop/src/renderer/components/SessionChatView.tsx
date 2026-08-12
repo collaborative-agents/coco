@@ -332,7 +332,6 @@ const S: Record<string, React.CSSProperties> = {
   toolObservation: { borderTop: `1px solid ${BORDER}`, marginTop: 5, paddingTop: 5 },
   feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
   feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
-  feedbackBtnLocked: { opacity: 0.25, cursor: 'default' },
   typing: { alignSelf: 'flex-start', color: '#9ca3af', fontSize: 12, fontStyle: 'italic', paddingLeft: 32 },
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   // Settings panel (mirrors the onboarding toolkit step)
@@ -606,7 +605,8 @@ export default function SessionChatView() {
   const [memoryDraft, setMemoryDraft] = useState('');
   const [memoryLoaded, setMemoryLoaded] = useState('');
   const [memoryFlash, setMemoryFlash] = useState(false);
-  // One thumbs vote per tutor message, keyed by message id.
+  // Current thumbs vote per tutor message, keyed by message id. Users may
+  // replace it by choosing the opposite rating.
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
   const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -672,10 +672,12 @@ export default function SessionChatView() {
   // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
   // same pipeline as the bubble reactions.
   const rateMessage = (m: ChatMessage, dir: 'up' | 'down') => {
-    if (!m.id || ratings[m.id]) return;
+    if (!m.id || ratings[m.id] === dir) return;
+    const previousRating = ratings[m.id];
     setRatings((prev) => ({ ...prev, [m.id as string]: dir }));
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: dir === 'up' ? 'thumbs_up' : 'thumbs_down',
+      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
       surface: 'chat',
       message_id: m.id,
       session_id: sessionIdRef.current,
@@ -1225,16 +1227,27 @@ export default function SessionChatView() {
   const memoryDirty = memoryDraft !== memoryLoaded;
 
   // Context from proactive support. Ordinary "Help me with this" requests are
-  // sent immediately; "Chat about it" only stages the context for the user's
-  // next message and therefore does not invoke the tutor yet.
+  // sent immediately; "Chat about it" stages context for the next message; and
+  // "Open Coco Chat" places a delegation prompt directly in the composer.
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('help-request', (data: any) => {
-      const { rawObservation, phrase, label, deferUntilUserMessage } = (data ?? {}) as {
+      const {
+        rawObservation,
+        phrase,
+        label,
+        deferUntilUserMessage,
+        initialInput,
+      } = (data ?? {}) as {
         rawObservation?: string;
         phrase?: string;
         label?: string;
         deferUntilUserMessage?: boolean;
+        initialInput?: string;
       };
+      if (typeof initialInput === 'string') {
+        setInput(initialInput);
+        return;
+      }
       const seed = (rawObservation || phrase || '').trim();
       if (seed && deferUntilUserMessage) {
         pendingContextRef.current = seed;
@@ -2265,14 +2278,12 @@ export default function SessionChatView() {
                             type="button"
                             aria-label={dir === 'up' ? 'Helpful' : 'Not helpful'}
                             title={dir === 'up' ? 'Helpful' : 'Not helpful'}
-                            disabled={!!ratings[m.id as string]}
+                            disabled={ratings[m.id as string] === dir}
                             style={{
                               ...S.feedbackBtn,
                               ...(ratings[m.id as string] === dir
                                 ? S.feedbackBtnRated
-                                : ratings[m.id as string]
-                                  ? S.feedbackBtnLocked
-                                  : {}),
+                                : {}),
                             }}
                             onClick={() => rateMessage(m, dir)}
                           >

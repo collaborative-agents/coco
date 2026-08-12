@@ -62,6 +62,7 @@ export default function ObservationBubble({
   onDismiss,
   onViewConversation,
   onChatAboutSuggestion,
+  onOpenCocoChat,
   onMouseEnter,
   onMouseLeave,
 }: {
@@ -70,6 +71,7 @@ export default function ObservationBubble({
   onDismiss?: () => void;
   onViewConversation?: () => void;
   onChatAboutSuggestion?: () => void;
+  onOpenCocoChat?: () => void;
   /** Hovering pauses the auto-hide so the user can read / copy the bubble. */
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -80,7 +82,8 @@ export default function ObservationBubble({
   // Transient confirmation shown after Copy / Approve.
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // One rating per revealed suggestion; locks the thumbs after the first click.
+  // Current rating for the revealed suggestion. The opposite thumb remains
+  // available so an accidental rating can be corrected.
   const [rated, setRated] = useState<'up' | 'down' | null>(null);
   // When the suggestion was revealed — lets latency_s capture time-to-rate.
   const suggestionShownAt = useRef<number>(Date.now());
@@ -134,10 +137,12 @@ export default function ObservationBubble({
   // Rate the revealed suggestion. Logged into feedback.jsonl via the sensing
   // server so it joins observations by observation_id.
   const rate = (dir: 'up' | 'down') => {
-    if (rated || !suggestion) return;
+    if (rated === dir || !suggestion) return;
+    const previousRating = rated;
     setRated(dir);
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: dir === 'up' ? 'thumbs_up' : 'thumbs_down',
+      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
       surface: 'bubble',
       observation_id: bubble?.observationId ?? null,
       status,
@@ -149,7 +154,7 @@ export default function ObservationBubble({
       rating: dir,
       ratedAt: Math.floor(Date.now() / 1000),
     });
-    showToast('Thanks for the feedback');
+    showToast(previousRating ? 'Feedback updated' : 'Thanks for the feedback');
   };
 
   return (
@@ -253,17 +258,18 @@ export default function ObservationBubble({
         <div className="bubble-tool-actions">
           <button
             type="button"
+            className="bubble-action-btn bubble-coco-chat-action"
+            onClick={onOpenCocoChat}
+            autoFocus
+          >
+            Open Coco Chat
+          </button>
+          <button
+            type="button"
             className="bubble-action-btn"
             onClick={() => act(null)}
           >
             Copy prompt
-          </button>
-          <button
-            type="button"
-            className="bubble-action-btn bubble-chat-action"
-            onClick={onChatAboutSuggestion}
-          >
-            Chat about it
           </button>
           {(suggestion.availableTools ?? []).map((t) => (
             <button
@@ -278,7 +284,7 @@ export default function ObservationBubble({
         </div>
       )}
 
-      {/* Rate the suggested prompt/content — one vote, then it locks. */}
+      {/* Rate the suggested prompt/content; the opposite choice stays editable. */}
       {suggestion && (
         <div className="bubble-feedback-row">
           <button
@@ -286,7 +292,7 @@ export default function ObservationBubble({
             className={`bubble-feedback-btn${rated === 'up' ? ' is-rated' : ''}`}
             aria-label="Good suggestion"
             title="Good suggestion"
-            disabled={rated !== null}
+            disabled={rated === 'up'}
             onClick={() => rate('up')}
           >
             👍
@@ -296,7 +302,7 @@ export default function ObservationBubble({
             className={`bubble-feedback-btn${rated === 'down' ? ' is-rated' : ''}`}
             aria-label="Not helpful"
             title="Not helpful"
-            disabled={rated !== null}
+            disabled={rated === 'down'}
             onClick={() => rate('down')}
           >
             👎

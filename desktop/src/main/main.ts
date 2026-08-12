@@ -676,6 +676,8 @@ interface ChatSeed {
   rawObservation: string;
   /** Attach context to the user's next turn instead of sending immediately. */
   deferUntilUserMessage?: boolean;
+  /** Pre-fill Coco's composer without sending the message. */
+  initialInput?: string;
 }
 
 // Open the chat panel for a session, pushing the session context (and an
@@ -1804,9 +1806,9 @@ ipcMain.on(
   },
 );
 
-// Continue a revealed instant suggestion in Coco's own conversation. Include
-// both the ready-made suggestion and the observation that prompted it so the
-// tutor can discuss, refine, or explain the advice without losing context.
+// Open a revealed instant suggestion in Coco's own conversation. Delegation
+// prompts can pre-fill the composer; "Chat about it" attaches the suggestion
+// and its observation as context for the user's next message.
 ipcMain.removeAllListeners('chat-about-suggestion');
 ipcMain.on(
   'chat-about-suggestion',
@@ -1818,6 +1820,7 @@ ipcMain.on(
       rawObservation?: string;
       suggestion?: InstantSuggestion;
       surface?: 'bubble' | 'notification';
+      copyPromptToInput?: boolean;
     },
   ) => {
     if (payload?.surface === 'notification') notificationWindow?.destroy();
@@ -1827,20 +1830,28 @@ ipcMain.on(
     const rawObservation = payload.rawObservation?.trim() || '';
     const suggestionText =
       suggestion.kind === 'delegate' ? suggestion.prompt : suggestion.body;
-    const chatSeed = [
-      'I’d like to chat about this suggestion:',
-      `**${suggestion.title}**`,
-      suggestionText || suggestion.copyText,
-      rawObservation ? `Context that prompted it:\n${rawObservation}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-    const seed = {
-      phrase: suggestion.title,
-      label: payload.status?.replace(/_/g, ' ') || 'suggestion',
-      rawObservation: chatSeed,
-      deferUntilUserMessage: true,
-    };
+    const seed: ChatSeed = payload.copyPromptToInput
+      ? {
+          phrase: suggestion.title,
+          label: payload.status?.replace(/_/g, ' ') || 'suggestion',
+          rawObservation,
+          initialInput: suggestion.copyText || suggestionText || '',
+        }
+      : {
+          phrase: suggestion.title,
+          label: payload.status?.replace(/_/g, ' ') || 'suggestion',
+          rawObservation: [
+            'I’d like to chat about this suggestion:',
+            `**${suggestion.title}**`,
+            suggestionText || suggestion.copyText,
+            rawObservation
+              ? `Context that prompted it:\n${rawObservation}`
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+          deferUntilUserMessage: true,
+        };
 
     if (payload.observationId) {
       recordSupportEngagement(payload.observationId, {

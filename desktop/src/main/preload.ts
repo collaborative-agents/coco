@@ -88,7 +88,7 @@ export type Channels =
   | 'get-instant-suggestion'
   // Instant suggestion: act on a revealed suggestion (copy / open tool)
   | 'suggestion-action'
-  // Continue a revealed instant suggestion in Coco's chat
+  // Continue a suggestion in Coco's chat or pre-fill its composer
   | 'chat-about-suggestion'
   // Forwarded to webapp renderer to signal a help-request context
   | 'help-request'

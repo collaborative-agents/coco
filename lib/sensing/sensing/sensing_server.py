@@ -726,6 +726,7 @@ class FeedbackRequest(BaseModel):
     """
 
     kind: str
+    previous_kind: str | None = None
     surface: str = "bubble"
     observation_id: str | None = None
     message_id: str | None = None
@@ -761,6 +762,12 @@ async def record_feedback(req: FeedbackRequest):
         status=req.status,
         latency_s=req.latency_s,
         text=req.text,
+        extra=(
+            {"replaces_kind": req.previous_kind}
+            if req.previous_kind in {"thumbs_up", "thumbs_down"}
+            and req.previous_kind != req.kind
+            else None
+        ),
     )
     logger.info(
         f"Feedback logged: kind={req.kind} surface={req.surface} "

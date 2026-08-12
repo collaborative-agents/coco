@@ -290,6 +290,18 @@ body,
   background: var(--bubble-accent-soft);
 }
 
+/* Coco Chat is always the recommended/default delegation destination. */
+.bubble-coco-chat-action {
+  color: #ffffff;
+  border-color: var(--bubble-accent);
+  background: var(--bubble-accent);
+}
+
+.bubble-coco-chat-action:hover {
+  color: #ffffff;
+  background: var(--bubble-accent);
+}
+
 .bubble-metrics-row {
   display: flex;
   flex-wrap: wrap;
@@ -307,8 +319,8 @@ body,
   line-height: 1.35;
 }
 
-/* Thumbs up/down under a revealed suggestion. One vote — the chosen thumb
-   stays highlighted and both lock. */
+/* Thumbs up/down under a revealed suggestion. The chosen thumb stays
+   highlighted; the opposite choice remains available for corrections. */
 .bubble-feedback-row {
   display: flex;
   justify-content: flex-end;
@@ -1412,6 +1424,18 @@ body,
   color: #204a79;
   border-color: #bcd0fc;
   background: #e9efff;
+}
+
+.toast-coco-chat-action {
+  color: #ffffff;
+  border-color: #4f46e5;
+  background: #4f46e5;
+}
+
+.toast-coco-chat-action:hover {
+  color: #ffffff;
+  border-color: #4338ca;
+  background: #4338ca;
 }
 
 .toast-chat-action,

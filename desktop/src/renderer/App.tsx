@@ -120,6 +120,10 @@ function SupportControls({
   const support = record.proactive_support;
   if (!support) return null;
   const canView = support.suggestion != null || support.available === true;
+  const ratingLabels = {
+    up: 'Good suggestion',
+    down: 'Not helpful',
+  } as const;
   return (
     <div className="obs-support-controls">
       {canView && (
@@ -139,9 +143,13 @@ function SupportControls({
           className={`obs-support-rating${
             support.rating === rating ? ' is-rated' : ''
           }`}
-          aria-label={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
-          title={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
-          disabled={support.rating != null}
+          aria-label={ratingLabels[rating]}
+          title={
+            support.rating && support.rating !== rating
+              ? `Change rating to ${ratingLabels[rating].toLowerCase()}`
+              : ratingLabels[rating]
+          }
+          disabled={support.rating === rating}
           onClick={() => onRate(rating)}
         >
           {rating === 'up' ? '👍' : '👎'}
@@ -832,6 +840,24 @@ function PetView() {
     setMood('idle');
   };
 
+  const handleOpenCocoChat = () => {
+    if (!bubble?.suggestion) return;
+    const current = bubble;
+    window.electron?.ipcRenderer.sendMessage('chat-about-suggestion', {
+      observationId: current.observationId,
+      status: current.status,
+      rawObservation: current.rawObservation ?? '',
+      suggestion: current.suggestion,
+      surface: 'bubble',
+      copyPromptToInput: true,
+    });
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    bubblePinnedRef.current = false;
+    setBubble(null);
+    setMood('idle');
+  };
+
   // Tier 3: user wants to read the full tutor guidance — open main window.
   const handleViewConversation = () => {
     window.electron?.ipcRenderer.sendMessage('open-main-window');
@@ -875,7 +901,8 @@ function PetView() {
     record: ActivityRecord,
     rating: 'up' | 'down',
   ) => {
-    if (!record.observation_id || record.proactive_support?.rating) return;
+    const previousRating = record.proactive_support?.rating;
+    if (!record.observation_id || previousRating === rating) return;
     const ratedAt = Math.floor(Date.now() / 1000);
     setRecords((prev) =>
       prev.map((item) =>
@@ -894,6 +921,7 @@ function PetView() {
     );
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
+      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
       surface: 'history',
       observation_id: record.observation_id,
       status: record.status,
@@ -950,6 +978,7 @@ function PetView() {
         onDismiss={handleDismiss}
         onViewConversation={handleViewConversation}
         onChatAboutSuggestion={handleChatAboutSuggestion}
+        onOpenCocoChat={handleOpenCocoChat}
         onMouseEnter={handleBubbleEnter}
         onMouseLeave={handleBubbleLeave}
       />

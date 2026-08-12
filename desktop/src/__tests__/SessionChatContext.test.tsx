@@ -626,6 +626,40 @@ describe('deferred suggestion context', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('places an Open Coco Chat delegation prompt in the chat input', () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const invoke = jest.fn(async () => null);
+
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+
+    act(() => {
+      listeners.get('help-request')?.({
+        phrase: 'Ask an AI tool',
+        rawObservation: 'The user encountered an error.',
+        initialInput: 'Explain this error and suggest a fix.',
+      });
+    });
+
+    expect(screen.getByPlaceholderText(/Ask the tutor/)).toHaveValue(
+      'Explain this error and suggest a fix.',
+    );
+    expect(invoke).not.toHaveBeenCalledWith(
+      'send-chat-message',
+      expect.anything(),
+    );
+  });
+
   it('renders streamed text and tool-call lifecycle events in one reply', async () => {
     const listeners = new Map<string, (data: any) => void>();
     let requestId = '';

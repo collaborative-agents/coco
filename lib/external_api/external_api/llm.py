@@ -396,7 +396,7 @@ def _tinfoil_to_litellm(output: TinfoilMessage) -> LiteLLMMessage:
 def _chat_completion_provider(
     messages: Sequence[LiteLLMMessage | dict],
     model: str,
-    temperature: float = 1.0,
+    temperature: float | None = 1.0,
     max_tokens: int | None = None,
     top_p: float | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
@@ -508,7 +508,7 @@ def _chat_completion_provider(
 def chat_completion(
     messages: Sequence[LiteLLMMessage | dict],
     model: str,
-    temperature: float = 1.0,
+    temperature: float | None = 1.0,
     max_tokens: int | None = None,
     top_p: float | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]

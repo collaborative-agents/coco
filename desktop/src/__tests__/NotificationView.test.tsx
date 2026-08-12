@@ -280,8 +280,30 @@ describe('instant suggestion actions', () => {
     expect(onChat).toHaveBeenCalledTimes(1);
   });
 
-  it('offers to continue a delegated suggestion in chat', () => {
-    const onChat = jest.fn();
+  it('keeps the opposite rating available for a correction', () => {
+    const onRate = jest.fn();
+    render(
+      <NotificationBubble
+        message="Try a smaller example"
+        actionLabel="Copy"
+        notifType="instant-suggestion"
+        suggestion={contentSuggestion}
+        suggestionRating="up"
+        onRateSuggestion={onRate}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Good suggestion' }),
+    ).toBeDisabled();
+    const bad = screen.getByRole('button', { name: 'Not helpful' });
+    expect(bad).toBeEnabled();
+    fireEvent.click(bad);
+    expect(onRate).toHaveBeenCalledWith('down');
+  });
+
+  it('offers Coco Chat as the default delegation destination', () => {
+    const onOpenCocoChat = jest.fn();
     render(
       <NotificationBubble
         message="Ask an AI tool"
@@ -294,12 +316,14 @@ describe('instant suggestion actions', () => {
           targetTool: 'chatgpt',
           availableTools: [],
         }}
-        onChatAboutSuggestion={onChat}
+        onOpenCocoChat={onOpenCocoChat}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Chat about it' }));
-    expect(onChat).toHaveBeenCalledTimes(1);
+    const coco = screen.getByRole('button', { name: 'Open Coco Chat' });
+    expect(coco).toHaveClass('toast-coco-chat-action');
+    fireEvent.click(coco);
+    expect(onOpenCocoChat).toHaveBeenCalledTimes(1);
   });
 });
 

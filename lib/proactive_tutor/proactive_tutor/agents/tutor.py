@@ -363,6 +363,10 @@ class TutorAgent:
         response, metrics = chat_completion(
             self._prepare_chat_messages(messages, image_paths),
             model=self.model,
+            # Some hosted models (including InferenceHub's Bedrock Claude)
+            # reject sampling parameters entirely. Defer to the provider's
+            # default instead of forcing chat_completion's legacy 1.0 value.
+            temperature=None,
             max_tokens=8192,
             operation=operation,
             on_chunk=on_chunk,
