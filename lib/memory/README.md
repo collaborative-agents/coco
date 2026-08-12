@@ -8,6 +8,59 @@ The SQLite database uses WAL mode and FTS5 so sensing can write while the tutor 
 
 Retrieval searches proposition text, linked update summaries, and supporting observations. Missing evidence citations fall back to at most five lexical matches rather than linking the whole batch.
 
+## Filesystem primitives
+
+`MemoryFileSystem` provides read-only, filesystem-inspired access over the same
+SQLite store:
+
+| Command | Result |
+| --- | --- |
+| `ls(sort_by="score")` | All propositions sorted by score, updated time, or confidence |
+| `stat(proposition)` | Proposition metadata, score, evidence count, proposition time, and observation-time range |
+| `cat(proposition)` | Proposition text |
+| `read(proposition)` | Proposition text and all linked observations, newest first |
+| `head(proposition, k)` | The `k` newest linked observations |
+| `tail(proposition, k)` | The `k` oldest linked observations |
+| `grep(pattern, items, regex=False)` | Literal or regular-expression text matches |
+| `bm25(query, propositions)` | BM25 ranking over proposition text |
+| `find(propositions, ...)` | Observation/proposition time, confidence, and durability filters |
+| `du(proposition)` | Linked observation count |
+| `df()` | Store, linkage, pending, and database-size statistics |
+
+The score used by `ls` and `stat` combines normalized confidence with an
+age-decay curve whose half-life is controlled by proposition durability. It is
+query-independent; `bm25` supplies query relevance.
+
+`pipe` evaluates ordinary one-argument callables immediately from left to
+right:
+
+```python
+from memory import MemoryFileSystem, MemoryStore, pipe
+
+memory = MemoryFileSystem(MemoryStore("memory.db"))
+results = pipe(
+    memory.ls(sort_by="score"),
+    lambda items: memory.find(
+        items,
+        time_start="2026-07-27T00:00:00-07:00",
+        time_end="2026-08-02T23:59:59.999999-07:00",
+        time_field="observation",
+        min_confidence=7,
+    ),
+    lambda items: memory.grep("oauth", items),
+    lambda items: memory.bm25("callback failure", items),
+)
+```
+
+`find` accepts ISO-8601 dates/datetimes (preferred) and legacy Unix seconds.
+Its default `time_field="observation"` selects propositions with at least one
+linked observation in the interval—the time when the remembered activity
+happened. Use `proposition_created` or `proposition_updated` to filter by the
+memory record's own lifecycle instead. A date-only end bound includes the full
+UTC calendar day; use an explicit offset for a user's local calendar window.
+`stat` reports both proposition creation/update timestamps and the oldest/newest
+linked-observation timestamps, with Unix and UTC ISO representations.
+
 ## Citation
 If you find the cross-session memory helpful, please citing the original [GUM paper](https://arxiv.org/abs/2505.10831):
 ```

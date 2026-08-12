@@ -423,6 +423,62 @@ class MemoryStore:
             ).fetchall()
         return [self._proposition(row) for row in rows]
 
+    def all_propositions(self) -> list[PropositionRecord]:
+        """Return every proposition in deterministic insertion order."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM propositions ORDER BY id").fetchall()
+        return [self._proposition(row) for row in rows]
+
+    def observations_for_proposition(
+        self,
+        proposition_id: int,
+        *,
+        newest_first: bool = True,
+        limit: int | None = None,
+    ) -> list[ObservationRecord]:
+        """Return observations linked to one proposition in timestamp order."""
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be non-negative")
+        direction = "DESC" if newest_first else "ASC"
+        sql = f"""SELECT o.* FROM observations o
+                  JOIN observation_proposition op ON op.observation_id=o.id
+                  WHERE op.proposition_id=?
+                  ORDER BY o.created_at {direction}, o.id {direction}"""
+        params: list[object] = [proposition_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._observation(row) for row in rows]
+
+    def storage_statistics(self) -> dict[str, int]:
+        """Return aggregate counts used by storage-style memory interfaces."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT
+                       (SELECT COUNT(*) FROM propositions) AS propositions,
+                       (SELECT COUNT(*) FROM observations) AS observations,
+                       (SELECT COUNT(*) FROM observation_proposition) AS links,
+                       (SELECT COUNT(*) FROM observations
+                        WHERE processed_at IS NULL) AS pending_observations,
+                       (SELECT COUNT(*) FROM observations o
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM observation_proposition op
+                            WHERE op.observation_id=o.id
+                        )) AS unlinked_observations"""
+            ).fetchone()
+        return {
+            "propositions": int(row["propositions"]),
+            "observations": int(row["observations"]),
+            "links": int(row["links"]),
+            "pending_observations": int(row["pending_observations"]),
+            "unlinked_observations": int(row["unlinked_observations"]),
+            "database_bytes": self.db_path.stat().st_size
+            if self.db_path.exists()
+            else 0,
+        }
+
     def search(
         self,
         query: str = "",
