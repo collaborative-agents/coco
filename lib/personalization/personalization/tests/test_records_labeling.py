@@ -83,6 +83,56 @@ def test_load_records_and_label_feedback(tmp_path):
     assert image_required[0].image_paths == [str(retained_image)]
 
 
+def test_latest_thumbs_rating_replaces_accidental_label(tmp_path):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "feedback.jsonl",
+        [
+            {
+                "ts": 1.0,
+                "session_id": "s1",
+                "kind": "thumbs_down",
+                "surface": "notification",
+                "observation_id": "obs-1",
+            },
+            {
+                "ts": 2.0,
+                "session_id": "s1",
+                "kind": "thumbs_up",
+                "surface": "history",
+                "observation_id": "obs-1",
+                "extra": {"replaces_kind": "thumbs_down"},
+            },
+            {
+                "ts": 3.0,
+                "session_id": "s1",
+                "kind": "thumbs_up",
+                "surface": "chat",
+                "message_id": "message-1",
+            },
+            {
+                "ts": 4.0,
+                "session_id": "s1",
+                "kind": "thumbs_down",
+                "surface": "chat",
+                "message_id": "message-1",
+                "extra": {"replaces_kind": "thumbs_up"},
+            },
+        ],
+    )
+
+    records = flatten_sessions(load_records(tmp_path))
+
+    assert [
+        (event.kind, event.observation_id, event.message_id)
+        for event in records.feedback
+    ] == [
+        ("thumbs_up", "obs-1", None),
+        ("thumbs_down", None, "message-1"),
+    ]
+
+
 def test_future_user_prompt_creates_positive_signal(tmp_path):
     session = tmp_path / "session_1"
     session.mkdir()

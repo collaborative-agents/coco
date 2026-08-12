@@ -121,19 +121,56 @@ def load_session_records(path: str | Path) -> SessionRecords:
         key=lambda r: r.ts,
     )
     _backfill_tutor_call_session_ids(observations, tutor_calls)
+    feedback = sorted(
+        _parse_rows(read_jsonl(base / "feedback.jsonl"), FeedbackEvent.from_dict),
+        key=lambda r: r.ts,
+    )
     return SessionRecords(
         path=str(base),
         observations=observations,
-        feedback=sorted(
-            _parse_rows(read_jsonl(base / "feedback.jsonl"), FeedbackEvent.from_dict),
-            key=lambda r: r.ts,
-        ),
+        feedback=_effective_feedback(feedback),
         tutor_calls=tutor_calls,
         decisions=sorted(
             _parse_rows(read_jsonl(base / "decisions.jsonl"), DecisionRecord.from_dict),
             key=lambda r: r.ts,
         ),
     )
+
+
+def _effective_feedback(events: list[FeedbackEvent]) -> list[FeedbackEvent]:
+    """Keep only the newest thumbs rating for each rated item.
+
+    Feedback storage remains append-only so corrections retain an audit trail.
+    Consumers should see the user's final label, however, rather than treating
+    an accidental click and its correction as two contradictory votes.
+    """
+    latest_rating_index: dict[tuple[str | None, str, str], int] = {}
+    for index, event in enumerate(events):
+        if event.kind not in {"thumbs_up", "thumbs_down"}:
+            continue
+        if event.observation_id:
+            target_type, target_id = "observation", event.observation_id
+        elif event.message_id:
+            target_type, target_id = "message", event.message_id
+        else:
+            continue
+        latest_rating_index[(event.session_id, target_type, target_id)] = index
+
+    effective: list[FeedbackEvent] = []
+    for index, event in enumerate(events):
+        if event.kind not in {"thumbs_up", "thumbs_down"}:
+            effective.append(event)
+            continue
+        if event.observation_id:
+            key = (event.session_id, "observation", event.observation_id)
+        elif event.message_id:
+            key = (event.session_id, "message", event.message_id)
+        else:
+            effective.append(event)
+            continue
+        if latest_rating_index[key] == index:
+            effective.append(event)
+    return effective
 
 
 def _backfill_tutor_call_session_ids(
