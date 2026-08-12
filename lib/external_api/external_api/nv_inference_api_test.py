@@ -181,6 +181,8 @@ def test_native_function_call_arguments_are_forwarded(monkeypatch):
 
     assert captured["tools"] == tools
     assert captured["tool_choice"] == "auto"
+    assert "temperature" not in captured
+    assert "top_p" not in captured
     assert output.tool_calls[0].function.name == "get_user_context"
 
 
