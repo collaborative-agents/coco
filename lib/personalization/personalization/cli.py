@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from memory.paths import default_memory_db_path
@@ -26,6 +27,7 @@ from personalization.lookahead import (
 from personalization.memory import (
     EvolveConfig,
     SelfEvolvingLearner,
+    select_evolution_moments,
 )
 from personalization.memory_store import MemoryStore, create_memory_draft
 from personalization.privacy import RetentionPolicy, prune_old_files
@@ -48,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
     label.add_argument("--records-root", required=True)
     label.add_argument("--out", required=True)
     label.add_argument("--min-abs-score", type=float, default=0.45)
+    label.add_argument(
+        "--last-days",
+        type=_positive_int,
+        help="include moments from only the last N rolling 24-hour periods",
+    )
     label.add_argument(
         "--include-unverified-no-support",
         action=argparse.BooleanOptionalAction,
@@ -268,6 +275,22 @@ def main(argv: list[str] | None = None) -> int:
     evolve.add_argument("--max-ops-per-batch", type=int, default=8)
     evolve.add_argument("--max-images", type=int, default=8)
     evolve.add_argument("--concurrency", type=int, default=8)
+    evolve.add_argument("--seed", type=int, default=42)
+    evolve.add_argument(
+        "--correct-sample-rate",
+        type=_unit_float,
+        default=0.5,
+        help=(
+            "fraction of originally correct examples to retain; errors, unknown "
+            "predictions, and adjacent correct anchors are always retained"
+        ),
+    )
+    evolve.add_argument(
+        "--shuffle",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="shuffle examples each epoch instead of preserving chronological order",
+    )
 
     args = parser.parse_args(argv)
     if args.cmd == "summary":
@@ -297,6 +320,20 @@ def _load_flat_records(records_root: str):
     return sessions, flatten_sessions(sessions)
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def _unit_float(value: str) -> float:
+    parsed = float(value)
+    if not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return parsed
+
+
 def _cmd_summary(args) -> int:
     sessions, records = _load_flat_records(args.records_root)
     signals = derive_short_window_signals(records)
@@ -321,6 +358,9 @@ def _cmd_label(args) -> int:
         unverified_no_support_confidence=args.unverified_no_support_confidence,
         require_saved_images=args.require_saved_images,
     )
+    if args.last_days is not None:
+        cutoff = time.time() - args.last_days * 24 * 60 * 60
+        labeled = [moment for moment in labeled if moment.ts >= cutoff]
     write_labeled_moments(args.out, labeled)
     print(f"wrote {len(labeled)} labeled moments to {args.out}", file=sys.stderr)
     return 0
@@ -501,11 +541,17 @@ def _cmd_self_evolve(args) -> int:
             "short_window_signals": len(signals),
             "labeled_moments": len(all_labeled),
         }
-    labeled = [
+    confidence_filtered = [
         moment
         for moment in all_labeled
         if moment.label_confidence >= args.min_confidence
     ]
+    selection = select_evolution_moments(
+        confidence_filtered,
+        correct_sample_rate=args.correct_sample_rate,
+        seed=args.seed,
+    )
+    labeled = selection.moments
     if not labeled:
         print("no labeled training moments to evolve from", file=sys.stderr)
         return 1
@@ -518,8 +564,20 @@ def _cmd_self_evolve(args) -> int:
                 },
                 "self_evolve_input_counts": {
                     **input_counts,
+                    "samples_after_confidence_filter": len(confidence_filtered),
+                    "original_disagreements_retained": selection.original_disagreements,
+                    "unknown_original_predictions_retained": (
+                        selection.unknown_original_predictions
+                    ),
+                    "correct_samples_available": selection.correct_available,
+                    "correct_samples_retained": selection.correct_retained,
+                    "adjacent_correct_anchors_retained": (
+                        selection.adjacent_correct_anchors
+                    ),
                     "samples_feeding_self_evolving_prompting": len(labeled),
                     "min_confidence": args.min_confidence,
+                    "correct_sample_rate": args.correct_sample_rate,
+                    "shuffle": args.shuffle,
                 },
             },
             indent=2,
@@ -541,6 +599,8 @@ def _cmd_self_evolve(args) -> int:
             max_ops_per_batch=args.max_ops_per_batch,
             max_images=args.max_images,
             concurrency=args.concurrency,
+            seed=args.seed,
+            shuffle=args.shuffle,
         ),
     )
     out_dir = Path(args.out_dir).expanduser()

@@ -15,8 +15,11 @@ coco-personalization label \
     --records-root ./records --out ./out/labeled_moments.jsonl
 ```
 
-A user prompt to Coco within 60 seconds after an observation contributes the
-positive `user_prompt_after` label signal.
+Use `--last-days 4` to export only moments from the last four rolling 24-hour
+periods while still retaining the complete record context during labeling.
+
+A user prompt to Coco within 60 seconds after a recorded no-support decision
+contributes the positive `user_prompt_after` label signal.
 
 The CLI also includes uncorrected observer no-support predictions as weak
 negative examples by default. They are marked with
@@ -147,6 +150,13 @@ additional fixed-memory generator pass used for the stopping decision.
 The prediction model runs the generator and utility evaluation. The evolution
 model runs reflection, curation, and final memory induction. Omit
 `--evolution-model` to use the prediction model for every role.
+
+Self-evolution preserves chronological source order by default. Pass `--shuffle`
+to randomize examples each epoch. To reduce generator calls, originally correct
+examples are deterministically downsampled to `--correct-sample-rate 0.5`;
+original disagreements, unparseable predictions, and correct examples adjacent
+to a disagreement in the same session are always retained. Set the rate to `1`
+to keep every example.
 
 The self-evolving loop consumes the `LabeledMoment` records produced from
 `signals/` by `label_records`. Its roles call `lib/external_api` directly, so

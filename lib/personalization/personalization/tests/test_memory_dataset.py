@@ -9,6 +9,7 @@ from personalization.memory import (
     SectionedMemory,
     SelfEvolvingLearner,
     UtilityStats,
+    select_evolution_moments,
 )
 from personalization.memory import evaluate as memory_evaluate
 from personalization.memory import evolve as memory_evolve
@@ -302,6 +303,69 @@ def test_cost_sensitive_utility_penalizes_false_alarms_and_invalid_outputs():
         "total": 5,
     }
     assert stats.utility(false_positive_cost=2.0, false_negative_cost=1.0) == -0.6
+
+
+def test_evolution_selection_keeps_errors_unknowns_and_adjacent_correct():
+    def moment(moment_id, need_support, original, *, session_id="s1"):
+        output = {} if original is None else {"need_support": original}
+        return LabeledMoment(
+            moment_id=moment_id,
+            observation_id=f"obs-{moment_id}",
+            session_id=session_id,
+            ts=0.0,
+            need_support=need_support,
+            label_confidence=1.0,
+            label_sources=["test"],
+            label_rationale="test",
+            observer_input="test",
+            observer_output=json.dumps(output),
+        )
+
+    selection = select_evolution_moments(
+        [
+            moment("correct-before", "no", "no"),
+            moment("error", "yes", "no"),
+            moment("correct-after", "yes", "yes"),
+            moment("correct-downsampled", "no", "no"),
+            moment("unknown", "yes", None),
+        ],
+        correct_sample_rate=0.0,
+    )
+
+    assert [item.moment_id for item in selection.moments] == [
+        "correct-before",
+        "error",
+        "correct-after",
+        "unknown",
+    ]
+    assert selection.original_disagreements == 1
+    assert selection.unknown_original_predictions == 1
+    assert selection.correct_available == 3
+    assert selection.correct_retained == 2
+    assert selection.adjacent_correct_anchors == 2
+
+
+def test_learner_preserves_source_order_by_default(monkeypatch):
+    batches = []
+
+    def fake_generate_batch(self, batch, memory_text):
+        batches.append(list(batch))
+        return [{"pred": "no", "gt": "no", "correct": True} for _ in batch]
+
+    monkeypatch.setattr(SelfEvolvingLearner, "_generate_batch", fake_generate_batch)
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_reflect_batch",
+        lambda self, results, memory_text: [],
+    )
+    learner = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=EvolveConfig(epochs=1, batch_size=2),
+    )
+
+    learner.learn(["first", "second", "third"], log=False)
+
+    assert batches == [["first", "second"], ["third"]]
 
 
 def test_learner_stops_when_target_utility_is_reached(monkeypatch):

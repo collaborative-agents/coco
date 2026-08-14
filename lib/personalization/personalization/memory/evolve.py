@@ -42,6 +42,7 @@ class EvolveConfig:
     role_max_tokens: int = 20480
     concurrency: int = 8
     seed: int = 42
+    shuffle: bool = False
 
     def __post_init__(self) -> None:
         if self.target_utility is not None and self.target_utility > 1.0:
@@ -213,7 +214,8 @@ class SelfEvolvingLearner:
         rng = random.Random(cfg.seed)
         for epoch in range(1, cfg.epochs + 1):
             order = list(range(len(moments)))
-            rng.shuffle(order)
+            if cfg.shuffle:
+                rng.shuffle(order)
             n_correct = n_seen = 0
             epoch_stats = UtilityStats()
             for start in range(0, len(order), cfg.batch_size):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from personalization.schemas import FeedbackEvent, ShortWindowSignal, stable_id
 
@@ -17,10 +18,9 @@ from personalization.schemas import FeedbackEvent, ShortWindowSignal, stable_id
 # this TTL.
 DEFAULT_SIGNAL_TTL_S = 30 * 60
 
-# Canonical interpretation of explicit UI feedback as short-window
-# personalization signals.
-#
-#   feedback kind -> (polarity, confidence, scope, fallback evidence)
+
+# Canonical interpretation of explicit UI feedback for both runtime prompt
+# signals and offline support labels.
 #
 # - ``polarity`` says whether this event argues that Coco should have helped
 #   here ("positive"), should have stayed quiet ("negative"), or should only be
@@ -35,28 +35,60 @@ DEFAULT_SIGNAL_TTL_S = 30 * 60
 #   guidance style.
 # - ``fallback evidence`` is human-readable text used when the event itself
 #   did not carry a richer observation or message body.
-FEEDBACK_SIGNAL_MAP: dict[str, tuple[str, float, str, str]] = {
-    "shown": ("neutral", 0.2, "observation", "suggestion shown"),
-    "engage": (
-        "positive",
-        1.0,
-        "observation",
-        "user accepted the proactive suggestion",
+# - ``label_weight`` controls this event's contribution to offline support-label
+#   resolution; zero retains provenance without changing the label.
+@dataclass(frozen=True, slots=True)
+class FeedbackPolicy:
+    polarity: str
+    confidence: float
+    scope: str
+    fallback_evidence: str
+    label_weight: float
+
+
+FEEDBACK_POLICIES: dict[str, FeedbackPolicy] = {
+    "shown": FeedbackPolicy(
+        polarity="neutral",
+        confidence=0.2,
+        scope="observation",
+        fallback_evidence="suggestion shown",
+        label_weight=0.0,
     ),
-    "dismiss": (
-        "negative",
-        1.0,
-        "task",
-        "user dismissed the proactive suggestion",
+    "engage": FeedbackPolicy(
+        polarity="positive",
+        confidence=1.0,
+        scope="observation",
+        fallback_evidence="user accepted the proactive suggestion",
+        label_weight=1.2,
     ),
-    "need_help": (
-        "positive",
-        1.0,
-        "observation",
-        "user asked for help despite a calm/non-actionable bubble",
+    "dismiss": FeedbackPolicy(
+        polarity="negative",
+        confidence=1.0,
+        scope="task",
+        fallback_evidence="user dismissed the proactive suggestion",
+        label_weight=1.2,
     ),
-    "thumbs_up": ("positive", 0.9, "session", "user rated the help positively"),
-    "thumbs_down": ("negative", 0.9, "session", "user rated the help negatively"),
+    "need_help": FeedbackPolicy(
+        polarity="positive",
+        confidence=1.0,
+        scope="observation",
+        fallback_evidence="user asked for help despite no suggestion",
+        label_weight=1.3,
+    ),
+    "thumbs_up": FeedbackPolicy(
+        polarity="positive",
+        confidence=0.9,
+        scope="session",
+        fallback_evidence="user rated the help positively",
+        label_weight=1.0,
+    ),
+    "thumbs_down": FeedbackPolicy(
+        polarity="negative",
+        confidence=0.9,
+        scope="session",
+        fallback_evidence="user rated the help negatively",
+        label_weight=1.0,
+    ),
 }
 
 
@@ -66,11 +98,10 @@ def feedback_to_short_window_signal(
     ttl_s: float = DEFAULT_SIGNAL_TTL_S,
 ) -> ShortWindowSignal | None:
     """Convert one explicit feedback event into a prompt-context signal."""
-    mapping = FEEDBACK_SIGNAL_MAP.get(event.kind)
-    if mapping is None:
+    policy = FEEDBACK_POLICIES.get(event.kind)
+    if policy is None:
         return None
-    polarity, confidence, scope, fallback_evidence = mapping
-    evidence = event.text or fallback_evidence
+    evidence = event.text or policy.fallback_evidence
     return ShortWindowSignal(
         signal_id=stable_id(
             "sig",
@@ -84,10 +115,10 @@ def feedback_to_short_window_signal(
         observation_id=event.observation_id,
         ts=event.ts,
         kind=event.kind,
-        polarity=polarity,
-        scope=scope,
+        polarity=policy.polarity,
+        scope=policy.scope,
         expires_at=event.ts + ttl_s,
-        confidence=confidence,
+        confidence=policy.confidence,
         evidence=evidence,
         source_record_ids=[
             rid for rid in (event.observation_id, event.message_id) if rid is not None

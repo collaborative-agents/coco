@@ -9,8 +9,13 @@ from personalization.labeling import (
 )
 from personalization.records import flatten_sessions, load_records
 from personalization.signals import derive_short_window_signals
-from personalization.signals.future_behavior import derive_future_behavior_signals
-from personalization.signals.user_feedback import feedback_to_short_window_signal
+from personalization.signals.missed_opportunities import (
+    derive_missed_opportunity_signals,
+)
+from personalization.signals.user_feedback import (
+    FEEDBACK_POLICIES,
+    feedback_to_short_window_signal,
+)
 
 
 def _append_jsonl(path, rows):
@@ -72,6 +77,9 @@ def test_load_records_and_label_feedback(tmp_path):
     signals = derive_short_window_signals(records)
     assert [(s.kind, s.polarity) for s in signals] == [("engage", "positive")]
     assert feedback_to_short_window_signal(records.feedback[0]).kind == "engage"
+    label_signals = label_signals_for_moment(moments[0], signals)
+    assert label_signals[0].weight == FEEDBACK_POLICIES["engage"].label_weight
+    assert label_signals[0].confidence == FEEDBACK_POLICIES["engage"].confidence
 
     labeled = label_records(records)
     assert len(labeled) == 1
@@ -133,7 +141,7 @@ def test_latest_thumbs_rating_replaces_accidental_label(tmp_path):
     ]
 
 
-def test_future_user_prompt_creates_positive_signal(tmp_path):
+def test_manual_user_prompt_creates_missed_opportunity_signal(tmp_path):
     session = tmp_path / "session_1"
     session.mkdir()
     _append_jsonl(
@@ -179,7 +187,7 @@ def test_future_user_prompt_creates_positive_signal(tmp_path):
     )
 
     records = flatten_sessions(load_records(tmp_path))
-    signals = derive_future_behavior_signals(records)
+    signals = derive_missed_opportunity_signals(records)
     assert any(
         s.observation_id == "obs-1" and s.kind == "user_prompt_after" for s in signals
     )
@@ -239,10 +247,10 @@ def test_legacy_null_session_user_prompt_uses_request_start_time(tmp_path):
     assert records.tutor_calls[0].event_ts == 21.0
     prompted_observations = {
         signal.observation_id
-        for signal in derive_future_behavior_signals(records)
+        for signal in derive_missed_opportunity_signals(records)
         if signal.kind == "user_prompt_after"
     }
-    assert prompted_observations == {"obs-before-prompt", "obs-user-prompt"}
+    assert prompted_observations == {"obs-before-prompt"}
 
     labels = label_records(records)
     assert {label.observation_id for label in labels} == prompted_observations
@@ -315,7 +323,7 @@ def test_user_prompt_after_default_window_is_one_minute(tmp_path):
                 "type": "snapshot",
                 "model": "fake",
                 "observer_input": "prompt",
-                "observer_output": "{}",
+                "observer_output": json.dumps({"need_support": "no"}),
             },
             {
                 "observation_id": "outside-boundary",
@@ -324,7 +332,7 @@ def test_user_prompt_after_default_window_is_one_minute(tmp_path):
                 "type": "snapshot",
                 "model": "fake",
                 "observer_input": "prompt",
-                "observer_output": "{}",
+                "observer_output": json.dumps({"need_support": "no"}),
             },
         ],
     )
@@ -346,7 +354,7 @@ def test_user_prompt_after_default_window_is_one_minute(tmp_path):
     records = flatten_sessions(load_records(tmp_path))
     prompted_observations = {
         signal.observation_id
-        for signal in derive_future_behavior_signals(records)
+        for signal in derive_missed_opportunity_signals(records)
         if signal.kind == "user_prompt_after"
     }
 
@@ -354,7 +362,7 @@ def test_user_prompt_after_default_window_is_one_minute(tmp_path):
     assert "outside-boundary" not in prompted_observations
 
 
-def test_search_and_ai_tool_behavior_do_not_create_labels(tmp_path):
+def test_search_and_ai_tool_behavior_is_ignored(tmp_path):
     session = tmp_path / "session_1"
     session.mkdir()
     _append_jsonl(
@@ -391,13 +399,92 @@ def test_search_and_ai_tool_behavior_do_not_create_labels(tmp_path):
     )
 
     records = flatten_sessions(load_records(tmp_path))
-    signals = derive_future_behavior_signals(records)
-    obs_1_kinds = {
-        signal.kind for signal in signals if signal.observation_id == "obs-1"
+    signals = derive_missed_opportunity_signals(records)
+    assert signals == []
+    assert label_records(records) == []
+
+
+def test_user_prompt_after_requires_recorded_no_support_decision(tmp_path):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": "observer-no-judge-yes",
+                "session_id": "s1",
+                "ts": 10.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": json.dumps({"need_support": "no"}),
+            },
+            {
+                "observation_id": "observer-yes-judge-no",
+                "session_id": "s1",
+                "ts": 11.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": json.dumps({"need_support": "yes"}),
+            },
+            {
+                "observation_id": "unknown-polarity",
+                "session_id": "s1",
+                "ts": 12.0,
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": "{}",
+            },
+        ],
+    )
+    _append_jsonl(
+        session / "decisions.jsonl",
+        [
+            {
+                "decision_id": "decision-yes",
+                "session_id": "s1",
+                "ts": 13.0,
+                "scenario": "everyday_support",
+                "phase": "nudge",
+                "should_intervene": True,
+                "observer": {"fresh_observation_id": "observer-no-judge-yes"},
+            },
+            {
+                "decision_id": "decision-no",
+                "session_id": "s1",
+                "ts": 14.0,
+                "scenario": "everyday_support",
+                "phase": "nudge",
+                "should_intervene": False,
+                "observer": {"fresh_observation_id": "observer-yes-judge-no"},
+            },
+        ],
+    )
+    _append_jsonl(
+        session / "tutor_calls.jsonl",
+        [
+            {
+                "ts": 20.0,
+                "session_id": "s1",
+                "trigger": "user_prompt",
+                "scenario": "everyday_support",
+                "model": "fake",
+                "tutor_input": "input",
+                "tutor_output": "output",
+            }
+        ],
+    )
+
+    records = flatten_sessions(load_records(tmp_path))
+    prompted_observations = {
+        signal.observation_id
+        for signal in derive_missed_opportunity_signals(records)
+        if signal.kind == "user_prompt_after"
     }
 
-    assert {"search_after", "ai_tool_after"} <= obs_1_kinds
-    assert label_records(records) == []
+    assert prompted_observations == {"observer-yes-judge-no"}
 
 
 def test_judge_and_observer_status_do_not_create_label_signals(tmp_path):

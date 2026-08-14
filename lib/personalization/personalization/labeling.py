@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
-import json
-import re
 from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 from external_api.llm import prompt_to_text
 from tqdm import tqdm
 
+from personalization.llm_io import parse_json_object
+from personalization.observer_output import (
+    observer_observation,
+    observer_status,
+    observer_user_intent,
+    original_need_support,
+)
 from personalization.schemas import (
     CandidateMoment,
     DecisionRecord,
-    JsonDict,
+    FeedbackEvent,
     LabeledMoment,
     LabelSignal,
     SessionRecords,
@@ -25,17 +29,8 @@ from personalization.schemas import (
     stable_id,
 )
 from personalization.signals import derive_short_window_signals
+from personalization.signals.user_feedback import FEEDBACK_POLICIES
 
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
-_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
-_ORIGINAL_SUPPORT_STATUSES = {
-    "stuck",
-    "mistake",
-    "inefficient",
-    "ai_struggle",
-    "discernment_opportunity",
-}
-_ORIGINAL_NO_SUPPORT_STATUSES = {"progress", "observing", "task_complete"}
 UNVERIFIED_NO_SUPPORT_SOURCE = "observer:no_support_unverified"
 
 _REVISION_SYSTEM_PROMPT = """\
@@ -63,67 +58,6 @@ replace necessary screenshot details with a vague summary. Preserve only details
 supported by the record, and avoid incidental or sensitive details that are not
 needed to understand the user's work.
 """
-
-
-def parse_json_object(text: str) -> JsonDict | None:
-    """Extract the first JSON object from model text."""
-    if not text:
-        return None
-    candidates: list[str] = []
-    fence = _JSON_FENCE_RE.search(text)
-    if fence:
-        candidates.append(fence.group(1))
-    brace = _JSON_OBJ_RE.search(text)
-    if brace:
-        candidates.append(brace.group(0))
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
-
-
-def observer_status(observer_output: str) -> str | None:
-    obj = parse_json_object(observer_output)
-    status = obj.get("status") if obj else None
-    return str(status) if status else None
-
-
-def observer_observation(observer_output: str) -> str:
-    obj = parse_json_object(observer_output)
-    if obj and obj.get("observation"):
-        return str(obj["observation"])
-    return observer_output.strip()
-
-
-def observer_user_intent(observer_output: str) -> str | None:
-    obj = parse_json_object(observer_output)
-    if obj and obj.get("user_intent"):
-        return str(obj["user_intent"])
-    return None
-
-
-def original_need_support(observer_output: str) -> str | None:
-    """Read the observer's original support polarity without using it as a label."""
-    obj = parse_json_object(observer_output)
-    if not obj:
-        return None
-
-    explicit = str(obj.get("need_support") or "").strip().lower()
-    if explicit in {"yes", "true"}:
-        return "yes"
-    if explicit in {"no", "false"}:
-        return "no"
-
-    status = str(obj.get("status") or "").strip().lower()
-    if status in _ORIGINAL_SUPPORT_STATUSES:
-        return "yes"
-    if status in _ORIGINAL_NO_SUPPORT_STATUSES:
-        return "no"
-    return None
 
 
 def build_candidate_moments(
@@ -230,43 +164,23 @@ def label_signals_for_moment(
             signals.append(label)
 
     for signal in short_window_signals:
-        if signal.observation_id == moment.observation_id and signal.kind not in {
-            # Explicit feedback is already represented above with the stronger,
-            # provenance-prefixed label mapping. Do not count it a second time.
-            "shown",
-            "engage",
-            "dismiss",
-            "need_help",
-            "thumbs_up",
-            "thumbs_down",
-            # These behavioral hints are retained for prompt personalization but
-            # are not considered reliable enough to supervise support labels.
-            "search_after",
-            "ai_tool_after",
-        }:
+        if (
+            signal.observation_id == moment.observation_id
+            and signal.kind not in FEEDBACK_POLICIES
+        ):
+            # Explicit feedback is already represented above with provenance.
             weight = _short_window_weight(signal.kind)
             signals.append(signal.to_label_signal(moment.moment_id, weight=weight))
 
     return signals
 
 
-def _feedback_label_signal(moment: CandidateMoment, event: Any) -> LabelSignal | None:
-    mapping = {
-        "engage": ("positive", 1.0, 1.2, "user accepted the proactive suggestion"),
-        "dismiss": ("negative", 1.0, 1.2, "user dismissed the suggestion"),
-        "need_help": (
-            "positive",
-            1.0,
-            1.3,
-            "user asked for help despite no suggestion",
-        ),
-        "thumbs_up": ("positive", 0.9, 1.0, "user rated the help positively"),
-        "thumbs_down": ("negative", 0.9, 1.0, "user rated the help negatively"),
-        "shown": ("neutral", 0.2, 0.0, "suggestion was shown"),
-    }
-    if event.kind not in mapping:
+def _feedback_label_signal(
+    moment: CandidateMoment, event: FeedbackEvent
+) -> LabelSignal | None:
+    policy = FEEDBACK_POLICIES.get(event.kind)
+    if policy is None:
         return None
-    polarity, confidence, weight, fallback = mapping[event.kind]
     return LabelSignal(
         signal_id=stable_id(
             "lsig", moment.moment_id, event.kind, event.ts, event.message_id
@@ -274,10 +188,10 @@ def _feedback_label_signal(moment: CandidateMoment, event: Any) -> LabelSignal |
         moment_id=moment.moment_id,
         ts=event.ts,
         source=f"feedback:{event.kind}",
-        polarity=polarity,
-        confidence=confidence,
-        weight=weight,
-        evidence=event.text or fallback,
+        polarity=policy.polarity,
+        confidence=policy.confidence,
+        weight=policy.label_weight,
+        evidence=event.text or policy.fallback_evidence,
         source_record_ids=[
             rid for rid in (event.observation_id, event.message_id) if rid
         ],
@@ -285,14 +199,7 @@ def _feedback_label_signal(moment: CandidateMoment, event: Any) -> LabelSignal |
 
 
 def _short_window_weight(kind: str) -> float:
-    return {
-        "engage": 1.0,
-        "dismiss": 1.0,
-        "need_help": 1.1,
-        "thumbs_up": 0.85,
-        "thumbs_down": 0.85,
-        "user_prompt_after": 0.7,
-    }.get(kind, 0.3)
+    return 0.7 if kind == "user_prompt_after" else 0.3
 
 
 def label_moment(

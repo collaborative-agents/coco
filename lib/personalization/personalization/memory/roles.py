@@ -10,12 +10,13 @@ Inference — compress detailed evolved rules into unified user insights.
 
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 
 from external_api.llm import chat_completion
 
+from personalization.llm_io import parse_json_object, response_text
+from personalization.media import image_data_url, sample_frames
 from personalization.memory.prompts import (
     CURATOR_SYSTEM,
     CURATOR_TEMPLATE,
@@ -27,7 +28,7 @@ from personalization.memory.prompts import (
     REFLECTOR_TEMPLATE,
 )
 from personalization.memory.state import InferredMemory, SectionedMemory
-from personalization.memory.utils import norm_need, parse_json_obj, sample_frames
+from personalization.observer_output import normalize_need_support
 from personalization.schemas import LabeledMoment
 
 
@@ -45,7 +46,7 @@ def generate(
     user_prompt = MEMORY_BLOCK.format(memory=memory_text) + moment.observer_input
     content: list[dict] = [{"type": "text", "text": user_prompt}]
     for p in _moment_image_paths(moment, image_root=image_root, max_images=max_images):
-        content.append({"type": "image_url", "image_url": {"url": _image_ref(p)}})
+        content.append({"type": "image_url", "image_url": {"url": image_data_url(p)}})
     messages = [
         {"role": "system", "content": GENERATOR_SYSTEM},
         {"role": "user", "content": content},
@@ -57,9 +58,9 @@ def generate(
         max_tokens=max_tokens,
         operation="self_evolving_memory.generate",
     )
-    parsed = parse_json_obj(text)
-    pred = norm_need(parsed.get("need_support")) if parsed else None
-    gt_need = norm_need(moment.need_support)
+    parsed = parse_json_object(text)
+    pred = normalize_need_support(parsed.get("need_support")) if parsed else None
+    gt_need = normalize_need_support(moment.need_support)
     return {
         "moment": moment,
         "raw": text,
@@ -101,7 +102,7 @@ def reflect(
         {"role": "system", "content": REFLECTOR_SYSTEM},
         {"role": "user", "content": prompt},
     ]
-    parsed = parse_json_obj(
+    parsed = parse_json_object(
         _complete_role(
             messages,
             model=model,
@@ -142,7 +143,7 @@ def curate(
         },
         {"role": "user", "content": prompt},
     ]
-    parsed = parse_json_obj(
+    parsed = parse_json_object(
         _complete_role(
             messages,
             model=model,
@@ -171,7 +172,7 @@ def infer_memory(
         },
         {"role": "user", "content": prompt},
     ]
-    parsed = parse_json_obj(
+    parsed = parse_json_object(
         _complete_role(
             messages,
             model=model,
@@ -203,13 +204,7 @@ def _complete_role(
         max_tokens=max_tokens,
         operation=operation,
     )
-    content = response.content
-    if isinstance(content, str):
-        return content
-    first = content[0] if content else None
-    if isinstance(first, str):
-        return first
-    return getattr(first, "text", "") if first is not None else ""
+    return response_text(response)
 
 
 def _moment_target_output(
@@ -217,7 +212,7 @@ def _moment_target_output(
     *,
     gt_need: str | None = None,
 ) -> dict:
-    need = gt_need or norm_need(moment.need_support) or "no"
+    need = gt_need or normalize_need_support(moment.need_support) or "no"
     if need == "no":
         return {
             "observation": moment.target_observation or "",
@@ -246,12 +241,3 @@ def _moment_image_paths(
     root = Path(image_root).expanduser() if image_root is not None else None
     frames = sample_frames(list(moment.image_paths), max_images)
     return [root / frame if root is not None else Path(frame) for frame in frames]
-
-
-def _image_ref(path: str | Path) -> str:
-    """Encode a local image as a data URL for the shared ``external_api`` path."""
-    p = Path(path).expanduser()
-    b64 = base64.b64encode(p.read_bytes()).decode()
-    suffix = p.suffix.lstrip(".").lower()
-    mime = "image/jpeg" if suffix in ("jpg", "jpeg") else f"image/{suffix or 'png'}"
-    return f"data:{mime};base64,{b64}"

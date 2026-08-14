@@ -9,9 +9,7 @@ past observation.
 
 from __future__ import annotations
 
-import base64
 import json
-import mimetypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,8 +20,9 @@ from memory.models import PropositionHit
 from memory.store import MemoryStore
 from tqdm import tqdm
 
-from personalization.labeling import observer_observation, observer_user_intent
-from personalization.memory.utils import parse_json_obj, sample_frames
+from personalization.llm_io import parse_json_object, response_text
+from personalization.media import image_data_url, sample_frames
+from personalization.observer_output import observer_observation, observer_user_intent
 from personalization.schemas import LabeledMoment, ObservationRecord, SessionRecords
 
 _TEACHER_SYSTEM = """\
@@ -309,11 +308,11 @@ def critique_task(
             max_tokens=max_tokens,
             operation="personalization.lookahead_observation_critique",
         )
-        raw = _response_text(response)
+        raw = response_text(response)
         raw_attempts.append(raw)
         metrics_attempts.append(dict(metrics))
         try:
-            parsed = parse_json_obj(raw)
+            parsed = parse_json_object(raw)
             critiques = _validated_critiques(
                 parsed,
                 task,
@@ -579,22 +578,10 @@ def _existing_frames(record: ObservationRecord, max_images: int) -> list[Path]:
 
 
 def _image_content(path: Path) -> dict[str, Any]:
-    mime = mimetypes.guess_type(path.name)[0] or "image/png"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return {
         "type": "image_url",
-        "image_url": {"url": f"data:{mime};base64,{encoded}"},
+        "image_url": {"url": image_data_url(path)},
     }
-
-
-def _response_text(response: Any) -> str:
-    content = response.content
-    if isinstance(content, str):
-        return content
-    first = content[0] if content else None
-    if isinstance(first, str):
-        return first
-    return str(getattr(first, "text", "") or "")
 
 
 def _as_bool(value: Any) -> bool:
