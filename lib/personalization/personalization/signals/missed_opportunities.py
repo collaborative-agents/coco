@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from personalization.observer_output import original_need_support
 from personalization.schemas import (
     DecisionRecord,
     ObservationRecord,
@@ -13,6 +12,7 @@ from personalization.schemas import (
     stable_id,
 )
 from personalization.signals.user_feedback import DEFAULT_SIGNAL_TTL_S
+from personalization.utils.observer_output import original_need_support
 
 MISSED_OPPORTUNITY_WINDOW_S = 60
 
@@ -35,30 +35,15 @@ def derive_missed_opportunity_signals(
     for call in records.tutor_calls:
         tutor_calls_by_session[call.session_id].append(call)
 
-    decisions_by_observation: dict[tuple[str | None, str], list[DecisionRecord]] = (
-        defaultdict(list)
-    )
-    for decision in records.decisions:
-        if decision.fresh_observation_id:
-            key = (decision.session_id, decision.fresh_observation_id)
-            decisions_by_observation[key].append(decision)
+    silent_observation_ids = no_suggestion_observation_ids(records)
 
     for session_id, observations in observations_by_session.items():
         calls = tutor_calls_by_session.get(session_id, [])
         for observation in observations:
-            if (
-                observation.type != "user_prompt"
-                and _no_suggestion_was_emitted(
-                    observation.observer_output,
-                    decisions_by_observation.get(
-                        (observation.session_id, observation.observation_id), []
-                    ),
-                )
-                and any(
-                    call.trigger == "user_prompt"
-                    and call.follows_observation(observation.ts, window_s=window_s)
-                    for call in calls
-                )
+            if observation.observation_id in silent_observation_ids and any(
+                call.trigger == "user_prompt"
+                and call.follows_observation(observation.ts, window_s=window_s)
+                for call in calls
             ):
                 out.append(
                     _missed_opportunity_signal(
@@ -68,6 +53,28 @@ def derive_missed_opportunity_signals(
                 )
 
     return out
+
+
+def no_suggestion_observation_ids(records: SessionRecords) -> set[str]:
+    """Return observation IDs whose final recorded intervention decision was no."""
+    decisions_by_observation: dict[tuple[str | None, str], list[DecisionRecord]] = (
+        defaultdict(list)
+    )
+    for decision in records.decisions:
+        if decision.fresh_observation_id:
+            key = (decision.session_id, decision.fresh_observation_id)
+            decisions_by_observation[key].append(decision)
+
+    output: set[str] = set()
+    for observation in records.observations:
+        if observation.type == "user_prompt":
+            continue
+        decisions = decisions_by_observation.get(
+            (observation.session_id, observation.observation_id), []
+        )
+        if _no_suggestion_was_emitted(observation.observer_output, decisions):
+            output.add(observation.observation_id)
+    return output
 
 
 def _no_suggestion_was_emitted(

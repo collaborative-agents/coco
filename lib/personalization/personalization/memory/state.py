@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from personalization.memory.prompts import SECTION_TITLES, SECTIONS
 from personalization.schemas import JsonDict, LearnedPreference, stable_id
@@ -211,21 +210,6 @@ class SectionedMemory:
             del self.bullets[bullet.id]
         return n_drop
 
-    def mark_stale(
-        self,
-        *,
-        harmful_margin: int = 2,
-        min_harmful: int = 2,
-    ) -> list[str]:
-        stale: list[str] = []
-        for bullet in self.bullets.values():
-            if (
-                bullet.harmful >= min_harmful
-                and bullet.harmful - bullet.helpful >= harmful_margin
-            ):
-                stale.append(bullet.id)
-        return stale
-
     def render(self, *, with_ids: bool = True) -> str:
         if self.inferred is not None:
             return self._render_inferred(with_ids=with_ids)
@@ -423,11 +407,3 @@ def _confidence_from_votes(helpful: int, harmful: int) -> float:
     if total == 0:
         return 0.5
     return round(max(0.05, min(0.95, helpful / total)), 4)
-
-
-def ops_from_json(value: Any) -> list[MemoryOp]:
-    """Parse curator output shaped as ``{"ops": [...]}`` or ``[...]``."""
-    items = value.get("ops") if isinstance(value, dict) else value
-    if not isinstance(items, list):
-        return []
-    return [MemoryOp.from_dict(item) for item in items if isinstance(item, dict)]

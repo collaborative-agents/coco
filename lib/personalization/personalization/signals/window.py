@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import time
-from collections.abc import Iterable
-
 from personalization.schemas import SessionRecords, ShortWindowSignal
 from personalization.signals.missed_opportunities import (
     MISSED_OPPORTUNITY_WINDOW_S,
@@ -33,13 +30,3 @@ def derive_short_window_signals(
         )
     )
     return sorted(signals, key=lambda s: s.ts)
-
-
-def active_signals(
-    signals: Iterable[ShortWindowSignal],
-    *,
-    now: float | None = None,
-) -> list[ShortWindowSignal]:
-    """Return signals whose TTL has not expired."""
-    ts = time.time() if now is None else now
-    return [signal for signal in signals if signal.expires_at > ts]

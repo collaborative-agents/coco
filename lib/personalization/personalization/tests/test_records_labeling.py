@@ -1,5 +1,6 @@
 import json
 
+import personalization.signals.retrospective as retrospective
 import pytest
 from personalization.labeling import (
     build_candidate_moments,
@@ -402,6 +403,486 @@ def test_search_and_ai_tool_behavior_is_ignored(tmp_path):
     signals = derive_missed_opportunity_signals(records)
     assert signals == []
     assert label_records(records) == []
+
+
+def test_large_context_retrospective_discovers_and_grounds_workflow(
+    tmp_path, monkeypatch
+):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": f"obs-{index}",
+                "session_id": "s1",
+                "ts": float(index * 180),
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": f"attempt {index}",
+                "observer_output": json.dumps(
+                    {
+                        "need_support": "no",
+                        "observation": f"The same command failed on attempt {index}.",
+                    }
+                ),
+            }
+            for index in range(1, 5)
+        ],
+    )
+    records = flatten_sessions(load_records(tmp_path))
+
+    opportunity = {
+        "category": "stuck",
+        "workflow_pattern": "Repeated manual run-debug-relaunch cycles.",
+        "evidence_observation_ids": ["obs-2", "obs-3", "obs-4"],
+        "evidence_summary": "Three observations show the workflow continuing.",
+        "when_to_offer": "If the user starts another manual experiment cycle.",
+        "support_strategy": "Offer an agent to run and monitor the experiments.",
+        "why_high_value": "It saves repeated launch and monitoring work.",
+        "why_not_incident_specific": "It applies to future experiment cycles.",
+    }
+    curated = {
+        "opportunity_id": "chunk-1-opportunity-0",
+        "accepted": True,
+        "decision_rationale": "The repeated workflow is supported and actionable.",
+        "workflow_level_opportunity": True,
+        "incident_specific": False,
+        "category": "stuck",
+        "confidence": 0.9,
+        **{
+            key: opportunity[key]
+            for key in (
+                "workflow_pattern",
+                "evidence_observation_ids",
+                "evidence_summary",
+                "when_to_offer",
+                "support_strategy",
+                "why_high_value",
+            )
+        },
+    }
+
+    calls = []
+    discovered_opportunities = [opportunity]
+    curation_decisions = [curated]
+    trigger_decisions = [
+        {
+            "opportunity_id": "chunk-1-opportunity-0",
+            "accepted": True,
+            "decision_rationale": "The need was inferable before later evidence.",
+            "trigger_observation_id": "obs-1",
+            "rationale": (
+                "Repeated failures indicate that proactive workflow support "
+                "would prevent another manual debug-and-relaunch cycle."
+            ),
+            "confidence": 0.85,
+        }
+    ]
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        if kwargs["system_prompt"] == retrospective.DISCOVERY_SYSTEM_PROMPT:
+            return json.dumps({"support_opportunities": discovered_opportunities})
+        if (
+            kwargs["system_prompt"]
+            == retrospective._EVIDENCE_VERIFICATION_SYSTEM_PROMPT
+        ):
+            return json.dumps({"opportunity_decisions": curation_decisions})
+        return json.dumps({"trigger_decisions": trigger_decisions})
+
+    monkeypatch.setattr(
+        retrospective,
+        "_complete",
+        fake_completion,
+    )
+
+    trace_out = tmp_path / "retrospective_trace.jsonl"
+    signals = retrospective.derive_retrospective_signals(
+        records,
+        model="fake/model",
+        max_observations=4,
+        trace_out=trace_out,
+    )
+
+    assert len(calls) == 3
+    assert len(signals) == 1
+    assert signals[0].observation_id == "obs-1"
+    assert signals[0].kind == "retrospective:stuck"
+    labels = label_records(records, additional_signals=signals)
+    assert len(labels) == 1
+    assert labels[0].need_support == "yes"
+    assert labels[0].label_sources == ["retrospective:stuck"]
+    assert labels[0].target_user_intent is None
+    assert labels[0].label_rationale == (
+        "Repeated failures indicate that proactive workflow support would "
+        "prevent another manual debug-and-relaunch cycle."
+    )
+    trace = json.loads(trace_out.read_text())
+    assert trace["strategy"] == "large_context_chunks"
+    assert trace["status"] == "complete"
+    assert trace["provided_observation_count"] == 4
+    assert trace["parsed_output"]["support_opportunities"][0]["category"] == "stuck"
+    assert trace["accepted_signals"][0]["kind"] == "retrospective:stuck"
+    assert trace["curation_reviews"][0]["decision_rationale"]
+    assert trace["trigger_reviews"][0]["decision_rationale"]
+    discovery_input = json.loads(calls[0]["user_prompt"])
+    assert all(
+        "candidate_no_intervention" not in row for row in discovery_input["timeline"]
+    )
+    verification_input = json.loads(calls[1]["user_prompt"])
+    assert (
+        len(verification_input["proposed_opportunities"][0]["evidence_observations"])
+        == 3
+    )
+    assert all(
+        "candidate_no_intervention" not in row
+        for row in verification_input["proposed_opportunities"][0][
+            "evidence_observations"
+        ]
+    )
+    trigger_input = json.loads(calls[2]["user_prompt"])
+    assert len(trigger_input["timeline"]) == 4
+    assert all("candidate_no_intervention" in row for row in trigger_input["timeline"])
+    assert trigger_input["verified_opportunities"][0]["evidence_observation_ids"] == [
+        "obs-2",
+        "obs-3",
+        "obs-4",
+    ]
+
+    revised_rationale = trigger_decisions[0].pop("rationale")
+    assert (
+        retrospective.derive_retrospective_signals(
+            records,
+            model="fake/model",
+            max_observations=4,
+        )
+        == []
+    )
+    trigger_decisions[0]["rationale"] = revised_rationale
+
+    second_opportunity = {
+        **opportunity,
+        "workflow_pattern": "Repeated manual result-copying cycles.",
+    }
+    discovered_opportunities.append(second_opportunity)
+    curation_decisions.append(
+        {
+            "opportunity_id": "chunk-1-opportunity-1",
+            "accepted": False,
+            "decision_rationale": (
+                "The observations are adjacent and do not establish recurrence."
+            ),
+        }
+    )
+    signals = retrospective.derive_retrospective_signals(
+        records,
+        model="fake/model",
+        max_observations=4,
+        trace_out=trace_out,
+    )
+    assert len(signals) == 1
+    trace = json.loads(trace_out.read_text())
+    rejected = trace["curation_reviews"][1]
+    assert rejected["accepted"] is False
+    assert "do not establish recurrence" in rejected["decision_rationale"]
+
+    curation_decisions.pop()
+    assert (
+        retrospective.derive_retrospective_signals(
+            records,
+            model="fake/model",
+            max_observations=4,
+            trace_out=trace_out,
+        )
+        == []
+    )
+    trace = json.loads(trace_out.read_text())
+    omitted = next(
+        review
+        for review in trace["curation_reviews"]
+        if review["opportunity_id"] == "chunk-1-opportunity-1"
+    )
+    assert omitted["reasons"] == ["evidence verification omitted this opportunity"]
+    discovered_opportunities.pop()
+
+    curated["incident_specific"] = True
+    assert (
+        retrospective.derive_retrospective_signals(
+            records,
+            model="fake/model",
+            max_observations=4,
+        )
+        == []
+    )
+
+    curated["incident_specific"] = False
+    curated["evidence_observation_ids"] = ["obs-2", "obs-3"]
+    assert (
+        retrospective.derive_retrospective_signals(
+            records,
+            model="fake/model",
+            max_observations=4,
+        )
+        == []
+    )
+
+    curated["evidence_observation_ids"] = ["obs-2", "obs-3", "obs-4"]
+    curated["category"] = "anticipate_need"
+    signals = retrospective.derive_retrospective_signals(
+        records,
+        model="fake/model",
+        max_observations=4,
+    )
+    assert len(signals) == 1
+    assert signals[0].kind == "retrospective:anticipate_need"
+
+
+def test_large_context_retrospective_combines_recording_sessions(tmp_path, monkeypatch):
+    for index in range(3):
+        session = tmp_path / f"session_{index}"
+        session.mkdir()
+        _append_jsonl(
+            session / "observations.jsonl",
+            [
+                {
+                    "observation_id": f"obs-{index}",
+                    "session_id": None,
+                    "ts": float(index),
+                    "type": "snapshot",
+                    "model": "fake",
+                    "observer_input": "attempt",
+                    "observer_output": json.dumps({"need_support": "no"}),
+                }
+            ],
+        )
+
+    prompts = []
+
+    def fake_completion(**kwargs):
+        prompts.append(json.loads(kwargs["user_prompt"]))
+        return json.dumps({"support_opportunities": []})
+
+    monkeypatch.setattr(retrospective, "_complete", fake_completion)
+
+    assert (
+        retrospective.derive_retrospective_signals(
+            load_records(tmp_path),
+            model="fake/model",
+        )
+        == []
+    )
+    assert len(prompts) == 1
+    assert len(prompts[0]["timeline"]) == 3
+
+
+def test_retrospective_max_observations_chunks_without_downsampling(
+    tmp_path, monkeypatch
+):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": f"obs-{index}",
+                "session_id": "s1",
+                "ts": float(index),
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": json.dumps({"need_support": "no"}),
+            }
+            for index in range(7)
+        ],
+    )
+    prompts = []
+
+    def fake_completion(**kwargs):
+        prompts.append(json.loads(kwargs["user_prompt"]))
+        return json.dumps({"support_opportunities": []})
+
+    monkeypatch.setattr(retrospective, "_complete", fake_completion)
+    trace_out = tmp_path / "retrospective_chunks.jsonl"
+    signals = retrospective.derive_retrospective_signals(
+        load_records(tmp_path),
+        model="fake/model",
+        max_observations=3,
+        trace_out=trace_out,
+    )
+
+    assert signals == []
+    assert [len(prompt["timeline"]) for prompt in prompts] == [3, 3, 3]
+    processed_ids = {
+        row["observation_id"] for prompt in prompts for row in prompt["timeline"]
+    }
+    assert processed_ids == {f"obs-{index}" for index in range(7)}
+    assert all(prompt["chunk_count"] == 3 for prompt in prompts)
+    trace_rows = [json.loads(line) for line in trace_out.read_text().splitlines()]
+    assert [row["chunk_index"] for row in trace_rows] == [1, 2, 3]
+
+
+def test_trigger_grounding_uses_evidence_from_all_chunks(tmp_path, monkeypatch):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": f"obs-{index}",
+                "session_id": "s1",
+                "ts": float(index * 180),
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": json.dumps({"need_support": "no"}),
+            }
+            for index in range(6)
+        ],
+    )
+    opportunity = {
+        "category": "anticipate_need",
+        "workflow_pattern": "Research followed by manual AI synthesis.",
+        "evidence_observation_ids": ["obs-3", "obs-4", "obs-5"],
+        "evidence_summary": "Later observations establish the synthesis need.",
+        "when_to_offer": "If research begins, offer structured synthesis.",
+        "support_strategy": "Collaborative synthesis.",
+        "why_high_value": "It avoids repeated manual transfer and prompting.",
+        "why_not_incident_specific": "The pattern applies across projects.",
+    }
+    verified = {
+        **opportunity,
+        "opportunity_id": "chunk-2-opportunity-0",
+        "accepted": True,
+        "decision_rationale": "The later evidence establishes a reusable need.",
+        "workflow_level_opportunity": True,
+        "incident_specific": False,
+        "confidence": 0.9,
+    }
+    trigger_inputs = []
+
+    def fake_completion(**kwargs):
+        payload = json.loads(kwargs["user_prompt"])
+        if kwargs["system_prompt"] == retrospective.DISCOVERY_SYSTEM_PROMPT:
+            opportunities = [opportunity] if payload["chunk_index"] == 2 else []
+            return json.dumps({"support_opportunities": opportunities})
+        if (
+            kwargs["system_prompt"]
+            == retrospective._EVIDENCE_VERIFICATION_SYSTEM_PROMPT
+        ):
+            return json.dumps({"opportunity_decisions": [verified]})
+        trigger_inputs.append(payload)
+        first_id = payload["timeline"][0]["observation_id"]
+        if first_id == "obs-0":
+            decision = {
+                "opportunity_id": "chunk-2-opportunity-0",
+                "accepted": True,
+                "decision_rationale": "The need was inferable in this chunk.",
+                "trigger_observation_id": "obs-0",
+                "rationale": (
+                    "The research workflow is beginning and later evidence "
+                    "shows that proactive synthesis would save manual effort."
+                ),
+                "confidence": 0.85,
+            }
+        else:
+            decision = {
+                "opportunity_id": "chunk-2-opportunity-0",
+                "accepted": False,
+                "decision_rationale": "No earlier trigger exists in this chunk.",
+            }
+        return json.dumps({"trigger_decisions": [decision]})
+
+    monkeypatch.setattr(retrospective, "_complete", fake_completion)
+    trace_out = tmp_path / "cross_chunk_trace.jsonl"
+    signals = retrospective.derive_retrospective_signals(
+        load_records(tmp_path),
+        model="fake/model",
+        max_observations=3,
+        trigger_max_observations=2,
+        trace_out=trace_out,
+    )
+
+    assert [signal.observation_id for signal in signals] == ["obs-0"]
+    assert len(trigger_inputs) == 3
+    assert [len(payload["timeline"]) for payload in trigger_inputs] == [2, 2, 2]
+    assert all(
+        "all_evidence_observations" not in payload
+        and payload["verified_opportunities"][0]["evidence_observation_ids"]
+        == ["obs-3", "obs-4", "obs-5"]
+        and {
+            row["observation_id"]
+            for row in payload["verified_opportunities"][0][
+                "evidence_observation_timestamps"
+            ]
+        }
+        == {"obs-3", "obs-4", "obs-5"}
+        for payload in trigger_inputs
+    )
+    trace_rows = [json.loads(line) for line in trace_out.read_text().splitlines()]
+    assert trace_rows[0]["accepted_signals"][0]["observation_id"] == "obs-0"
+    assert trace_rows[1]["trigger_reviews"][0]["accepted"] is False
+
+
+def test_retrospective_resolves_only_unambiguous_observation_id_prefixes():
+    valid_ids = {
+        "7184d9bd738a42719340606704f2d70a",
+        "7184d9be111111111111111111111111",
+    }
+
+    assert (
+        retrospective._resolve_observation_id("7184d9bd", valid_ids)
+        == "7184d9bd738a42719340606704f2d70a"
+    )
+    assert retrospective._resolve_observation_id("7184d9b", valid_ids) is None
+    assert retrospective._resolve_observation_id("missing0", valid_ids) is None
+
+
+def test_retrospective_prompts_treat_later_manual_ai_use_as_need_evidence():
+    discovery = " ".join(retrospective.DISCOVERY_SYSTEM_PROMPT.split())
+    verification = " ".join(retrospective._EVIDENCE_VERIFICATION_SYSTEM_PROMPT.split())
+    grounding = " ".join(retrospective._TRIGGER_GROUNDING_SYSTEM_PROMPT.split())
+
+    assert "positive evidence" in discovery
+    assert "before the later behavior" in discovery
+    assert "Do not treat every AI-tool use" in discovery
+    assert "CONFIRM that support was needed" in verification
+    assert "positive evidence of an earlier need" in grounding
+    assert "already active at the proposed trigger" in grounding
+    assert "cannot veto their own correction" in grounding
+
+
+def test_retrospective_retries_empty_and_unparseable_model_responses(monkeypatch):
+    responses = iter(
+        [
+            "",
+            "I cannot produce the requested response.",
+            json.dumps({"support_opportunities": []}),
+        ]
+    )
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    monkeypatch.setattr(retrospective, "_complete", fake_completion)
+    raw, parsed, attempts = retrospective._complete_json(
+        model="fake/model",
+        system_prompt="discover",
+        user_prompt="timeline",
+        operation="test",
+        required_list_field="support_opportunities",
+    )
+
+    assert raw == '{"support_opportunities": []}'
+    assert parsed == {"support_opportunities": []}
+    assert [attempt["valid"] for attempt in attempts] == [False, False, True]
+    assert attempts[0]["failure"] == "empty response"
+    assert "parseable JSON" in attempts[1]["failure"]
+    assert len(calls) == 3
+    assert "RETRY REQUIREMENT" not in calls[0]["user_prompt"]
+    assert "RETRY REQUIREMENT" in calls[1]["user_prompt"]
 
 
 def test_user_prompt_after_requires_recorded_no_support_decision(tmp_path):

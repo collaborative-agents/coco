@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from personalization.schemas import (
     DecisionRecord,
@@ -255,12 +255,6 @@ def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
 def load_records(root: str | Path) -> list[SessionRecords]:
     """Discover and load all session records under ``root``."""
     return [load_session_records(path) for path in discover_session_dirs(root)]
-
-
-def write_json(path: str | Path, data: Any) -> None:
-    p = Path(path).expanduser()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, default=str) + "\n", encoding="utf-8")
 
 
 def write_jsonl(path: str | Path, rows: Iterable[JsonDict]) -> None:

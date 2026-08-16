@@ -13,12 +13,15 @@ the ACE (https://arxiv.org/abs/2510.04618), ACON (https://arxiv.org/abs/2510.006
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from personalization.memory.roles import curate, generate, infer_memory, reflect
 from personalization.memory.state import SectionedMemory
@@ -111,6 +114,22 @@ class UtilityStats:
             "total": self.total,
         }
 
+    @classmethod
+    def from_json(cls, value: Any) -> UtilityStats:
+        data = value if isinstance(value, dict) else {}
+        return cls(
+            **{
+                field: int(data.get(field, 0) or 0)
+                for field in (
+                    "true_positive",
+                    "true_negative",
+                    "false_positive",
+                    "false_negative",
+                    "invalid",
+                )
+            }
+        )
+
 
 class SelfEvolvingLearner:
     """Evolve memory with independently configurable prediction/evolution models."""
@@ -200,27 +219,127 @@ class SelfEvolvingLearner:
         *,
         out_dir: str | Path | None = None,
         log: bool = True,
+        resume: bool = False,
     ) -> SectionedMemory:
         cfg = self.cfg
         out = Path(out_dir).expanduser() if out_dir else None
+        if resume and out is None:
+            raise ValueError("resume requires out_dir")
         if out is not None:
             out.mkdir(parents=True, exist_ok=True)
         state_path = out / "memory_state.json" if out else None
         md_path = out / "memory.md" if out else None
-        log_fh = (out / "progress.jsonl").open("a") if out else None
+        progress_path = out / "progress.jsonl" if out else None
+        resume_path = out / "resume_state.json" if out else None
+        signature = _run_signature(self, moments)
+
+        checkpoint = (
+            _load_resume_checkpoint(
+                resume_path=resume_path,
+                state_path=state_path,
+                progress_path=progress_path,
+                signature=signature,
+                cfg=cfg,
+            )
+            if resume
+            else None
+        )
+        if checkpoint is not None:
+            self.memory = SectionedMemory.from_json(checkpoint["memory"])
+            self.epochs_completed = int(checkpoint.get("epochs_completed", 0))
+            self.last_utility = checkpoint.get("last_utility")
+            self.target_reached = bool(checkpoint.get("target_reached", False))
+            if checkpoint.get("status") == "complete":
+                if log:
+                    print(
+                        "self-evolve checkpoint is already complete; nothing to resume",
+                        file=sys.stderr,
+                    )
+                return self.memory
+            start_epoch = int(checkpoint.get("next_epoch", 1))
+            start_batch = int(checkpoint.get("next_batch", 1))
+            restored_stats = UtilityStats.from_json(checkpoint.get("epoch_stats"))
+            restored_seen = int(checkpoint.get("n_seen", restored_stats.total))
+            restored_correct = int(
+                checkpoint.get(
+                    "n_correct",
+                    restored_stats.true_positive + restored_stats.true_negative,
+                )
+            )
+            finalizing = checkpoint.get("status") == "finalizing"
+            if log:
+                print(
+                    f"resuming self-evolve at epoch {start_epoch}, batch {start_batch}",
+                    file=sys.stderr,
+                )
+        else:
+            start_epoch = 1
+            start_batch = 1
+            restored_stats = UtilityStats()
+            restored_seen = restored_correct = 0
+            finalizing = False
+            if resume_path is not None and resume_path.exists():
+                resume_path.unlink()
+
+        log_fh = progress_path.open("a" if resume else "w") if progress_path else None
+
+        def checkpoint_run(
+            *,
+            status: str,
+            next_epoch: int,
+            next_batch: int,
+            epoch_stats: UtilityStats,
+            n_seen: int,
+            n_correct: int,
+        ) -> None:
+            if state_path is None or md_path is None or resume_path is None:
+                return
+            _atomic_write_json(state_path, self.memory.to_json())
+            _atomic_write_text(
+                md_path,
+                self.memory.render_evolved(with_ids=False) + "\n",
+            )
+            _atomic_write_json(
+                resume_path,
+                {
+                    "version": 1,
+                    "status": status,
+                    "signature": signature,
+                    "next_epoch": next_epoch,
+                    "next_batch": next_batch,
+                    "epoch_stats": epoch_stats.to_json(),
+                    "n_seen": n_seen,
+                    "n_correct": n_correct,
+                    "epochs_completed": self.epochs_completed,
+                    "last_utility": self.last_utility,
+                    "target_reached": self.target_reached,
+                    "memory": self.memory.to_json(),
+                },
+            )
 
         # Any prior inference is stale as soon as detailed evolution resumes.
         self.memory.inferred = None
         rng = random.Random(cfg.seed)
-        for epoch in range(1, cfg.epochs + 1):
+        for _prior_epoch in range(1, start_epoch):
+            prior_order = list(range(len(moments)))
+            if cfg.shuffle:
+                rng.shuffle(prior_order)
+        epoch_range = range(start_epoch, cfg.epochs + 1) if not finalizing else range(0)
+        for epoch in epoch_range:
             order = list(range(len(moments)))
             if cfg.shuffle:
                 rng.shuffle(order)
-            n_correct = n_seen = 0
-            epoch_stats = UtilityStats()
+            resuming_epoch = checkpoint is not None and epoch == start_epoch
+            n_correct = restored_correct if resuming_epoch else 0
+            n_seen = restored_seen if resuming_epoch else 0
+            epoch_stats = restored_stats if resuming_epoch else UtilityStats()
             for start in range(0, len(order), cfg.batch_size):
+                batch_no = start // cfg.batch_size + 1
+                if resuming_epoch and batch_no < start_batch:
+                    continue
                 batch = [moments[i] for i in order[start : start + cfg.batch_size]]
                 memory_text = self.memory.render_evolved(with_ids=True)
+                batch_started = time.perf_counter()
 
                 results = self._generate_batch(batch, memory_text)
                 batch_stats = UtilityStats()
@@ -252,8 +371,8 @@ class SelfEvolvingLearner:
                     else 0
                 )
                 n_dropped = self.memory.refine(max_bullets=cfg.max_bullets)
+                batch_duration_s = round(time.perf_counter() - batch_started, 2)
 
-                batch_no = start // cfg.batch_size + 1
                 rec = {
                     "epoch": epoch,
                     "batch": batch_no,
@@ -275,7 +394,16 @@ class SelfEvolvingLearner:
                     "ops_applied": n_applied,
                     "bullets_dropped": n_dropped,
                     "n_bullets": len(self.memory.bullets),
+                    "batch_duration_s": batch_duration_s,
                 }
+                checkpoint_run(
+                    status="running",
+                    next_epoch=epoch,
+                    next_batch=batch_no + 1,
+                    epoch_stats=epoch_stats,
+                    n_seen=n_seen,
+                    n_correct=n_correct,
+                )
                 if log_fh:
                     log_fh.write(json.dumps(rec) + "\n")
                     log_fh.flush()
@@ -284,16 +412,10 @@ class SelfEvolvingLearner:
                         f"[epoch {epoch} batch {batch_no}] acc={rec['batch_acc']:.2f} "
                         f"utility={rec['batch_utility']:.2f} "
                         f"(running {rec['running_utility']:.2f}) wrong={len(wrong)} "
-                        f"ops={n_applied} bullets={len(self.memory.bullets)}",
+                        f"ops={n_applied} bullets={len(self.memory.bullets)} "
+                        f"time={batch_duration_s:.2f}s",
                         file=sys.stderr,
                     )
-                # Checkpoint after every batch so a crash/preemption loses nothing.
-                if state_path:
-                    state_path.write_text(json.dumps(self.memory.to_json(), indent=2))
-                    md_path.write_text(
-                        self.memory.render_evolved(with_ids=False) + "\n"
-                    )
-
             self.epochs_completed = epoch
             online_utility = epoch_stats.utility(
                 false_positive_cost=cfg.false_positive_cost,
@@ -325,6 +447,15 @@ class SelfEvolvingLearner:
             if log_fh:
                 log_fh.write(json.dumps(epoch_rec) + "\n")
                 log_fh.flush()
+            is_final_epoch = epoch >= cfg.epochs or self.target_reached
+            checkpoint_run(
+                status="finalizing" if is_final_epoch else "running",
+                next_epoch=epoch + 1,
+                next_batch=1,
+                epoch_stats=UtilityStats(),
+                n_seen=0,
+                n_correct=0,
+            )
             if log:
                 print(
                     f"=== epoch {epoch} done: train acc {n_correct / max(n_seen, 1):.4f}, "
@@ -355,10 +486,176 @@ class SelfEvolvingLearner:
                     file=sys.stderr,
                 )
 
-        if state_path:
-            state_path.write_text(json.dumps(self.memory.to_json(), indent=2))
-            md_path.write_text(self.memory.render(with_ids=False) + "\n")
+        if state_path and md_path and resume_path:
+            _atomic_write_json(state_path, self.memory.to_json())
+            _atomic_write_text(md_path, self.memory.render(with_ids=False) + "\n")
+            _atomic_write_json(
+                resume_path,
+                {
+                    "version": 1,
+                    "status": "complete",
+                    "signature": signature,
+                    "next_epoch": self.epochs_completed + 1,
+                    "next_batch": 1,
+                    "epoch_stats": UtilityStats().to_json(),
+                    "n_seen": 0,
+                    "n_correct": 0,
+                    "epochs_completed": self.epochs_completed,
+                    "last_utility": self.last_utility,
+                    "target_reached": self.target_reached,
+                    "memory": self.memory.to_json(),
+                },
+            )
 
         if log_fh:
             log_fh.close()
         return self.memory
+
+
+def _run_signature(
+    learner: SelfEvolvingLearner,
+    moments: list[LabeledMoment],
+) -> dict[str, str]:
+    moment_rows = [
+        moment.to_dict() if hasattr(moment, "to_dict") else repr(moment)
+        for moment in moments
+    ]
+    dataset_json = json.dumps(
+        moment_rows,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    config = asdict(learner.cfg)
+    # Concurrency affects throughput, not learning semantics, and is commonly
+    # lowered after an overloaded endpoint causes the interrupted run.
+    config.pop("concurrency", None)
+    configuration_json = json.dumps(
+        {
+            "prediction_model": learner.prediction_model,
+            "evolution_model": learner.evolution_model,
+            "image_root": str(learner.image_root) if learner.image_root else None,
+            "config": config,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "dataset_sha256": hashlib.sha256(dataset_json.encode()).hexdigest(),
+        "configuration_sha256": hashlib.sha256(configuration_json.encode()).hexdigest(),
+    }
+
+
+def _load_resume_checkpoint(
+    *,
+    resume_path: Path | None,
+    state_path: Path | None,
+    progress_path: Path | None,
+    signature: dict[str, str],
+    cfg: EvolveConfig,
+) -> dict[str, Any]:
+    if resume_path is None or state_path is None or progress_path is None:
+        raise ValueError("resume requires checkpoint paths")
+    if resume_path.exists():
+        checkpoint = json.loads(resume_path.read_text())
+        saved_signature = checkpoint.get("signature")
+        if saved_signature != signature:
+            changed = [
+                name.removesuffix("_sha256")
+                for name, value in signature.items()
+                if not isinstance(saved_signature, dict)
+                or saved_signature.get(name) != value
+            ]
+            raise ValueError(
+                "cannot resume because the " + " and ".join(changed) + " changed"
+            )
+        if not isinstance(checkpoint.get("memory"), dict):
+            raise ValueError("resume_state.json is missing its memory snapshot")
+        return checkpoint
+
+    # Compatibility with runs started before resume_state.json existed. The
+    # old implementation wrote progress first and memory_state.json second, so
+    # this is best-effort; all new checkpoints use the atomic combined state.
+    if not state_path.exists() and not progress_path.exists():
+        raise FileNotFoundError(
+            f"no self-evolve checkpoint found in {resume_path.parent}"
+        )
+    memory = (
+        json.loads(state_path.read_text())
+        if state_path.exists() and state_path.stat().st_size
+        else SectionedMemory().to_json()
+    )
+    rows: list[dict[str, Any]] = []
+    if progress_path.exists():
+        for line in progress_path.read_text().splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    if not rows:
+        return {
+            "version": 1,
+            "status": "running",
+            "signature": signature,
+            "next_epoch": 1,
+            "next_batch": 1,
+            "epoch_stats": UtilityStats().to_json(),
+            "n_seen": 0,
+            "n_correct": 0,
+            "epochs_completed": 0,
+            "last_utility": None,
+            "target_reached": False,
+            "memory": memory,
+        }
+
+    last = rows[-1]
+    if last.get("event") == "epoch_end":
+        completed_epoch = int(last.get("epoch", 0))
+        target_reached = bool(last.get("target_reached", False))
+        return {
+            "version": 1,
+            "status": (
+                "finalizing"
+                if target_reached or completed_epoch >= cfg.epochs
+                else "running"
+            ),
+            "signature": signature,
+            "next_epoch": completed_epoch + 1,
+            "next_batch": 1,
+            "epoch_stats": UtilityStats().to_json(),
+            "n_seen": 0,
+            "n_correct": 0,
+            "epochs_completed": completed_epoch,
+            "last_utility": last.get("measured_utility"),
+            "target_reached": target_reached,
+            "memory": memory,
+        }
+
+    completed_epoch = int(last.get("epoch", 1))
+    stats = UtilityStats.from_json(last.get("running_confusion"))
+    return {
+        "version": 1,
+        "status": "running",
+        "signature": signature,
+        "next_epoch": completed_epoch,
+        "next_batch": int(last.get("batch", 0)) + 1,
+        "epoch_stats": stats.to_json(),
+        "n_seen": stats.total,
+        "n_correct": stats.true_positive + stats.true_negative,
+        "epochs_completed": max(0, completed_epoch - 1),
+        "last_utility": None,
+        "target_reached": False,
+        "memory": memory,
+    }
+
+
+def _atomic_write_json(path: Path, value: Any) -> None:
+    _atomic_write_text(path, json.dumps(value, indent=2))
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(text)
+    temporary.replace(path)

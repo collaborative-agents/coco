@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from personalization.llm_io import parse_json_object, response_text
-from personalization.media import image_data_url, sample_frames
+from personalization.utils.llm_io import parse_json_object, response_text
+from personalization.utils.media import image_data_url, sample_frames
 
 
 def test_model_response_helpers_parse_json_and_text():

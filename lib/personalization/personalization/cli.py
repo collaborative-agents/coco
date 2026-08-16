@@ -8,9 +8,6 @@ import sys
 import time
 from pathlib import Path
 
-from memory.paths import default_memory_db_path
-from memory.store import MemoryStore as CocoMemoryStore
-
 from personalization.dataset_builder import build_sft_examples, temporal_split
 from personalization.exporters import (
     read_labeled_moments,
@@ -19,23 +16,16 @@ from personalization.exporters import (
     write_sharegpt_json,
 )
 from personalization.labeling import label_records, revise_label_disagreements
-from personalization.lookahead import (
-    build_lookahead_tasks,
-    run_lookahead_critique,
-    validate_lookahead_config,
-)
 from personalization.memory import (
     EvolveConfig,
     SelfEvolvingLearner,
     select_evolution_moments,
 )
 from personalization.memory_store import MemoryStore, create_memory_draft
-from personalization.privacy import RetentionPolicy, prune_old_files
-from personalization.prompt_context import render_personalization_context
-from personalization.records import flatten_sessions, load_records, write_jsonl
-from personalization.signals import derive_short_window_signals
-from personalization.signals.user_feedback_inspector import (
-    inspect_feedback_interactively,
+from personalization.records import flatten_sessions, load_records
+from personalization.signals import (
+    derive_retrospective_signals,
+    derive_short_window_signals,
 )
 
 
@@ -54,6 +44,46 @@ def main(argv: list[str] | None = None) -> int:
         "--last-days",
         type=_positive_int,
         help="include moments from only the last N rolling 24-hour periods",
+    )
+    label.add_argument(
+        "--retrospective-model",
+        help=(
+            "on-device model used to scan silent moments for high-value "
+            "workflow-level repetition, stuckness, or anticipated needs"
+        ),
+    )
+    label.add_argument(
+        "--retrospective-min-confidence",
+        type=_unit_float,
+        default=0.75,
+    )
+    label.add_argument(
+        "--retrospective-max-observations",
+        type=_positive_int,
+        default=300,
+        help="maximum observations per workflow-discovery chunk",
+    )
+    label.add_argument(
+        "--retrospective-trigger-max-observations",
+        type=_positive_int,
+        default=50,
+        help="maximum observations per trigger-grounding chunk",
+    )
+    label.add_argument(
+        "--retrospective-max-opportunities",
+        type=_positive_int,
+        default=8,
+        help="maximum workflow-level opportunities requested from the model",
+    )
+    label.add_argument(
+        "--retrospective-trace-out",
+        help="write exact retrospective inputs, raw outputs, and accepted signals",
+    )
+    label.add_argument(
+        "--no-progress",
+        action="store_false",
+        dest="show_progress",
+        help="disable the retrospective scan progress bar and ETA",
     )
     label.add_argument(
         "--include-unverified-no-support",
@@ -94,90 +124,6 @@ def main(argv: list[str] | None = None) -> int:
         help="retries per label after an invalid model response (default: 2)",
     )
 
-    lookahead = sub.add_parser(
-        "lookahead-critique",
-        help="Use future support needs to improve observations retrieved from memory",
-    )
-    lookahead.add_argument("--records-root", required=True)
-    lookahead.add_argument(
-        "--memory-db",
-        type=Path,
-        default=default_memory_db_path(),
-        help="Coco memory SQLite database used for intent retrieval",
-    )
-    lookahead.add_argument(
-        "--labeled",
-        required=True,
-        help="base labeled moments JSONL",
-    )
-    lookahead.add_argument(
-        "--revised",
-        help="optional revised-label sample overlaid by moment_id before look-ahead",
-    )
-    lookahead.add_argument("--out", required=True, help="output critique JSONL")
-    lookahead.add_argument("--teacher-model", required=True)
-    lookahead.add_argument(
-        "--limit",
-        type=int,
-        required=True,
-        help="maximum number of future need-support moments to critique",
-    )
-    lookahead.add_argument(
-        "--max-past-observations",
-        type=int,
-        default=4,
-        help="retrieved past notes supplied for each future need",
-    )
-    lookahead.add_argument(
-        "--memory-proposition-limit",
-        type=int,
-        default=12,
-        help="maximum matched memory propositions per future intent",
-    )
-    lookahead.add_argument(
-        "--memory-evidence-limit",
-        type=int,
-        default=10,
-        help="supporting observations loaded from each matched proposition",
-    )
-    lookahead.add_argument(
-        "--max-action-chars",
-        type=int,
-        default=5000,
-        help="maximum observer-input/action-context characters per moment",
-    )
-    lookahead.add_argument(
-        "--max-observation-words",
-        type=int,
-        default=80,
-        help="teacher's word budget for each improved observation",
-    )
-    lookahead.add_argument("--max-tokens", type=int, default=4096)
-    lookahead.add_argument("--concurrency", type=int, default=4)
-    lookahead.add_argument(
-        "--teacher-retries",
-        type=int,
-        default=2,
-        help="retries after an invalid teacher response (default: 2)",
-    )
-    lookahead.add_argument(
-        "--include-images",
-        action="store_true",
-        help="send existing retained screenshots to the configured teacher/VLM",
-    )
-    lookahead.add_argument(
-        "--max-images-per-moment",
-        type=int,
-        default=2,
-        help="frame cap for each past/future moment when images are enabled",
-    )
-    lookahead.add_argument(
-        "--no-progress",
-        action="store_false",
-        dest="show_progress",
-        help="disable the progress bar",
-    )
-
     dataset = sub.add_parser("build-dataset", help="Export SFT examples")
     dataset.add_argument("--records-root", required=True)
     dataset.add_argument("--out-dir", required=True)
@@ -200,28 +146,6 @@ def main(argv: list[str] | None = None) -> int:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="include only records with at least one image file present on disk",
-    )
-
-    context = sub.add_parser("render-context", help="Render layered prompt context")
-    context.add_argument("--memory-root", required=True)
-    context.add_argument("--user-memory-path")
-    context.add_argument("--records-root")
-
-    prune = sub.add_parser("prune", help="Prune old local personalization files")
-    prune.add_argument("--root", required=True)
-    prune.add_argument("--days", type=int, default=30)
-    prune.add_argument("--apply", action="store_true")
-
-    inspect_feedback = sub.add_parser(
-        "inspect-feedback",
-        help="Interactively inspect user feedback to signal conversion",
-    )
-    inspect_feedback.add_argument("--records-root", required=True)
-    inspect_feedback.add_argument(
-        "--limit",
-        type=int,
-        default=80,
-        help="Rows to show in the table before prompting",
     )
 
     evolve = sub.add_parser(
@@ -291,6 +215,11 @@ def main(argv: list[str] | None = None) -> int:
         default=False,
         help="shuffle examples each epoch instead of preserving chronological order",
     )
+    evolve.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume from the last completed batch in --out-dir",
+    )
 
     args = parser.parse_args(argv)
     if args.cmd == "summary":
@@ -299,16 +228,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_label(args)
     if args.cmd == "revise-labels":
         return _cmd_revise_labels(args)
-    if args.cmd == "lookahead-critique":
-        return _cmd_lookahead_critique(args)
     if args.cmd == "build-dataset":
         return _cmd_build_dataset(args)
-    if args.cmd == "render-context":
-        return _cmd_render_context(args)
-    if args.cmd == "prune":
-        return _cmd_prune(args)
-    if args.cmd == "inspect-feedback":
-        return _cmd_inspect_feedback(args)
     if args.cmd == "self-evolve":
         return _cmd_self_evolve(args)
     parser.error(f"unknown command: {args.cmd}")
@@ -350,19 +271,43 @@ def _cmd_summary(args) -> int:
 
 
 def _cmd_label(args) -> int:
-    _, records = _load_flat_records(args.records_root)
+    sessions, records = _load_flat_records(args.records_root)
+    cutoff = (
+        time.time() - args.last_days * 24 * 60 * 60
+        if args.last_days is not None
+        else None
+    )
+    retrospective_signals = (
+        derive_retrospective_signals(
+            sessions,
+            model=args.retrospective_model,
+            min_confidence=args.retrospective_min_confidence,
+            candidate_since_ts=cutoff,
+            show_progress=args.show_progress,
+            max_observations=args.retrospective_max_observations,
+            trigger_max_observations=(args.retrospective_trigger_max_observations),
+            max_opportunities=args.retrospective_max_opportunities,
+            trace_out=args.retrospective_trace_out,
+        )
+        if args.retrospective_model
+        else []
+    )
     labeled = label_records(
         records,
         min_abs_score=args.min_abs_score,
         include_unverified_no_support=args.include_unverified_no_support,
         unverified_no_support_confidence=args.unverified_no_support_confidence,
         require_saved_images=args.require_saved_images,
+        additional_signals=retrospective_signals,
     )
-    if args.last_days is not None:
-        cutoff = time.time() - args.last_days * 24 * 60 * 60
+    if cutoff is not None:
         labeled = [moment for moment in labeled if moment.ts >= cutoff]
     write_labeled_moments(args.out, labeled)
-    print(f"wrote {len(labeled)} labeled moments to {args.out}", file=sys.stderr)
+    print(
+        f"wrote {len(labeled)} labeled moments to {args.out} "
+        f"(retrospective signals={len(retrospective_signals)})",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -382,66 +327,6 @@ def _cmd_revise_labels(args) -> int:
     print(
         f"eligible disagreements={eligible}; wrote revised sample={len(revised)} "
         f"to {args.out}",
-        file=sys.stderr,
-    )
-    return 0
-
-
-def _cmd_lookahead_critique(args) -> int:
-    validate_lookahead_config(
-        limit=args.limit,
-        max_past_observations=args.max_past_observations,
-        memory_proposition_limit=args.memory_proposition_limit,
-        memory_evidence_limit=args.memory_evidence_limit,
-        max_action_chars=args.max_action_chars,
-        max_observation_words=args.max_observation_words,
-        max_tokens=args.max_tokens,
-        concurrency=args.concurrency,
-        max_images_per_moment=args.max_images_per_moment,
-        teacher_retries=args.teacher_retries,
-    )
-    sessions = load_records(args.records_root)
-    memory_store = CocoMemoryStore(args.memory_db)
-    labeled = read_labeled_moments(args.labeled)
-    revised = read_labeled_moments(args.revised) if args.revised else []
-    tasks, eligible = build_lookahead_tasks(
-        sessions,
-        memory_store,
-        labeled,
-        revised=revised,
-        limit=args.limit,
-        max_past_observations=args.max_past_observations,
-        memory_proposition_limit=args.memory_proposition_limit,
-        memory_evidence_limit=args.memory_evidence_limit,
-    )
-    artifacts = run_lookahead_critique(
-        tasks,
-        model=args.teacher_model,
-        concurrency=args.concurrency,
-        max_action_chars=args.max_action_chars,
-        max_observation_words=args.max_observation_words,
-        max_tokens=args.max_tokens,
-        include_images=args.include_images,
-        max_images_per_moment=args.max_images_per_moment,
-        show_progress=args.show_progress,
-        retries=args.teacher_retries,
-    )
-    write_jsonl(args.out, artifacts)
-    print(
-        json.dumps(
-            {
-                "future_need_moments_eligible": eligible,
-                "future_need_moments_processed": len(tasks),
-                "past_observations_critiqued": sum(
-                    len(artifact["critiques"]) for artifact in artifacts
-                ),
-                "teacher_model": args.teacher_model,
-                "memory_db": str(args.memory_db.expanduser()),
-                "include_images": args.include_images,
-                "output": str(Path(args.out).expanduser()),
-            },
-            indent=2,
-        ),
         file=sys.stderr,
     )
     return 0
@@ -486,37 +371,6 @@ def _cmd_build_dataset(args) -> int:
         file=sys.stderr,
     )
     return 0
-
-
-def _cmd_render_context(args) -> int:
-    store = MemoryStore(args.memory_root, user_memory_path=args.user_memory_path)
-    user_memory = store.load_user_memory()
-    learned = store.load_learned_preferences()
-    signals = []
-    if args.records_root:
-        _, records = _load_flat_records(args.records_root)
-        signals = derive_short_window_signals(records)
-    print(
-        render_personalization_context(
-            user_memory=user_memory,
-            short_window_signals=signals,
-            learned_preferences=learned,
-        )
-    )
-    return 0
-
-
-def _cmd_prune(args) -> int:
-    result = prune_old_files(
-        args.root,
-        policy=RetentionPolicy(records_days=args.days, dry_run=not args.apply),
-    )
-    print(json.dumps(result.__dict__, indent=2))
-    return 0
-
-
-def _cmd_inspect_feedback(args) -> int:
-    return inspect_feedback_interactively(args.records_root, limit=args.limit)
 
 
 def _cmd_self_evolve(args) -> int:
@@ -604,7 +458,7 @@ def _cmd_self_evolve(args) -> int:
         ),
     )
     out_dir = Path(args.out_dir).expanduser()
-    learner.learn(labeled, out_dir=out_dir)
+    learner.learn(labeled, out_dir=out_dir, resume=args.resume)
 
     # Promote the inferred insights into an approvable MemoryDraft so a human can
     # review before they ever influence the live layered prompt context.
@@ -612,7 +466,7 @@ def _cmd_self_evolve(args) -> int:
         store = MemoryStore(args.memory_root)
         draft = create_memory_draft(
             source_run_id=f"self-evolve:{args.persona or 'default'}",
-            based_on_user_memory=store.load_user_memory().text,
+            based_on_user_memory=store.load_user_memory(),
             bullets=learner.memory.to_learned_preferences(status="draft"),
             summary=(
                 "Self-evolved memory "

@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from personalization.dataset_builder import build_sft_examples
 from personalization.memory import (
     EvolveConfig,
@@ -14,48 +15,7 @@ from personalization.memory import (
 from personalization.memory import evaluate as memory_evaluate
 from personalization.memory import evolve as memory_evolve
 from personalization.memory import roles as memory_roles
-from personalization.prompt_context import render_personalization_context
-from personalization.schemas import (
-    LabeledMoment,
-    LearnedPreference,
-    ShortWindowSignal,
-    UserMemory,
-)
-
-
-def test_prompt_context_renders_personalization_layers():
-    context = render_personalization_context(
-        user_memory=UserMemory.from_text("Always prefer concise suggestions.", now=1.0),
-        short_window_signals=[
-            ShortWindowSignal(
-                signal_id="sig-1",
-                session_id="s1",
-                observation_id="obs-1",
-                ts=10.0,
-                kind="dismiss",
-                polarity="negative",
-                scope="task",
-                expires_at=100.0,
-                confidence=1.0,
-                evidence="dismissed same lookup suggestion",
-            )
-        ],
-        learned_preferences=[
-            LearnedPreference.new(
-                section="when_to_support",
-                content="Support repetitive research lookups.",
-                status="active",
-                now=1.0,
-            )
-        ],
-        now=20.0,
-    )
-
-    assert context.index("<user_memory") < context.index("<recent_user_signals")
-    assert context.index("<recent_user_signals") < context.index("<learned_preferences")
-    assert "Always prefer concise suggestions." in context
-    assert "dismissed same lookup suggestion" in context
-    assert "Support repetitive research lookups." in context
+from personalization.schemas import LabeledMoment
 
 
 def test_sectioned_memory_applies_ops_votes_and_exports_preferences():
@@ -366,6 +326,149 @@ def test_learner_preserves_source_order_by_default(monkeypatch):
     learner.learn(["first", "second", "third"], log=False)
 
     assert batches == [["first", "second"], ["third"]]
+
+
+def test_learner_resumes_after_last_completed_batch(monkeypatch, tmp_path):
+    moments = ["first", "second", "third"]
+    config = EvolveConfig(epochs=1, batch_size=2, concurrency=1)
+    calls = []
+
+    def interrupted_generate(self, batch, memory_text):
+        calls.append(list(batch))
+        if batch == ["third"]:
+            raise RuntimeError("endpoint disconnected")
+        return [{"pred": "no", "gt": "no", "correct": True} for _ in batch]
+
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_generate_batch",
+        interrupted_generate,
+    )
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_reflect_batch",
+        lambda self, results, memory_text: [],
+    )
+    learner = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=config,
+    )
+    with pytest.raises(RuntimeError, match="endpoint disconnected"):
+        learner.learn(moments, out_dir=tmp_path, log=False)
+
+    checkpoint = json.loads((tmp_path / "resume_state.json").read_text())
+    assert checkpoint["next_epoch"] == 1
+    assert checkpoint["next_batch"] == 2
+    assert calls == [["first", "second"], ["third"]]
+
+    resumed_calls = []
+
+    def resumed_generate(self, batch, memory_text):
+        resumed_calls.append(list(batch))
+        return [{"pred": "no", "gt": "no", "correct": True} for _ in batch]
+
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_generate_batch",
+        resumed_generate,
+    )
+    resumed = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=config,
+    )
+    resumed.learn(moments, out_dir=tmp_path, log=False, resume=True)
+
+    assert resumed_calls == [["third"]]
+    assert resumed.epochs_completed == 1
+    completed = json.loads((tmp_path / "resume_state.json").read_text())
+    assert completed["status"] == "complete"
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "progress.jsonl").read_text().splitlines()
+    ]
+    assert [(row.get("epoch"), row.get("batch")) for row in rows] == [
+        (1, 1),
+        (1, 2),
+        (1, None),
+    ]
+    assert all(
+        row["batch_duration_s"] >= 0 for row in rows if row.get("batch") is not None
+    )
+
+
+def test_learner_resume_rejects_changed_dataset(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_generate_batch",
+        lambda self, batch, memory_text: [
+            {"pred": "no", "gt": "no", "correct": True} for _ in batch
+        ],
+    )
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_reflect_batch",
+        lambda self, results, memory_text: [],
+    )
+    learner = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=EvolveConfig(epochs=1, batch_size=2),
+    )
+    learner.learn(["first"], out_dir=tmp_path, log=False)
+
+    resumed = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=EvolveConfig(epochs=1, batch_size=2),
+    )
+    with pytest.raises(ValueError, match="dataset changed"):
+        resumed.learn(["different"], out_dir=tmp_path, log=False, resume=True)
+
+
+def test_learner_resumes_legacy_memory_and_progress_checkpoint(monkeypatch, tmp_path):
+    (tmp_path / "memory_state.json").write_text(json.dumps(SectionedMemory().to_json()))
+    (tmp_path / "progress.jsonl").write_text(
+        json.dumps(
+            {
+                "epoch": 1,
+                "batch": 1,
+                "running_confusion": {
+                    "true_positive": 0,
+                    "true_negative": 2,
+                    "false_positive": 0,
+                    "false_negative": 0,
+                    "invalid": 0,
+                    "total": 2,
+                },
+            }
+        )
+        + "\n"
+    )
+    calls = []
+
+    def fake_generate(self, batch, memory_text):
+        calls.append(list(batch))
+        return [{"pred": "no", "gt": "no", "correct": True} for _ in batch]
+
+    monkeypatch.setattr(SelfEvolvingLearner, "_generate_batch", fake_generate)
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_reflect_batch",
+        lambda self, results, memory_text: [],
+    )
+    learner = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=EvolveConfig(epochs=1, batch_size=2),
+    )
+    learner.learn(
+        ["first", "second", "third"],
+        out_dir=tmp_path,
+        log=False,
+        resume=True,
+    )
+
+    assert calls == [["third"]]
+    assert (
+        json.loads((tmp_path / "resume_state.json").read_text())["status"] == "complete"
+    )
 
 
 def test_learner_stops_when_target_utility_is_reached(monkeypatch):

@@ -15,8 +15,6 @@ from pathlib import Path
 
 from external_api.llm import chat_completion
 
-from personalization.llm_io import parse_json_object, response_text
-from personalization.media import image_data_url, sample_frames
 from personalization.memory.prompts import (
     CURATOR_SYSTEM,
     CURATOR_TEMPLATE,
@@ -28,8 +26,10 @@ from personalization.memory.prompts import (
     REFLECTOR_TEMPLATE,
 )
 from personalization.memory.state import InferredMemory, SectionedMemory
-from personalization.observer_output import normalize_need_support
 from personalization.schemas import LabeledMoment
+from personalization.utils.llm_io import parse_json_object, response_text
+from personalization.utils.media import image_data_url, sample_frames
+from personalization.utils.observer_output import normalize_need_support
 
 
 def generate(

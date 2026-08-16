@@ -18,6 +18,68 @@ coco-personalization label \
 Use `--last-days 4` to export only moments from the last four rolling 24-hour
 periods while still retaining the complete record context during labeling.
 
+Optionally use the same on-device model to scan a large chronological timeline
+for silent moments where later behavior confirms repetitive work, stuckness, or
+an anticipatable need, and where interruption would have been clearly high value:
+
+```bash
+coco-personalization label \
+    --records-root ./records \
+    --out ./out/labeled_moments.jsonl \
+    --retrospective-model nv_inference/model
+```
+
+The scanner is text-only and conservative. It processes every compact Observer
+output in contiguous chronological chunks of up to 300 observations. Each
+first call for each chunk discovers reusable workflow opportunities and cites later evidence,
+such as collaborating on notes during sustained paper reading or delegating
+repeated experiment launch/monitoring cycles. A second per-chunk call verifies
+and curates the evidence without selecting a trigger. Only after discovery and
+verification finish for every chunk does trigger grounding begin. Each trigger
+call receives all verified opportunity summaries, evidence IDs and timestamps
+from the full period, plus one target observation chunk; full evidence
+observations are not repeated. It selects earlier eligible no-intervention
+triggers in that chunk. Evidence is behavioral proof rather than a label target,
+so an evidence observation may have `original_need_support=yes` or `no` and need
+not be a no-intervention moment. Both verification stages must return an
+explicit accepted or rejected decision, with a rationale, for every supplied
+opportunity; an omitted decision invalidates that stage instead of being
+treated as a silent rejection. A resulting label therefore separates its
+earlier correction target from later workflow evidence. The trigger does not
+need to be one of the evidence observations; at least two cited evidence
+observations must follow it. Evidence must span five minutes, confidence must
+exceed `0.75`, and the opportunity must remain useful if
+an immediate local symptom disappeared, and identify assistance whose benefit
+clearly exceeded the interruption cost. One-off SSH errors, command fixes, and
+typos do not qualify. Manually invoking an AI tool later may confirm a missed
+earlier opportunity when the need was already inferable; it does not qualify by
+itself, and no suggestion should interrupt equivalent assistance already in
+progress. Observer rationales cannot veto their own retrospective correction.
+Direct user feedback and durable explicit preferences remain veto signals.
+For each accepted trigger, grounding also rewrites the rationale explaining why
+`need_support=yes` at that earlier moment. The rationale must be grounded in the
+trigger context; later evidence may clarify the need but cannot be described as
+already visible. This rationale becomes the labeled training target while the
+original Observer intent and output remain unchanged as input.
+
+Use `--retrospective-max-observations N` to set the maximum observations per
+workflow-discovery chunk; it does not downsample the full timeline. Trigger
+grounding uses independent, smaller chunks of 50 observations by default. Set
+`--retrospective-trigger-max-observations N` to change that limit. Chunks may
+be smaller when required by the input-character budget. Use
+`--retrospective-max-opportunities N` to bound discovery output. With
+`--retrospective-trace-out PATH`, one trace row per discovery chunk contains
+all exact model requests, raw and parsed responses, structural review reasons,
+and its associated `trigger_runs`. Empty, unparseable, or
+schema-incomplete model responses are retried up to three total attempts; every
+attempt is retained in the trace. Pass `--no-progress` to hide call progress.
+Render that trace as an interactive report with:
+
+```bash
+python3 exp/personalization/visualize_retrospective.py \
+    ./out/retrospective.jsonl ./out/retrospective.html
+```
+
 A user prompt to Coco within 60 seconds after a recorded no-support decision
 contributes the positive `user_prompt_after` label signal.
 
@@ -48,48 +110,6 @@ coco-personalization revise-labels \
 Invalid revision responses are retried twice by default. Set
 `--revision-retries 0` to disable retries or another non-negative value to tune
 the retry count.
-
-## Look-ahead observation critique
-
-After label/intent revision, the look-ahead stage uses later
-`need_support=yes` moments as supervision for improving earlier observer notes:
-
-```bash
-coco-personalization lookahead-critique \
-    --records-root "$HOME/Library/Application Support/coco/coco-records" \
-    --labeled ./out/labeled_moments.jsonl \
-    --revised ./out/revised_sample.jsonl \
-    --out ./out/lookahead_critiques.jsonl \
-    --teacher-model openai/gpt-4.1 \
-    --limit 20 \
-    --max-past-observations 4 \
-    --memory-proposition-limit 12 \
-    --memory-evidence-limit 10 \
-    --max-observation-words 80 \
-    --teacher-retries 2 \
-    --include-images
-```
-
-For each future support need, the revised `target_user_intent` is sent to Coco's
-shared `MemoryStore.search`. Supporting observation IDs cited by matching memory
-propositions are joined back to the recorded observer moments; observations at
-or after the future need are excluded. This reuses Coco's cross-session memory
-retrieval and proposition/evidence graph instead of maintaining a separate
-experiment-only retriever. Use `--memory-db` to override the normal Coco memory
-database.
-
-The teacher receives the future labeled/revised target, matched memory
-propositions, bounded action context, retrieved past notes, and (when explicitly
-enabled) retained frames. Output JSONL keeps the memory query and proposition
-provenance, critique, improved observation, helpfulness score, word-budget
-check, raw teacher response, and LLM metrics. The prompt permits hindsight to
-identify useful contemporaneous facts but prohibits leaking future events into
-the rewritten past note.
-
-Invalid teacher JSON is retried twice by default with a corrective prompt that
-repeats the required observation IDs and schema. Configure this with
-`--teacher-retries`; `--max-tokens` controls the per-attempt output limit and
-defaults to 4096.
 
 The runtime personalization hierarchy is:
 
@@ -157,6 +177,15 @@ examples are deterministically downsampled to `--correct-sample-rate 0.5`;
 original disagreements, unparseable predictions, and correct examples adjacent
 to a disagreement in the same session are always retained. Set the rate to `1`
 to keep every example.
+
+The learner writes an atomic `resume_state.json` after every completed batch.
+After an interruption, rerun the same command with `--resume` to restore the
+evolved memory, running confusion counts, epoch, and next batch. The selected
+dataset and all learning-affecting configuration must match; concurrency may be
+changed when resuming so an overloaded endpoint can be retried more
+conservatively. Checkpoints from older runs that contain only
+`memory_state.json` and `progress.jsonl` are also supported on a best-effort
+basis.
 
 The self-evolving loop consumes the `LabeledMoment` records produced from
 `signals/` by `label_records`. Its roles call `lib/external_api` directly, so

@@ -9,12 +9,10 @@ from personalization.schemas import (
     LearnedPreference,
     MemoryDraft,
     ObservationRecord,
-    PersonalizationRun,
     SessionRecords,
     SFTExample,
     ShortWindowSignal,
     TutorCallRecord,
-    UserMemory,
 )
 
 __all__ = [
@@ -26,10 +24,8 @@ __all__ = [
     "LearnedPreference",
     "MemoryDraft",
     "ObservationRecord",
-    "PersonalizationRun",
     "SFTExample",
     "SessionRecords",
     "ShortWindowSignal",
     "TutorCallRecord",
-    "UserMemory",
 ]

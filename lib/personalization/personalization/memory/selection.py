@@ -5,8 +5,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from personalization.observer_output import original_need_support
 from personalization.schemas import LabeledMoment
+from personalization.utils.observer_output import original_need_support
 
 
 @dataclass(frozen=True, slots=True)

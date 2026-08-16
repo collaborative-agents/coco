@@ -9,7 +9,6 @@ permissive: unknown keys are ignored and missing optional values default to
 from __future__ import annotations
 
 import hashlib
-import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -82,9 +81,6 @@ class ObservationRecord:
             else None,
         )
 
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
-
 
 @dataclass(slots=True)
 class FeedbackEvent:
@@ -114,9 +110,6 @@ class FeedbackEvent:
             text=_as_str_or_none(row.get("text")),
             extra=row.get("extra") if isinstance(row.get("extra"), dict) else None,
         )
-
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -168,9 +161,6 @@ class TutorCallRecord:
             else None,
         )
 
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
-
 
 @dataclass(slots=True)
 class DecisionRecord:
@@ -211,9 +201,6 @@ class DecisionRecord:
             ),
         )
 
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
-
 
 @dataclass(slots=True)
 class SessionRecords:
@@ -242,9 +229,6 @@ class CandidateMoment:
     tutor_calls_after: list[TutorCallRecord] = field(default_factory=list)
     decisions: list[DecisionRecord] = field(default_factory=list)
 
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
-
 
 @dataclass(slots=True)
 class LabelSignal:
@@ -257,6 +241,7 @@ class LabelSignal:
     weight: float
     evidence: str
     source_record_ids: list[str] = field(default_factory=list)
+    target_rationale: str | None = None
 
     def signed_score(self) -> float:
         if self.polarity == "positive":
@@ -264,9 +249,6 @@ class LabelSignal:
         if self.polarity == "negative":
             return -self.confidence * self.weight
         return 0.0
-
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -282,10 +264,7 @@ class ShortWindowSignal:
     confidence: float
     evidence: str
     source_record_ids: list[str] = field(default_factory=list)
-
-    @property
-    def active(self) -> bool:
-        return time.time() < self.expires_at
+    target_rationale: str | None = None
 
     def to_label_signal(self, moment_id: str, weight: float = 1.0) -> LabelSignal:
         return LabelSignal(
@@ -298,6 +277,7 @@ class ShortWindowSignal:
             weight=weight,
             evidence=self.evidence,
             source_record_ids=list(self.source_record_ids),
+            target_rationale=self.target_rationale,
         )
 
     def to_dict(self) -> JsonDict:
@@ -350,31 +330,6 @@ class LabeledMoment:
 
 
 @dataclass(slots=True)
-class UserMemory:
-    memory_id: str
-    text: str
-    created_at: float
-    updated_at: float
-    source: str = "user_written"
-    active: bool = True
-    derived_from_draft_id: str | None = None
-    evidence_moment_ids: list[str] = field(default_factory=list)
-
-    @classmethod
-    def from_text(cls, text: str, *, now: float | None = None) -> UserMemory:
-        ts = time.time() if now is None else now
-        return cls(
-            memory_id=stable_id("umem", text, ts),
-            text=text,
-            created_at=ts,
-            updated_at=ts,
-        )
-
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
-
-
-@dataclass(slots=True)
 class LearnedPreference:
     id: str
     section: str
@@ -387,36 +342,6 @@ class LearnedPreference:
     last_evidence_at: float = 0.0
     status: str = "draft"
     evidence_moment_ids: list[str] = field(default_factory=list)
-
-    @classmethod
-    def new(
-        cls,
-        *,
-        section: str,
-        content: str,
-        confidence: float = 0.5,
-        status: str = "draft",
-        evidence_moment_ids: list[str] | None = None,
-        now: float | None = None,
-    ) -> LearnedPreference:
-        ts = time.time() if now is None else now
-        return cls(
-            id=stable_id("lp", section, content),
-            section=section,
-            content=content,
-            confidence=confidence,
-            created_at=ts,
-            updated_at=ts,
-            last_evidence_at=ts,
-            status=status,
-            evidence_moment_ids=list(evidence_moment_ids or []),
-        )
-
-    def utility(self) -> float:
-        return self.helpful - self.harmful + self.confidence
-
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -441,23 +366,6 @@ class SFTExample:
     messages: list[JsonDict]
     images: list[str] = field(default_factory=list)
     metadata: JsonDict = field(default_factory=dict)
-
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class PersonalizationRun:
-    run_id: str
-    created_at: float
-    records_root: str
-    output_dir: str
-    retention_policy: JsonDict = field(default_factory=dict)
-    labeling_config: JsonDict = field(default_factory=dict)
-    memory_config: JsonDict = field(default_factory=dict)
-    dataset_config: JsonDict = field(default_factory=dict)
-    counts: JsonDict = field(default_factory=dict)
-    artifacts: JsonDict = field(default_factory=dict)
 
     def to_dict(self) -> JsonDict:
         return asdict(self)

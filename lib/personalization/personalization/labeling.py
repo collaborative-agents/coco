@@ -11,13 +11,6 @@ from pathlib import Path
 from external_api.llm import prompt_to_text
 from tqdm import tqdm
 
-from personalization.llm_io import parse_json_object
-from personalization.observer_output import (
-    observer_observation,
-    observer_status,
-    observer_user_intent,
-    original_need_support,
-)
 from personalization.schemas import (
     CandidateMoment,
     DecisionRecord,
@@ -30,6 +23,13 @@ from personalization.schemas import (
 )
 from personalization.signals import derive_short_window_signals
 from personalization.signals.user_feedback import FEEDBACK_POLICIES
+from personalization.utils.llm_io import parse_json_object
+from personalization.utils.observer_output import (
+    observer_observation,
+    observer_status,
+    observer_user_intent,
+    original_need_support,
+)
 
 UNVERIFIED_NO_SUPPORT_SOURCE = "observer:no_support_unverified"
 
@@ -199,7 +199,9 @@ def _feedback_label_signal(
 
 
 def _short_window_weight(kind: str) -> float:
-    return 0.7 if kind == "user_prompt_after" else 0.3
+    if kind == "user_prompt_after" or kind.startswith("retrospective:"):
+        return 0.7
+    return 0.3
 
 
 def label_moment(
@@ -240,6 +242,17 @@ def label_moment(
 
 def _label_rationale(score: float, signals: list[LabelSignal]) -> str:
     direction = "positive" if score > 0 else "negative"
+    revised = sorted(
+        [
+            signal
+            for signal in signals
+            if signal.target_rationale and signal.polarity == direction
+        ],
+        key=lambda signal: abs(signal.signed_score()),
+        reverse=True,
+    )
+    if revised:
+        return str(revised[0].target_rationale)
     strongest = sorted(
         [s for s in signals if s.polarity == direction],
         key=lambda s: abs(s.signed_score()),
@@ -268,11 +281,13 @@ def label_records(
     include_unverified_no_support: bool = False,
     unverified_no_support_confidence: float = 0.25,
     require_saved_images: bool = False,
+    additional_signals: Iterable[ShortWindowSignal] | None = None,
 ) -> list[LabeledMoment]:
     if not 0.0 <= unverified_no_support_confidence <= 1.0:
         raise ValueError("unverified_no_support_confidence must be between 0 and 1")
     moments = build_candidate_moments(records)
     short_signals = derive_short_window_signals(records)
+    short_signals.extend(additional_signals or [])
     labeled: list[LabeledMoment] = []
     for moment in moments:
         if require_saved_images:

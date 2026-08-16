@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from personalization.llm_io import parse_json_object
+from personalization.utils.llm_io import parse_json_object
 
 _SUPPORT_STATUSES = {
     "stuck",
