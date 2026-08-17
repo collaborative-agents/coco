@@ -24,7 +24,7 @@ if (!fs.existsSync(servicesSpec)) {
   });
 });
 
-console.log(`\n📦 Building shared sensing and tutor runtime...`);
+console.log(`\n📦 Building shared sensing, tutor, and personalization runtime...`);
 console.log(`   Spec: ${servicesSpec}`);
 const result = spawnSync(
   'uv',

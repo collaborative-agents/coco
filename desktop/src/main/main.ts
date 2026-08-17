@@ -44,6 +44,8 @@ import {
   TutorStreamTimeoutError,
 } from './services/tutor-stream';
 import type { TutorStreamEvent } from './services/tutor-stream';
+import { PersonalizationScheduler } from './services/personalization-scheduler';
+import { DailyMemoryDraftService } from './services/daily-memory-drafts';
 import {
   appendActivity,
   readActivity,
@@ -87,8 +89,10 @@ if (!hasSingleInstanceLock) app.quit();
 const developmentUserDataDir = process.env.COCO_DESKTOP_USER_DATA_DIR?.trim();
 if (!app.isPackaged && developmentUserDataDir) {
   const resolvedUserDataDir = path.resolve(developmentUserDataDir);
-  fs.mkdirSync(resolvedUserDataDir, { recursive: true });
+  const resolvedSessionDataDir = path.join(resolvedUserDataDir, 'Session Data');
+  fs.mkdirSync(resolvedSessionDataDir, { recursive: true });
   app.setPath('userData', resolvedUserDataDir);
+  app.setPath('sessionData', resolvedSessionDataDir);
   log.info(`[Development] userData override: ${resolvedUserDataDir}`);
 }
 
@@ -149,6 +153,29 @@ let hideAvatarMode = false;
 let avatarRendererReady = false;
 let pendingOpenHistory = false;
 const observationSleepGuard = new ObservationSleepGuard();
+let personalizationScheduler: PersonalizationScheduler | null = null;
+let dailyMemoryDraftService: DailyMemoryDraftService | null = null;
+let previewCocoSleepMode = false;
+
+const isDailyMemoryPreviewOnly = () =>
+  !app.isPackaged && process.env.COCO_DAILY_MEMORY_PREVIEW_ONLY === '1';
+
+const isCocoSleeping = () =>
+  personalizationScheduler?.isSleeping() ??
+  (isDailyMemoryPreviewOnly() && previewCocoSleepMode);
+
+const initializeDailyMemoryDraftService = () => {
+  if (dailyMemoryDraftService) return;
+  dailyMemoryDraftService = new DailyMemoryDraftService(
+    app.getPath('userData'),
+    path.join(app.getPath('userData'), 'personalization'),
+    {
+      fixtureStatePath: app.isPackaged
+        ? undefined
+        : process.env.COCO_DAILY_MEMORY_DRAFT_FIXTURE,
+    },
+  );
+};
 
 // Hot-key screen captures (Cmd/Ctrl+Shift+Space) waiting to be shown as preview
 // thumbnails in the chat input bar. When the hot key opens a fresh chat window,
@@ -563,6 +590,9 @@ const openChatSettings = () => {
   }
 };
 
+ipcMain.removeAllListeners('open-chat-settings');
+ipcMain.on('open-chat-settings', () => openChatSettings());
+
 async function openCoco(): Promise<void> {
   if (isSessionActive && currentSessionId) {
     openChatForSession(currentSessionId, pendingTaskLabel || '');
@@ -614,8 +644,11 @@ function createTray(): void {
     tray = new Tray(image);
     tray.on('click', handleTrayClick);
   }
-  tray.setToolTip('Coco');
   const pendingSetup = setupPending();
+  const sleeping = isCocoSleeping();
+  tray.setToolTip(
+    pendingSetup ? 'Coco' : `Coco — ${sleeping ? 'Sleeping' : 'Awake'}`,
+  );
   tray.setContextMenu(
     Menu.buildFromTemplate(pendingSetup ? [
       {
@@ -625,6 +658,21 @@ function createTray(): void {
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() },
     ] : [
+      {
+        label: sleeping ? 'Status: Sleeping' : 'Status: Awake',
+        enabled: false,
+      },
+      {
+        label: sleeping ? 'Wake Coco' : 'Put Coco to Sleep',
+        click: () => {
+          // Function declaration is intentionally below the tray setup.
+          // eslint-disable-next-line no-use-before-define
+          setCocoSleepMode(!sleeping).catch((err) =>
+            log.warn(`[Tray] Could not change sleep mode: ${err}`),
+          );
+        },
+      },
+      { type: 'separator' },
       {
         label: 'Open Chat',
         click: openPrimaryTrayAction,
@@ -1416,9 +1464,11 @@ ipcMain.on(
         text: rawObservation,
       },
       { timeout: 3000 },
-    ).catch((err) => {
-      log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
-    });
+    )
+      .catch((err) => {
+        log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+      })
+      .finally(() => personalizationScheduler?.noteFeedback());
 
     if (isSessionActive && currentSessionId) {
       openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
@@ -1438,13 +1488,59 @@ ipcMain.removeAllListeners('training-feedback');
 ipcMain.on('training-feedback', async (_event, payload) => {
   try {
     const sensingPort = process.env.SENSING_PORT || '8080';
-    await axios.post(`http://127.0.0.1:${sensingPort}/feedback`, payload ?? {}, {
-      timeout: 3000,
-    });
+    await axios.post(
+      `http://127.0.0.1:${sensingPort}/feedback`,
+      payload ?? {},
+      { timeout: 3000 },
+    );
   } catch (err) {
-    log.warn(`[Feedback] failed to post: ${(err as { message?: string })?.message}`);
+    log.warn(
+      `[Feedback] failed to post: ${(err as { message?: string })?.message}`,
+    );
+  } finally {
+    personalizationScheduler?.noteFeedback();
   }
 });
+
+ipcMain.removeHandler('get-coco-sleep-mode');
+ipcMain.handle('get-coco-sleep-mode', () => ({
+  sleeping: isCocoSleeping(),
+}));
+
+async function setCocoSleepMode(sleeping: boolean) {
+  if (!personalizationScheduler && !isDailyMemoryPreviewOnly()) {
+    return { success: false, error: 'Personalization is not ready.' };
+  }
+  if (sleeping && personalizationScheduler) {
+    if (isSessionActive) endCurrentSession();
+    await Promise.all([
+      serviceManager.stopService('sensing-server'),
+      serviceManager.stopService('tutor-server'),
+    ]);
+    personalizationScheduler.setSleepMode(true);
+  } else if (personalizationScheduler) {
+    personalizationScheduler.setSleepMode(false);
+    serviceManager.startAll();
+  }
+  previewCocoSleepMode = sleeping;
+  avatarWindow?.webContents.send('coco-sleep-mode-changed', { sleeping });
+  if (!sleeping) {
+    avatarWindow?.webContents.send('daily-memory-draft-refresh');
+  }
+  if (tray && !tray.isDestroyed()) createTray();
+  return { success: true, sleeping };
+}
+
+ipcMain.removeHandler('set-coco-sleep-mode');
+ipcMain.handle(
+  'set-coco-sleep-mode',
+  async (_event, { sleeping }: { sleeping?: boolean } = {}) => {
+    if (typeof sleeping !== 'boolean') {
+      return { success: false, error: 'Invalid sleep mode.' };
+    }
+    return setCocoSleepMode(sleeping);
+  },
+);
 
 ipcMain.removeAllListeners('notification');
 ipcMain.on('notification', (_event, args) => {
@@ -1728,6 +1824,7 @@ function precomputeSuggestion(event: {
   const tutorPort = process.env.TUTOR_PORT || '8081';
   const startedAt = Date.now();
   log.info(`[InstantSuggestion] precompute start id=${id} status=${event.status}`);
+  personalizationScheduler?.beginInteractiveInference();
   const promise = axios
     .post(
       `http://127.0.0.1:${tutorPort}/suggestion/instant`,
@@ -1750,7 +1847,8 @@ function precomputeSuggestion(event: {
     .catch((err) => {
       log.warn(`[InstantSuggestion] precompute failed for ${id} after ${Date.now() - startedAt}ms: ${(err as { message?: string })?.message}`);
       return null;
-    });
+    })
+    .finally(() => personalizationScheduler?.endInteractiveInference());
   suggestionCache.set(id, { ts: Date.now(), promise });
   return promise;
 }
@@ -1875,7 +1973,8 @@ ipcMain.on(
       )
       .catch((err) => {
         log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
-      });
+      })
+      .finally(() => personalizationScheduler?.noteFeedback());
 
     if (isSessionActive && currentSessionId) {
       openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
@@ -2126,6 +2225,7 @@ ipcMain.handle(
     },
   ) => {
     const tutorPort = process.env.TUTOR_PORT || '8081';
+    personalizationScheduler?.beginInteractiveInference();
 
     // Persist any pasted images to temp files for the tutor's vision call.
     const imagePaths: string[] = [];
@@ -2203,6 +2303,8 @@ ipcMain.handle(
         error,
       });
       return { error };
+    } finally {
+      personalizationScheduler?.endInteractiveInference();
     }
   },
 );
@@ -2539,6 +2641,40 @@ ipcMain.handle('save-memory', async (_event, { memory }: { memory: string }) => 
   return { success: true };
 });
 
+ipcMain.removeHandler('get-daily-memory-draft');
+ipcMain.handle('get-daily-memory-draft', () => ({
+  draft: dailyMemoryDraftService?.claimForToday() ?? null,
+}));
+
+ipcMain.removeHandler('approve-daily-memory-draft');
+ipcMain.handle(
+  'approve-daily-memory-draft',
+  async (_event, { draftId }: { draftId?: string } = {}) => {
+    if (!dailyMemoryDraftService || !draftId) {
+      return { success: false, error: 'Memory update is not available.' };
+    }
+    try {
+      const { memory, draft } = dailyMemoryDraftService.approve(draftId);
+      const tutorPort = process.env.TUTOR_PORT || '8081';
+      try {
+        await axios.post(
+          `http://127.0.0.1:${tutorPort}/context/memory`,
+          { memory },
+          { timeout: 8000 },
+        );
+      } catch (err) {
+        // The disk copy is authoritative and is reapplied when the tutor starts.
+        log.warn(`[Memory] daily update live apply failed: ${(err as Error).message}`);
+      }
+      log.info(`[Memory] approved daily personalization draft ${draft.draftId}`);
+      return { success: true, draftId: draft.draftId };
+    } catch (err) {
+      log.warn(`[Memory] failed to approve daily update: ${(err as Error).message}`);
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
+
 // IPC Handler for setting the local user id (used only to key training data).
 // There is no auth backend in the local build; the id is a stable local uuid.
 ipcMain.handle('set-user-id', async (event, userId) => {
@@ -2719,6 +2855,39 @@ const startObserver = () => {
       );
     }
     serviceManager.startAll();
+
+    const recordsRoot = path.join(app.getPath('userData'), 'coco-records');
+    const stateRoot = path.join(app.getPath('userData'), 'personalization');
+    initializeDailyMemoryDraftService();
+    const packagedExecutable = app.isPackaged
+      ? path.join(
+          process.resourcesPath,
+          'service-dist',
+          'coco-services',
+          `personalization-worker${process.platform === 'win32' ? '.exe' : ''}`,
+        )
+      : undefined;
+    personalizationScheduler = new PersonalizationScheduler({
+      projectRoot: app.isPackaged
+        ? path.dirname(packagedExecutable!)
+        : path.resolve(process.cwd(), '..'),
+      recordsRoot,
+      stateRoot,
+      memoryRoot: app.getPath('userData'),
+      model: observerModel,
+      packagedExecutable,
+      providerEnv: runtime?.sensingEnv,
+      collectTrainingScreenshots: ['1', 'true', 'yes'].includes(
+        (process.env.COLLECT_TRAINING_SCREENSHOTS ?? '').toLowerCase(),
+      ),
+      getIdleSeconds: () => powerMonitor.getSystemIdleTime(),
+      onJobComplete: (job) => {
+        if (job === 'evolve') {
+          avatarWindow?.webContents.send('daily-memory-draft-refresh');
+        }
+      },
+    });
+    personalizationScheduler.start();
   } catch (e) {
     console.warn('Failed to start services:', e);
   }
@@ -2733,6 +2902,7 @@ const startObserver = () => {
   startObservationStream({
     url: `http://127.0.0.1:${sensingPort}/observations/stream`,
     onEvent: (event) => {
+      if (event.observation) personalizationScheduler?.noteObservation();
       if (observationSleepGuard.shouldSuppress(event.ts)) {
         if (event.observation) {
           log.info(
@@ -2826,9 +2996,11 @@ const startObserver = () => {
                 status,
               },
               { timeout: 3000 },
-            ).catch((err) => {
-              log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
-            });
+            )
+              .catch((err) => {
+                log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+              })
+              .finally(() => personalizationScheduler?.noteFeedback());
           });
         }
       }
@@ -2869,6 +3041,7 @@ app
   .whenReady()
   .then(async () => {
     await configureLocalServicePorts();
+    initializeDailyMemoryDraftService();
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
       observationSleepGuard.suspend();
@@ -2892,6 +3065,7 @@ app
         // Send this again in case the renderer was frozen before handling the
         // suspend event.
         avatarWindow.webContents.send('system-suspend');
+        avatarWindow.webContents.send('daily-memory-draft-refresh');
       }
     });
 
@@ -2905,7 +3079,11 @@ app
       readModelConfiguration() ||
         (process.env.TUTOR_MODEL?.trim() && process.env.OBSERVER_MODEL?.trim()),
     );
-    if (isOnboardingComplete() && canStartConfiguredModels) {
+    if (
+      isOnboardingComplete() &&
+      canStartConfiguredModels &&
+      !isDailyMemoryPreviewOnly()
+    ) {
       hideAvatarMode = readHideAvatarSetting();
       startObserver();
     }
@@ -2976,6 +3154,7 @@ app.on('before-quit', (event) => {
   isQuitting = true;
   log.info('App quitting: waiting up to 10s for services to stop...');
   stopObservationStream();
+  personalizationScheduler?.stop();
   const shutdownTimeoutMs = 10_000;
   serviceManager
     .shutdown(shutdownTimeoutMs)

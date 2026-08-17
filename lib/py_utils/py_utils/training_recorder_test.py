@@ -10,6 +10,28 @@ import json
 from py_utils.training_recorder import TrainingRecorder
 
 
+def test_default_retains_observer_screenshot_until_personalization(tmp_path):
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png")
+    recorder = TrainingRecorder(str(tmp_path / "records"))
+
+    recorder.log_observation(
+        observation_id="obs-image",
+        ts=1.0,
+        obs_type="snapshot",
+        observer_input="input",
+        observer_output="output",
+        model="model",
+        screenshot_paths=[str(source)],
+    )
+
+    row = json.loads(
+        (tmp_path / "records" / "observations.jsonl").read_text().splitlines()[0]
+    )
+    assert len(row["retained_screenshots"]) == 1
+    assert (tmp_path / "records" / "observer_screenshots").is_dir()
+
+
 def test_training_recorder_writes_llm_metrics(tmp_path):
     metrics = {
         "call_id": "call-test",

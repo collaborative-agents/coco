@@ -23,7 +23,7 @@ import type { PetMood } from './observation-types';
 // when something actually changed (a new observation arrived → write/wait/
 // tool/sleep packs).
 const STATIC_FRAMES: Record<'dormant' | 'idle', string> = {
-  dormant: sleep1, // pre-session — never received an observation yet
+  dormant: petIdle1, // pre-session — awake, but no observation received yet
   idle: petIdle1, // post-event resting state
 };
 
@@ -67,9 +67,9 @@ export default function PetSprite({ mood }: { mood: PetMood }) {
   }, [mood]);
 
   const src = isStatic(mood) ? STATIC_FRAMES[mood] : FRAMES[mood][frame];
-  // pet1.png (the idle sprite) was authored at the design size — render it at
-  // 100% while every other pack stays at the default 90%.
-  const isFullScale = mood === 'idle';
+  // pet1.png has a substantially wider non-transparent drawing than the sleep
+  // frames, so give it a smaller scale to keep the visible fox footprint stable.
+  const isAwake = mood === 'idle' || mood === 'dormant';
 
   return (
     <img
@@ -77,7 +77,7 @@ export default function PetSprite({ mood }: { mood: PetMood }) {
       src={src}
       alt="Desktop Pet"
       draggable={false}
-      className={`pet-image${isFullScale ? ' pet-image-full' : ''}`}
+      className={`pet-image${isAwake ? ' pet-image-awake' : ''}`}
     />
   );
 }

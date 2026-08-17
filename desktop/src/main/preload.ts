@@ -93,7 +93,13 @@ export type Channels =
   // Forwarded to webapp renderer to signal a help-request context
   | 'help-request'
   // Explicit user reaction (bubble engage/dismiss) → sensing /feedback
-  | 'training-feedback';
+  | 'training-feedback'
+  | 'get-coco-sleep-mode'
+  | 'set-coco-sleep-mode'
+  | 'coco-sleep-mode-changed'
+  | 'get-daily-memory-draft'
+  | 'approve-daily-memory-draft'
+  | 'daily-memory-draft-refresh';
 
 const electronHandler = {
   ipcRenderer: {
