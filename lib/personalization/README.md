@@ -7,6 +7,44 @@ labels candidate assistance moments, manages layered personalization memory, and
 exports supervised fine-tuning examples. It intentionally does not train model
 weights.
 
+## Desktop runtime
+
+The Electron app runs `personalization.runtime` as a disposable low-priority
+subprocess. Feedback triggers an incremental signal checkpoint immediately;
+missed-opportunity signals refresh after each bounded observation interval.
+When the system has spare compute, one label disagreement is revised per job.
+After a longer idle interval—or while the user has explicitly put Coco to
+sleep—the worker runs/resumes Coco-PE against a frozen data-period snapshot.
+Each Coco-PE period is capped at 64 labeled moments and checkpoints after every
+four-moment batch.
+
+Interactive tutor inference terminates the worker process immediately. Signal,
+revision, and Coco-PE checkpoints make the next invocation resume-safe. LoRA is
+not yet a runtime backend; it can use the same frozen-period and successful-run
+retention boundary when implemented.
+
+Observer screenshots are retained temporarily for the current data period.
+After Coco-PE successfully completes and writes its memory draft,
+`COLLECT_TRAINING_SCREENSHOTS=0` deletes only the screenshot files referenced by
+that completed data period. With `COLLECT_TRAINING_SCREENSHOTS=1`, those files
+are kept.
+
+On the next local day, the desktop asks the user to review the newest completed
+draft from the previous day. The review groups compact insights under titles
+such as **When to proactively support** and lets the user expand the selected
+detailed bullets that support each insight. Examples are review evidence and are
+not added to the live prompt. Approval atomically replaces Coco's learned-memory
+section while preserving user-written memory, then applies it to the running
+tutor. The observer reads that memory on its next observation. Choosing **Not
+now** defers the draft until the next day.
+
+For a development-only UI preview, point
+`COCO_DAILY_MEMORY_DRAFT_FIXTURE` at a Coco-PE `memory_state.json`. The desktop
+converts its inferred insights into an eligible prior-day draft. Packaged builds
+ignore this fixture variable. Set `COCO_DESKTOP_USER_DATA_DIR` to an isolated
+app data directory and `COCO_DAILY_MEMORY_PREVIEW_ONLY=1` to inspect the review
+UI without starting sensing or tutor services.
+
 Labeling and LLM revision are separate stages. First export the unchanged
 feedback-derived labels:
 
