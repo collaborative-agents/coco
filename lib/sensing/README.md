@@ -88,7 +88,7 @@ The observer fires from three sources:
 
 - **Time-driven tick.** An always-on loop observes the current screen every `observer_interval_seconds` whenever the user has been active within the last ~2 intervals. It is **decoupled from action volume**, so it catches low-distinct-action activity like **scrolling a long list** and **short tasks** that the action path misses.
   - Lower `observer_interval_seconds` for snappier suggestions, raise it to cut VLM cost (each observation is one multimodal call).
-- **Action-accumulation snapshot.** The streamer adds one snapshot per processing cycle; an observation fires only once the buffer reaches `snapshot_buffer_max_size`.
+- **Detected-action snapshot.** When the streamer finds at least `min_actions_threshold` new keyboard, mouse, or scroll actions, it observes the newest state immediately. These calls are coalesced to at most one per streamer cycle (20 seconds by default), and they share a cooldown with the time-driven tick so the two paths do not duplicate work.
 - **Idle / user prompt.** The `pause` observation fires after the screen idle timeout; a `user_prompt` observation fires when the user sends a message.
 
 After `sensing_idle_timeout_seconds` without system-wide keyboard, mouse, or trackpad activity (5 minutes by default), sensing enters a dormant state: screen capture, database polling, observer ticks, and progress judgments pause. It also pauses immediately when the laptop reports that the display is asleep. The first user

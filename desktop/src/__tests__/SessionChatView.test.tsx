@@ -1,7 +1,10 @@
 import React from 'react';
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
-import { ToolCallCard } from '../renderer/components/SessionChatView';
+import {
+  ToolCallCard,
+  TrainingScreenshotRetentionNotice,
+} from '../renderer/components/SessionChatView';
 
 describe('Tutor tool-call visualization', () => {
   it('shows on-demand screen observation progress and evidence', () => {
@@ -85,5 +88,45 @@ describe('Tutor tool-call visualization', () => {
     expect(
       screen.getByText('Evidence: Reviewing a roadmap in Notion'),
     ).toHaveTextContent('Evidence: Reviewing a roadmap in Notion');
+  });
+});
+
+describe('Training screenshot retention notice', () => {
+  const info = {
+    enabled: true,
+    recordsRoot: '/Users/test/Library/Application Support/coco/coco-records',
+    screenshotPattern:
+      '/Users/test/Library/Application Support/coco/coco-records/session_*/observer_screenshots',
+    configurationPath: '/Users/test/Library/Application Support/coco/.env',
+  };
+
+  it('shows disable and cleanup guidance only when retention is enabled', () => {
+    const onOpenFolder = jest.fn();
+    const { rerender } = render(
+      <TrainingScreenshotRetentionNotice
+        info={{ ...info, enabled: false }}
+        onOpenFolder={onOpenFolder}
+      />,
+    );
+    expect(
+      screen.queryByText('Training screenshots are being retained'),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <TrainingScreenshotRetentionNotice
+        info={info}
+        onOpenFolder={onOpenFolder}
+      />,
+    );
+    expect(
+      screen.getByText('Training screenshots are being retained'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/COLLECT_TRAINING_SCREENSHOTS=0/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(info.screenshotPattern)).toBeInTheDocument();
+
+    screen.getByRole('button', { name: 'Open local records folder' }).click();
+    expect(onOpenFolder).toHaveBeenCalledWith(info.recordsRoot);
   });
 });

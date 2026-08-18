@@ -63,6 +63,7 @@ export type Channels =
   | 'save-profile'
   | 'update-settings'
   | 'update-avatar-visibility'
+  | 'get-training-screenshot-retention'
   // Long-term agent memory (view/edit)
   | 'get-memory'
   | 'save-memory'

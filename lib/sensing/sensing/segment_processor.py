@@ -751,9 +751,9 @@ class AiTutoringProcessor(SegmentProcessor):
     Owns all AI-tutoring state: the snapshot buffer, observer agent, HTTP
     client, and Redis publisher.  Three event types are handled:
 
-    * ``"snapshot"``    — adds the latest screenshot to the buffer; when the
-                          buffer is full an observation is generated and stored
-                          in ``obs_history`` for future context.
+    * ``"snapshot"``    — a qualifying batch of detected user actions triggers
+                          an observation, subject to a short cooldown shared
+                          with the periodic fallback ticker.
     * ``"pause"``       — generates an observation and publishes it to a Redis
                           channel so ``TutorAgentNode`` can act on it.
     * ``"user_prompt"`` — generates and *returns* an observation (also
@@ -771,6 +771,7 @@ class AiTutoringProcessor(SegmentProcessor):
         observer_model: str,
         scenario: str = "everyday_support",
         memory_engine: MemoryEngine | None = None,
+        action_snapshot_cooldown_seconds: float = 20.0,
     ) -> None:
         self._http_client = http_client
         self.tutor_url = tutor_url.rstrip("/")
@@ -782,6 +783,14 @@ class AiTutoringProcessor(SegmentProcessor):
         self._scenario = scenario
         self._memory_engine = memory_engine
         self._memory_session_id: str | None = None
+        # Action batches and the periodic ticker share this lock/cursor. This
+        # keeps user activity responsive without allowing the two trigger paths
+        # to issue duplicate or overlapping multimodal calls.
+        self._snapshot_trigger_lock = asyncio.Lock()
+        self._last_snapshot_trigger_at = float("-inf")
+        self._action_snapshot_cooldown_seconds = max(
+            0.0, action_snapshot_cooldown_seconds
+        )
         # Per-session observer prompt (can be updated via set_scenario).
         self._observer_prompt: str = _load_observer_prompt(scenario)
         # Ring buffer of recent observer outputs for the text-only progress
@@ -830,6 +839,7 @@ class AiTutoringProcessor(SegmentProcessor):
         observer_model: str,
         scenario: str = "everyday_support",
         memory_engine: MemoryEngine | None = None,
+        action_snapshot_cooldown_seconds: float = 20.0,
     ) -> AiTutoringProcessor:
         """Build an ``AiTutoringProcessor`` from high-level config values.
 
@@ -848,6 +858,7 @@ class AiTutoringProcessor(SegmentProcessor):
             observer_model=observer_model,
             scenario=scenario,
             memory_engine=memory_engine,
+            action_snapshot_cooldown_seconds=action_snapshot_cooldown_seconds,
         )
 
     def set_memory_session(self, session_id: str | None) -> None:
@@ -1211,15 +1222,67 @@ class AiTutoringProcessor(SegmentProcessor):
         image_path: str | None,
         timestamp: str | None,
     ) -> None:
-        # print(f"[HANDLE SNAPSHOT] image_path: {image_path}, timestamp: {timestamp}")
+        await self.observe_snapshot(
+            image_path=image_path,
+            timestamp=timestamp,
+            source="actions",
+            min_interval_seconds=self._action_snapshot_cooldown_seconds,
+        )
+
+    async def observe_snapshot(
+        self,
+        image_path: str | None,
+        timestamp: str | None,
+        *,
+        source: str,
+        min_interval_seconds: float,
+    ) -> bool:
+        """Generate a snapshot observation if the shared cooldown permits it.
+
+        Both the action-accumulation path and the periodic fallback call this
+        method. Returning ``False`` means a recent snapshot observation already
+        covers this state; the unused screenshot is cleaned up immediately.
+        """
         if not image_path or not timestamp:
-            return
-        self._add_snapshot(image_path, timestamp)
-        if len(self.snapshot_buffer.buffer) >= self.snapshot_buffer.max_size:
-            obs, _text, _metrics = await self._handle_observation(type="snapshot")
-            self._log(f"[SNAPSHOT OBSERVATION] {obs}\n")
-            self.snapshot_buffer.obs_history.append(obs)
-            self.snapshot_buffer.buffer.clear()
+            return False
+
+        cooldown = max(0.0, min_interval_seconds)
+        async with self._snapshot_trigger_lock:
+            now = time.monotonic()
+            elapsed = now - self._last_snapshot_trigger_at
+            if elapsed < cooldown:
+                logger.info(
+                    "Skipping %s snapshot trigger: last snapshot observation "
+                    "started %.1fs ago (cooldown %.1fs)",
+                    source,
+                    elapsed,
+                    cooldown,
+                )
+                self._cleanup_consumed_screenshots([image_path])
+                return False
+
+            self._last_snapshot_trigger_at = now
+            self._add_snapshot(image_path, timestamp)
+            try:
+                obs, _text, _metrics = await self._handle_observation(type="snapshot")
+            except Exception:
+                # _handle_observation normally consumes the rolling buffer. If
+                # it fails early, do not leak the trigger screenshot or feed it
+                # into an unrelated later observation.
+                self.snapshot_buffer.buffer.clear()
+                self._image_num = 0
+                self._cleanup_consumed_screenshots([image_path])
+                self._last_snapshot_trigger_at = time.monotonic()
+                raise
+
+            # Measure the next cooldown from completion so a slow model call
+            # cannot be followed immediately by a trigger that waited on the
+            # lock while it was running.
+            self._last_snapshot_trigger_at = time.monotonic()
+            self._log(f"[{source.upper()} SNAPSHOT OBSERVATION] {obs}\n")
+            if source == "actions":
+                self.snapshot_buffer.obs_history.append(obs)
+            return True
 
     async def _handle_pause(
         self,

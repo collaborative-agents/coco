@@ -29,6 +29,13 @@ interface Guidance {
   vizCode?: string | null;
 }
 
+export interface TrainingScreenshotRetentionInfo {
+  enabled: boolean;
+  recordsRoot: string;
+  screenshotPattern: string;
+  configurationPath: string;
+}
+
 /** Scan for the first balanced {...} block, respecting strings and escapes. */
 function extractJsonObject(text: string): string | null {
   let start = text.indexOf('{');
@@ -347,6 +354,45 @@ const S: Record<string, React.CSSProperties> = {
   connectionTestSuccess: { color: '#16a34a', fontSize: 11.5, fontWeight: 700 },
   connectionTestError: { width: '100%', color: '#b91c1c', fontSize: 11.5 },
   connectionTestErrorText: { maxHeight: 140, overflow: 'auto', margin: '6px 0 0', padding: 8, borderRadius: 7, background: '#fef2f2', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', fontSize: 10.5 },
+  retentionNotice: {
+    marginBottom: 14,
+    border: '1px solid #f59e0b',
+    borderRadius: 10,
+    background: '#fffbeb',
+    padding: '10px 11px',
+    color: '#78350f',
+    fontSize: 11.5,
+    lineHeight: 1.5,
+  },
+  retentionTitle: {
+    fontSize: 12.5,
+    fontWeight: 700,
+    color: '#92400e',
+    marginBottom: 4,
+  },
+  retentionPath: {
+    display: 'block',
+    margin: '4px 0',
+    padding: '4px 6px',
+    borderRadius: 6,
+    background: 'rgba(255, 255, 255, 0.7)',
+    color: '#78350f',
+    fontFamily: 'monospace',
+    fontSize: 10.5,
+    overflowWrap: 'anywhere',
+  },
+  retentionButton: {
+    marginTop: 6,
+    border: '1px solid #d97706',
+    background: '#fff',
+    color: '#92400e',
+    borderRadius: 7,
+    padding: '4px 9px',
+    fontSize: 11.5,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: FONT,
+  },
   toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
   toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
   toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
@@ -373,6 +419,39 @@ const MODE_OPTIONS = [
   { id: 'everyday_support', label: 'Everyday Support' },
   { id: 'student_learning', label: 'Student Learning' },
 ];
+
+export function TrainingScreenshotRetentionNotice({
+  info,
+  onOpenFolder,
+}: {
+  info: TrainingScreenshotRetentionInfo | null;
+  onOpenFolder: (path: string) => void;
+}) {
+  if (!info?.enabled) return null;
+  return (
+    <div style={S.retentionNotice} role="note">
+      <div style={S.retentionTitle}>Screenshots are being retained</div>
+      The developer mode keeps local copies of screenshots, which can
+      consume significant disk space. To turn this off, add{' '}
+      <strong>COLLECT_TRAINING_SCREENSHOTS=0</strong> to:
+      <code style={S.retentionPath}>{info.configurationPath}</code>
+      Then restart Coco. Existing images are stored under:
+      <code style={S.retentionPath}>{info.screenshotPattern}</code>
+      Turning retention off does not remove older copies. Delete the
+      <strong> observer_screenshots</strong> folders when Coco is not running a
+      personalization update if you want to reclaim that space.
+      <div>
+        <button
+          type="button"
+          style={S.retentionButton}
+          onClick={() => onOpenFolder(info.recordsRoot)}
+        >
+          Open local records folder
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function TutorMessage({ text }: { text: string }) {
   const g = parseGuidance(text);
@@ -605,6 +684,8 @@ export default function SessionChatView() {
   const [memoryDraft, setMemoryDraft] = useState('');
   const [memoryLoaded, setMemoryLoaded] = useState('');
   const [memoryFlash, setMemoryFlash] = useState(false);
+  const [trainingScreenshotRetention, setTrainingScreenshotRetention] =
+    useState<TrainingScreenshotRetentionInfo | null>(null);
   // Current thumbs vote per tutor message, keyed by message id. Users may
   // replace it by choosing the opposite rating.
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
@@ -1194,6 +1275,12 @@ export default function SessionChatView() {
         setMemoryLoaded(mem);
       })
       .catch(() => {});
+    window.electron?.ipcRenderer
+      .invoke('get-training-screenshot-retention')
+      .then((info: TrainingScreenshotRetentionInfo) => {
+        setTrainingScreenshotRetention(info);
+      })
+      .catch(() => setTrainingScreenshotRetention(null));
   }, [showSettings]);
 
   useEffect(() => {
@@ -1580,6 +1667,14 @@ export default function SessionChatView() {
 
       {showSettings && (
         <div style={S.settings}>
+          <TrainingScreenshotRetentionNotice
+            info={trainingScreenshotRetention}
+            onOpenFolder={(folderPath) =>
+              window.electron?.ipcRenderer.sendMessage(
+                'shell-show-item-in-finder',
+                folderPath,
+              )}
+          />
           <div style={S.groupLabel}>Health</div>
           <div style={S.helpText}>
             Checks Coco's local services and sends short real requests to the

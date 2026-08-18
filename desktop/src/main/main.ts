@@ -27,6 +27,8 @@ import {
   dialog,
   screen,
   powerMonitor,
+  desktopCapturer,
+  systemPreferences,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
@@ -101,6 +103,11 @@ if (app.isPackaged) {
   // Support/coco/.env). Bundling it via extraResources would ship the
   // builder's API keys inside every distributed app bundle.
   dotenv.config({ path: path.join(app.getPath('userData'), '.env') });
+  // This experimental packaged build retains personalization screenshots by
+  // default. An explicit value in the user's .env (especially `0`) wins.
+  if (!(process.env.COLLECT_TRAINING_SCREENSHOTS ?? '').trim()) {
+    process.env.COLLECT_TRAINING_SCREENSHOTS = '1';
+  }
 } else {
   // Dev: cwd is the desktop app dir, but the canonical .env (with GEMINI_API_KEY,
   // ANTHROPIC_API_KEY, etc.) lives at the repo root, one level up.
@@ -109,6 +116,80 @@ if (app.isPackaged) {
   dotenv.config({ path: path.resolve(process.cwd(), '../.env') });
   dotenv.config();
 }
+
+const trainingScreenshotRetentionEnabled = () =>
+  ['1', 'true', 'yes', 'on'].includes(
+    (process.env.COLLECT_TRAINING_SCREENSHOTS ?? '').trim().toLowerCase(),
+  );
+
+const MAC_SCREEN_RECORDING_SETTINGS =
+  'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
+
+/**
+ * Ask for the macOS permissions used by the sensing service before it begins
+ * observing. Screen Recording has no `askForMediaAccess` API in Electron, so a
+ * one-pixel, in-memory source lookup is used to trigger macOS's native consent
+ * prompt; no image is retained. Accessibility has its own native prompt API.
+ *
+ * macOS only shows a native Screen Recording prompt once. When the user has
+ * already denied it, take them directly to the relevant System Settings pane.
+ */
+const requestRequiredMacPermissions = async (): Promise<void> => {
+  if (process.platform !== 'darwin' || !app.isPackaged) return;
+
+  let screenRecordingStatus = systemPreferences.getMediaAccessStatus('screen');
+  const accessibilityGranted =
+    systemPreferences.isTrustedAccessibilityClient(false);
+
+  log.info(
+    `[Permissions] Accessibility=${accessibilityGranted ? 'granted' : 'missing'} ` +
+      `ScreenRecording=${screenRecordingStatus}`,
+  );
+
+  if (screenRecordingStatus === 'not-determined') {
+    log.info('[Permissions] Requesting Screen Recording access.');
+    try {
+      await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 1, height: 1 },
+      });
+    } catch (error) {
+      log.warn('[Permissions] Screen Recording request failed:', error);
+    }
+    screenRecordingStatus = systemPreferences.getMediaAccessStatus('screen');
+    log.info(
+      `[Permissions] Screen Recording after request=${screenRecordingStatus}`,
+    );
+  }
+
+  if (screenRecordingStatus !== 'granted') {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'Allow Coco to see your screen',
+      message: 'Coco needs Screen Recording access',
+      detail:
+        'Coco uses this access to understand what is on screen and provide proactive support. ' +
+        'Enable Coco under Privacy & Security → Screen Recording, then quit and reopen Coco.',
+      buttons: ['Open System Settings', 'Not Now'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) {
+      await shell.openExternal(MAC_SCREEN_RECORDING_SETTINGS);
+      // Do not stack the Accessibility prompt on top of System Settings. It
+      // will be checked again the next time Coco launches.
+      return;
+    }
+  }
+
+  if (!accessibilityGranted) {
+    log.warn('[Permissions] Requesting Accessibility access.');
+    // Passing true asks macOS to show its native prompt, whose action opens
+    // Privacy & Security → Accessibility. The permission takes effect after
+    // Coco is reopened, when the sensing-server input listeners are recreated.
+    systemPreferences.isTrustedAccessibilityClient(true);
+  }
+};
 
 // Create default workspace directory if it doesn't exist
 const ensureDefaultWorkspaceExists = () => {
@@ -1606,8 +1687,32 @@ ipcMain.on('toggle-float-window', () => {
   chatWindow.webContents.send('float-window-state', { isFloat: isFloatMode });
 });
 
-ipcMain.on('shell-show-item-in-finder', (event, fullPath) => {
+ipcMain.on('shell-show-item-in-finder', (_event, fullPath) => {
+  try {
+    if (fs.statSync(fullPath).isDirectory()) {
+      void shell.openPath(fullPath);
+      return;
+    }
+  } catch {
+    // Fall through so Finder/Explorer can reveal the nearest valid location.
+  }
   shell.showItemInFolder(fullPath);
+});
+
+ipcMain.removeHandler('get-training-screenshot-retention');
+ipcMain.handle('get-training-screenshot-retention', () => {
+  const userData = app.getPath('userData');
+  const recordsRoot = path.join(userData, 'coco-records');
+  return {
+    enabled: trainingScreenshotRetentionEnabled(),
+    recordsRoot,
+    screenshotPattern: path.join(
+      recordsRoot,
+      'session_*',
+      'observer_screenshots',
+    ),
+    configurationPath: path.join(userData, '.env'),
+  };
 });
 
 // ── Dynamic avatar-window resize ──────────────────────────────────────────────
@@ -2879,9 +2984,7 @@ const startObserver = () => {
       model: observerModel,
       packagedExecutable,
       providerEnv: runtime?.sensingEnv,
-      collectTrainingScreenshots: ['1', 'true', 'yes'].includes(
-        (process.env.COLLECT_TRAINING_SCREENSHOTS ?? '').toLowerCase(),
-      ),
+      collectTrainingScreenshots: trainingScreenshotRetentionEnabled(),
       getIdleSeconds: () => powerMonitor.getSystemIdleTime(),
       onJobComplete: (job) => {
         if (job === 'evolve') {
@@ -3043,6 +3146,7 @@ app
   .whenReady()
   .then(async () => {
     await configureLocalServicePorts();
+    await requestRequiredMacPermissions();
     initializeDailyMemoryDraftService();
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');

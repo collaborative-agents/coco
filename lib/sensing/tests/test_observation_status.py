@@ -208,6 +208,33 @@ async def test_pause_yes_support_reaches_proactive_tutor():
     processor.broadcast_pause.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_detected_actions_trigger_snapshot_observation_with_cooldown(
+    tmp_path,
+):
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="",
+        observer_model="provider/observer",
+        action_snapshot_cooldown_seconds=20,
+    )
+    processor._handle_observation = AsyncMock(
+        return_value=("observation", "observer input", {})
+    )
+    processor._cleanup_consumed_screenshots = MagicMock()
+
+    await processor._handle_snapshot(str(tmp_path / "first.jpg"), "100")
+    await processor._handle_snapshot(str(tmp_path / "second.jpg"), "105")
+    processor._last_snapshot_trigger_at -= 21
+    await processor._handle_snapshot(str(tmp_path / "third.jpg"), "121")
+
+    assert processor._handle_observation.await_count == 2
+    processor._cleanup_consumed_screenshots.assert_any_call(
+        [str(tmp_path / "second.jpg")]
+    )
+
+
 def test_human_mistake_maps_to_mistake_status():
     observation = json.dumps(
         {

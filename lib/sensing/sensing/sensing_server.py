@@ -710,8 +710,12 @@ async def _observer_ticker(interval_seconds: float) -> None:
             image_path, timestamp = await screen._inspect()
             if not image_path:
                 continue
-            ai_proc._add_snapshot(image_path, timestamp)
-            await ai_proc._handle_observation(type="snapshot")
+            await ai_proc.observe_snapshot(
+                image_path=image_path,
+                timestamp=timestamp,
+                source="timer",
+                min_interval_seconds=interval_seconds,
+            )
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -934,6 +938,7 @@ async def main_async(
             ai_tutor_output_log=ai_tutor_output_log,
             observer_model=observer_model,
             memory_engine=memory_engine,
+            action_snapshot_cooldown_seconds=check_interval,
             # node_uuid and redis_url are configured later via POST /session
         )
         processors.append(ai_processor)
