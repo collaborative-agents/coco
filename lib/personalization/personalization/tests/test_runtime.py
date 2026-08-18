@@ -81,8 +81,27 @@ def test_evolve_deletes_period_images_only_after_success(tmp_path, monkeypatch):
             )
         )
     records = SessionRecords(path=str(records_root), observations=observations)
+    labeled.append(
+        LabeledMoment(
+            moment_id="moment-missing-image",
+            observation_id="obs-missing-image",
+            session_id="s1",
+            ts=9.0,
+            need_support="yes",
+            label_confidence=1.0,
+            label_sources=["test"],
+            label_rationale="test",
+            observer_input="input",
+            observer_output='{"need_support":"yes"}',
+            image_paths=[str(records_root / "not-saved.png")],
+        )
+    )
     monkeypatch.setattr(runtime, "load_records", lambda _root: [records])
-    monkeypatch.setattr(runtime, "label_records", lambda _records: labeled)
+    monkeypatch.setattr(
+        runtime,
+        "label_records",
+        lambda _records, **_kwargs: labeled,
+    )
 
     class FakeLearner:
         def __init__(self, **_kwargs):
@@ -126,7 +145,12 @@ def test_evolve_deletes_period_images_only_after_success(tmp_path, monkeypatch):
         collect_training_screenshots=False,
     )
 
-    assert result == {"status": "complete", "moments": 8, "deleted": 9}
+    assert result == {
+        "status": "complete",
+        "moments": 8,
+        "deleted": 9,
+        "skipped_missing_images": 1,
+    }
     assert not any(records_root.glob("*.png"))
     assert outside.is_file()
     draft_paths = list(
@@ -140,3 +164,79 @@ def test_evolve_deletes_period_images_only_after_success(tmp_path, monkeypatch):
     assert list(draft["metrics"]["examples_by_preference_id"].values()) == [
         ["Offer help with repeated report formatting."]
     ]
+
+
+def test_evolve_repairs_checkpoint_with_missing_images(tmp_path, monkeypatch):
+    state_root = tmp_path / "state"
+    run_dir = state_root / "runs" / "period-9"
+    snapshot_path = run_dir / "labeled_moments.jsonl"
+    moments = []
+    for index in range(9):
+        image = tmp_path / f"frame-{index}.png"
+        if index < 8:
+            image.write_bytes(b"png")
+        moments.append(
+            LabeledMoment(
+                moment_id=f"moment-{index}",
+                observation_id=f"obs-{index}",
+                session_id="s1",
+                ts=float(index + 1),
+                need_support="no",
+                label_confidence=1.0,
+                label_sources=["test"],
+                label_rationale="test",
+                observer_input="input",
+                observer_output='{"need_support":"no"}',
+                image_paths=[str(image)],
+            )
+        )
+    runtime.write_labeled_moments(snapshot_path, moments)
+    (run_dir / "resume_state.json").write_text("{}")
+    state_root.mkdir(parents=True, exist_ok=True)
+    (state_root / "evolve_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "active_run": {
+                    "run_id": "period-9",
+                    "status": "running",
+                    "period_start": 1.0,
+                    "period_end": 9.0,
+                    "snapshot_path": str(snapshot_path),
+                    "run_dir": str(run_dir),
+                    "images": [str(image) for image in tmp_path.glob("frame-*.png")],
+                }
+            }
+        )
+    )
+
+    class FakeLearner:
+        def __init__(self, **_kwargs):
+            self.memory = SectionedMemory()
+
+        def learn(self, training_moments, *, out_dir, resume):
+            assert len(training_moments) == 8
+            assert resume is False
+            (out_dir / "memory_state.json").write_text(
+                json.dumps(self.memory.to_json())
+            )
+            return self.memory
+
+    monkeypatch.setattr(runtime, "SelfEvolvingLearner", FakeLearner)
+
+    result = runtime.process_evolve_step(
+        tmp_path / "records",
+        state_root,
+        model="model",
+        memory_root=tmp_path / "memory",
+        collect_training_screenshots=True,
+    )
+
+    assert result == {
+        "status": "complete",
+        "moments": 8,
+        "deleted": 0,
+        "skipped_missing_images": 1,
+    }
+    repaired = runtime.read_labeled_moments(snapshot_path)
+    assert len(repaired) == 8
+    assert all(moment.image_paths for moment in repaired)

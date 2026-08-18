@@ -84,6 +84,8 @@ export interface PersonalizationSchedulerOptions {
   revisionIdleSeconds?: number;
   evolveIdleSeconds?: number;
   missedObservationInterval?: number;
+  /** Dedicated subprocess log, alongside the sensing and tutor service logs. */
+  logPath?: string;
   onJobComplete?: (job: PersonalizationJob) => void;
 }
 
@@ -111,6 +113,8 @@ export class PersonalizationScheduler {
 
   private stopped = false;
 
+  private dedicatedLogReady = false;
+
   private readonly nextAllowedAt: Record<PersonalizationJob, number> = {
     signals: 0,
     revise: 0,
@@ -126,6 +130,7 @@ export class PersonalizationScheduler {
   start() {
     if (this.timer) return;
     this.stopped = false;
+    this.writeDedicatedLog('Personalization scheduler started');
     this.timer = setInterval(() => this.tick(), 15_000);
     this.tick();
   }
@@ -307,6 +312,9 @@ export class PersonalizationScheduler {
     const command = useNice ? 'nice' : base.command;
     const args = useNice ? ['-n', '15', base.command, ...base.args] : base.args;
     log.info(`[Personalization] starting bounded ${job} job`);
+    this.writeDedicatedLog(
+      `Starting bounded ${job} job\nCommand: ${command} ${args.join(' ')}`,
+    );
     const child = spawn(command, args, {
       cwd: this.options.projectRoot,
       detached: process.platform !== 'win32',
@@ -326,14 +334,19 @@ export class PersonalizationScheduler {
       if (message) {
         this.activeOutput = message;
         log.info(`[Personalization:${job}] ${message}`);
+        this.writeDedicatedLog(`[${job}:stdout]\n${message}`);
       }
     });
     child.stderr?.on('data', (chunk) => {
       const message = String(chunk).trim();
-      if (message) log.warn(`[Personalization:${job}] ${message}`);
+      if (message) {
+        log.warn(`[Personalization:${job}] ${message}`);
+        this.writeDedicatedLog(`[${job}:stderr]\n${message}`);
+      }
     });
     child.on('error', (error) => {
       log.warn(`[Personalization] ${job} failed to start`, error);
+      this.writeDedicatedLog(`[${job}:spawn-error] ${error.stack ?? error}`);
     });
     child.on('exit', (code, signal) => {
       if (this.active === child) this.active = null;
@@ -360,6 +373,9 @@ export class PersonalizationScheduler {
       }
       this.nextAllowedAt[job] = Date.now() + cooldownMs;
       log.info(`[Personalization] ${job} exited code=${code} signal=${signal}`);
+      this.writeDedicatedLog(
+        `${job} exited code=${String(code)} signal=${String(signal)}`,
+      );
       if (code === 0) this.options.onJobComplete?.(job);
       if (!this.stopped) setTimeout(() => this.tick(), 1_000);
     });
@@ -369,6 +385,7 @@ export class PersonalizationScheduler {
     const child = this.active;
     if (!child?.pid) return;
     log.info(`[Personalization] preempting active job: ${reason}`);
+    this.writeDedicatedLog(`Preempting active job: ${reason}`);
     try {
       if (process.platform === 'win32') child.kill('SIGTERM');
       else process.kill(-child.pid, 'SIGTERM');
@@ -385,5 +402,31 @@ export class PersonalizationScheduler {
         // The process exited between the liveness check and signal.
       }
     }, 1_000);
+  }
+
+  private writeDedicatedLog(message: string) {
+    const logPath = this.options.logPath;
+    if (!logPath) return;
+    try {
+      if (!this.dedicatedLogReady) {
+        fs.mkdirSync(path.dirname(logPath), { recursive: true });
+        if (
+          fs.existsSync(logPath) &&
+          fs.statSync(logPath).size > 5 * 1024 * 1024
+        ) {
+          const oldPath = `${logPath}.old`;
+          if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+          fs.renameSync(logPath, oldPath);
+        }
+        this.dedicatedLogReady = true;
+      }
+      fs.appendFileSync(
+        logPath,
+        `[${new Date().toISOString()}] ${message.trim()}\n`,
+        'utf8',
+      );
+    } catch (error) {
+      log.warn('[Personalization] failed to write dedicated log', error);
+    }
   }
 }

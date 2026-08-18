@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -156,6 +157,28 @@ def _safe_delete_images(paths: list[str], records_root: Path) -> int:
     return deleted
 
 
+def _with_saved_images(
+    moments: list,
+) -> tuple[list, int, bool]:
+    """Drop image-less samples and prune stale paths from retained samples."""
+    kept = []
+    skipped = 0
+    changed = False
+    for moment in moments:
+        image_paths = [
+            path for path in moment.image_paths if Path(path).expanduser().is_file()
+        ]
+        if not image_paths:
+            skipped += 1
+            changed = True
+            continue
+        if image_paths != moment.image_paths:
+            changed = True
+            moment = replace(moment, image_paths=image_paths)
+        kept.append(moment)
+    return kept, skipped, changed
+
+
 def process_evolve_step(
     records_root: str | Path,
     state_root: str | Path,
@@ -172,6 +195,8 @@ def process_evolve_step(
     runtime_path = state_dir / "evolve_checkpoint.json"
     runtime_state = _read_json(runtime_path, {})
     active = runtime_state.get("active_run")
+    skipped_missing_images = 0
+    restart_after_image_filter = False
 
     if not isinstance(active, dict) or active.get("status") == "complete":
         completed_until = float(runtime_state.get("completed_until", 0.0) or 0.0)
@@ -182,14 +207,19 @@ def process_evolve_step(
         }
         labeled = [
             revised_by_id.get(moment.moment_id, moment)
-            for moment in label_records(records)
+            for moment in label_records(records, require_saved_images=True)
         ]
+        labeled, newly_skipped, _ = _with_saved_images(labeled)
+        skipped_missing_images += newly_skipped
         labeled = sorted(
             (moment for moment in labeled if moment.ts > completed_until),
             key=lambda moment: moment.ts,
         )[:max_moments]
         if len(labeled) < min_moments:
-            return {"status": "no_work", "moments": len(labeled)}
+            result = {"status": "no_work", "moments": len(labeled)}
+            if skipped_missing_images:
+                result["skipped_missing_images"] = skipped_missing_images
+            return result
         period_end = max(moment.ts for moment in labeled)
         run_id = f"period-{int(period_end)}"
         run_dir = state_dir / "runs" / run_id
@@ -225,6 +255,39 @@ def process_evolve_step(
     run_dir = Path(str(active["run_dir"]))
     snapshot_path = Path(str(active["snapshot_path"]))
     labeled = read_labeled_moments(snapshot_path)
+    labeled, newly_skipped, snapshot_changed = _with_saved_images(labeled)
+    skipped_missing_images += newly_skipped
+    if snapshot_changed:
+        if len(labeled) < min_moments:
+            runtime_state["last_skipped_run"] = {
+                **active,
+                "status": "insufficient_saved_images",
+                "skipped_missing_images": skipped_missing_images,
+                "abandoned_at": time.time(),
+            }
+            runtime_state.pop("active_run", None)
+            _atomic_json(runtime_path, runtime_state)
+            return {
+                "status": "no_work",
+                "moments": len(labeled),
+                "skipped_missing_images": skipped_missing_images,
+            }
+        write_labeled_moments(snapshot_path, labeled)
+        active["period_start"] = min(moment.ts for moment in labeled)
+        active["period_end"] = max(moment.ts for moment in labeled)
+        active["images"] = sorted(
+            {
+                path
+                for path in [
+                    *active.get("images", []),
+                    *(path for moment in labeled for path in moment.image_paths),
+                ]
+                if Path(path).expanduser().is_file()
+            }
+        )
+        active["skipped_missing_images"] = skipped_missing_images
+        _atomic_json(runtime_path, runtime_state)
+        restart_after_image_filter = True
     learner = SelfEvolvingLearner(
         prediction_model=model,
         evolution_model=model,
@@ -238,11 +301,12 @@ def process_evolve_step(
     )
     resume_path = run_dir / "resume_state.json"
     previous_state = runtime_state.get("last_memory_state")
-    if not resume_path.exists() and isinstance(previous_state, str):
+    resume = resume_path.exists() and not restart_after_image_filter
+    if not resume and isinstance(previous_state, str):
         previous = _read_json(Path(previous_state), None)
         if isinstance(previous, dict):
             learner.memory = SectionedMemory.from_json(previous)
-    learner.learn(labeled, out_dir=run_dir, resume=resume_path.exists())
+    learner.learn(labeled, out_dir=run_dir, resume=resume)
 
     store = MemoryStore(memory_root)
     learned_preferences = learner.memory.to_learned_preferences(status="draft")
@@ -289,7 +353,10 @@ def process_evolve_step(
         }
     )
     _atomic_json(runtime_path, runtime_state)
-    return {"status": "complete", "moments": len(labeled), "deleted": deleted}
+    result = {"status": "complete", "moments": len(labeled), "deleted": deleted}
+    if skipped_missing_images:
+        result["skipped_missing_images"] = skipped_missing_images
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:

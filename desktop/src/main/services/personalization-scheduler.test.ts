@@ -66,4 +66,29 @@ describe('PersonalizationScheduler status', () => {
       }),
     );
   });
+
+  it('writes raw multiline output to the dedicated personalization log', () => {
+    const logPath = path.join(root, 'logs', 'personalization.log');
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot: path.join(root, 'personalization'),
+      memoryRoot: root,
+      model: 'provider/model',
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+      logPath,
+    });
+
+    const logWriter = scheduler as unknown as {
+      writeDedicatedLog: (message: string) => void;
+    };
+    logWriter.writeDedicatedLog(
+      "[evolve:stderr]\nTraceback line\nFailed to execute script 'runtime'",
+    );
+
+    expect(fs.readFileSync(logPath, 'utf8')).toContain(
+      "[evolve:stderr]\nTraceback line\nFailed to execute script 'runtime'",
+    );
+  });
 });
