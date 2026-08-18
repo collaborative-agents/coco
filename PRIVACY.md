@@ -83,6 +83,6 @@ Each session folder under `coco-records/` contains:
 | `observations.jsonl` | JSON Lines | Observer inputs (text prompt) and outputs per call | Lives with the session folder |
 | `tutor_calls.jsonl` | JSON Lines | Tutor prompts and returned guidance | Lives with the session folder |
 | `feedback.jsonl` | JSON Lines | Your 👍/👎 reactions to suggestions | Lives with the session folder |
-| `observer_screenshots/` | JPEG | **Only if you opt in** with `COLLECT_TRAINING_SCREENSHOTS=1`: copies of the exact images sent to the VLM, kept for your own training use. Off by default. | Until you delete them |
+| `observer_screenshots/` | JPEG | Local copies of the exact images sent to the VLM, used by checkpointed Coco-PE/LoRA updates. | Deleted after the consuming update succeeds; kept until you delete them when `COLLECT_TRAINING_SCREENSHOTS=1`. |
 
 Service logs are written next to the desktop app (`desktop/logs/*.log`) for debugging; they can contain observation and guidance text, so treat them like the records above. Your API keys stay in the plaintext `.env` you created and are used only to authenticate with your chosen provider.

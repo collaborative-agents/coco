@@ -43,11 +43,12 @@ class TutorSystem:
         )
 
         self.problem_statement: str = ""
-        # Long-term personalized context for worker/everyday scenarios, rendered as
-        # the <memory> block (replaces <problem_statement> for those scenarios).
-        # User-editable and persisted to disk so it carries across sessions and
-        # restarts (see _memory_path / set_memory).
-        self.memory: str = self._load_memory()
+        # Keep user-authored and model-evolved memory as separate persisted
+        # layers. ``memory`` is their composed inference view; Settings only
+        # reads and writes ``user_memory``.
+        self.user_memory: str = self._load_user_memory()
+        self.evolved_memory: str = self._load_evolved_memory()
+        self.memory: str = self._compose_memory(self.user_memory, self.evolved_memory)
         self.conversation_history: list[str] = []
         # Provider-ready chat history for everyday support. Unlike
         # conversation_history (the legacy API/debug representation), this
@@ -320,23 +321,65 @@ class TutorSystem:
         root = Path(base) if base else (Path.home() / ".coco")
         return root / "coco-memory.txt"
 
+    @staticmethod
+    def _evolved_memory_path() -> Path:
+        base = os.environ.get("COCO_USER_DATA_DIR")
+        root = Path(base) if base else (Path.home() / ".coco")
+        return root / "personalization" / "evolved-memory.md"
+
     @classmethod
-    def _load_memory(cls) -> str:
+    def _load_user_memory(cls) -> str:
         try:
             return cls._memory_path().read_text(encoding="utf-8")
         except Exception:
             return ""
 
+    @classmethod
+    def _load_evolved_memory(cls) -> str:
+        try:
+            return cls._evolved_memory_path().read_text(encoding="utf-8")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _compose_memory(user_memory: str, evolved_memory: str) -> str:
+        parts = [user_memory.strip()] if user_memory.strip() else []
+        if evolved_memory.strip():
+            parts.append("## Model-evolved memory\n" + evolved_memory.strip())
+        return "\n\n".join(parts)
+
+    @classmethod
+    def _load_memory(cls) -> str:
+        return cls._compose_memory(cls._load_user_memory(), cls._load_evolved_memory())
+
     def set_memory(self, text: str) -> None:
-        """Update the long-term memory and persist it to disk."""
-        self.memory = text or ""
+        """Update only user-authored memory and rebuild inference context."""
+        self.user_memory = text or ""
+        self.memory = self._compose_memory(self.user_memory, self.evolved_memory)
         try:
             path = self._memory_path()
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(self.memory, encoding="utf-8")
-            logger.info(f"[MEMORY] updated ({len(self.memory)} chars) → {path}")
+            path.write_text(self.user_memory, encoding="utf-8")
+            logger.info(
+                f"[MEMORY] user layer updated ({len(self.user_memory)} chars) → {path}"
+            )
         except Exception as e:
             logger.warning(f"[MEMORY] failed to persist: {e}")
+
+    def set_evolved_memory(self, text: str) -> None:
+        """Update only model-evolved memory and rebuild inference context."""
+        self.evolved_memory = text or ""
+        self.memory = self._compose_memory(self.user_memory, self.evolved_memory)
+        try:
+            path = self._evolved_memory_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(self.evolved_memory, encoding="utf-8")
+            logger.info(
+                "[MEMORY] evolved layer updated "
+                f"({len(self.evolved_memory)} chars) → {path}"
+            )
+        except Exception as e:
+            logger.warning(f"[MEMORY] failed to persist evolved layer: {e}")
 
     def handle_problem_statement(self, text: str) -> None:
         logger.info(f"[PROBLEM STATEMENT] {text}")

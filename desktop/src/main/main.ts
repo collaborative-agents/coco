@@ -2654,16 +2654,18 @@ ipcMain.handle(
       return { success: false, error: 'Memory update is not available.' };
     }
     try {
-      const { memory, draft } = dailyMemoryDraftService.approve(draftId);
+      const { memory: evolvedMemory, draft } =
+        dailyMemoryDraftService.approve(draftId);
       const tutorPort = process.env.TUTOR_PORT || '8081';
       try {
         await axios.post(
-          `http://127.0.0.1:${tutorPort}/context/memory`,
-          { memory },
+          `http://127.0.0.1:${tutorPort}/context/evolved_memory`,
+          { memory: evolvedMemory },
           { timeout: 8000 },
         );
       } catch (err) {
-        // The disk copy is authoritative and is reapplied when the tutor starts.
+        // The separate evolved-memory file is authoritative and is loaded when
+        // the tutor starts.
         log.warn(`[Memory] daily update live apply failed: ${(err as Error).message}`);
       }
       log.info(`[Memory] approved daily personalization draft ${draft.draftId}`);

@@ -2,8 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 const REVIEW_STATE_FILE = 'daily_memory_review.json';
-const LEARNED_START = '<!-- coco-personalization:learned:start -->';
-const LEARNED_END = '<!-- coco-personalization:learned:end -->';
+const EVOLVED_MEMORY_FILE = 'evolved-memory.md';
 
 interface DraftBullet {
   id?: string;
@@ -135,7 +134,7 @@ function normalizeDraft(raw: DraftFile): DailyMemoryDraft | null {
   };
 }
 
-function renderLearnedMemory(draft: DailyMemoryDraft): string {
+export function renderEvolvedMemory(draft: DailyMemoryDraft): string {
   const sectionNames: Record<string, string> = {
     when_to_support: 'When to proactively support',
     when_to_stay_silent: 'When to stay silent',
@@ -163,35 +162,26 @@ function renderLearnedMemory(draft: DailyMemoryDraft): string {
       );
       draft.bullets
         .filter((item) => item.section === section)
-        .forEach((bullet) => output.push(`- ${bullet.content}`));
+        .forEach((bullet) => {
+          output.push(`- ${bullet.content}`);
+          if (bullet.examples.length > 0) {
+            output.push('  - Supporting examples:');
+            bullet.examples.forEach((example) =>
+              output.push(`    - ${example}`),
+            );
+          }
+        });
       return output;
     },
-    [LEARNED_START, '## Coco learned preferences'],
+    ['## Coco learned preferences'],
   );
-  lines.push(LEARNED_END);
-  return lines.join('\n');
-}
-
-export function mergeLearnedMemory(
-  currentMemory: string,
-  draft: DailyMemoryDraft,
-): string {
-  const start = currentMemory.indexOf(LEARNED_START);
-  const end = currentMemory.indexOf(LEARNED_END);
-  let userMemory = currentMemory;
-  if (start >= 0 && end >= start) {
-    userMemory = `${currentMemory.slice(0, start)}${currentMemory.slice(
-      end + LEARNED_END.length,
-    )}`;
-  }
-  const prefix = userMemory.trimEnd();
-  return `${prefix}${prefix ? '\n\n' : ''}${renderLearnedMemory(draft)}\n`;
+  return `${lines.join('\n')}\n`;
 }
 
 export class DailyMemoryDraftService {
   private readonly draftsRoot: string;
 
-  private readonly memoryPath: string;
+  private readonly evolvedMemoryPath: string;
 
   private readonly reviewStatePath: string;
 
@@ -203,7 +193,10 @@ export class DailyMemoryDraftService {
     options: { fixtureStatePath?: string } = {},
   ) {
     this.draftsRoot = path.join(memoryRoot, 'memory_drafts');
-    this.memoryPath = path.join(memoryRoot, 'coco-memory.txt');
+    this.evolvedMemoryPath = path.join(
+      personalizationStateRoot,
+      EVOLVED_MEMORY_FILE,
+    );
     this.reviewStatePath = path.join(
       personalizationStateRoot,
       REVIEW_STATE_FILE,
@@ -240,17 +233,11 @@ export class DailyMemoryDraftService {
   } {
     const draft = this.readDrafts().find((item) => item.draftId === draftId);
     if (!draft) throw new Error('Memory draft no longer exists.');
-    let currentMemory = '';
-    try {
-      currentMemory = fs.readFileSync(this.memoryPath, 'utf8');
-    } catch {
-      // First approved memory update creates the file.
-    }
-    const memory = mergeLearnedMemory(currentMemory, draft);
-    fs.mkdirSync(path.dirname(this.memoryPath), { recursive: true });
-    const temporary = `${this.memoryPath}.tmp`;
+    const memory = renderEvolvedMemory(draft);
+    fs.mkdirSync(path.dirname(this.evolvedMemoryPath), { recursive: true });
+    const temporary = `${this.evolvedMemoryPath}.tmp`;
     fs.writeFileSync(temporary, memory, 'utf8');
-    fs.renameSync(temporary, this.memoryPath);
+    fs.renameSync(temporary, this.evolvedMemoryPath);
 
     const state = readJson<ReviewState>(this.reviewStatePath, {});
     state.approved = {

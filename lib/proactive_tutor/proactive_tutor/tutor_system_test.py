@@ -58,6 +58,28 @@ def test_handle_problem_statement():
     assert ts.problem_statement == "Solve the equation: 2x + 5 = 13"
 
 
+def test_user_and_evolved_memory_are_persisted_as_separate_layers(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("COCO_USER_DATA_DIR", str(tmp_path))
+    ts = _make_tutor_system()
+
+    ts.set_memory("User-written preference")
+    ts.set_evolved_memory("## When to stay silent\n- During routine edits")
+
+    assert (tmp_path / "coco-memory.txt").read_text() == "User-written preference"
+    assert (
+        tmp_path / "personalization" / "evolved-memory.md"
+    ).read_text() == "## When to stay silent\n- During routine edits"
+    assert "User-written preference" in ts.memory
+    assert "## Model-evolved memory" in ts.memory
+    assert "During routine edits" in ts.memory
+
+    restored = _make_tutor_system()
+    assert restored.user_memory == "User-written preference"
+    assert "During routine edits" in restored.memory
+
+
 def test_get_kargs():
     """get_kargs returns the expected context dict."""
     ts = _make_tutor_system()

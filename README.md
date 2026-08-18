@@ -80,7 +80,7 @@ Everything Coco stores about you (settings, activity history, session records) l
 - **Windows**: `%APPDATA%\coco` (e.g. `C:\Users\<you>\AppData\Roaming\coco`)
 - **Linux**: `$XDG_CONFIG_HOME/coco` or `~/.config/coco`
 
-Screenshots are deleted the moment the observer has read them, so nothing accumulates on disk. If you want to save the screenshots for potential training purposes, set `COLLECT_TRAINING_SCREENSHOTS=1` in `.env`, and they'll be copied into the records folder before deletion (disk-heavy — enable it deliberately).
+Observer screenshots are copied into the local records folder only until a successful checkpointed Coco-PE/LoRA update consumes that data period. Set `COLLECT_TRAINING_SCREENSHOTS=1` in `.env` to keep those training screenshots after personalization finishes (disk-heavy — enable it deliberately).
 
 ### VLM Calls
 

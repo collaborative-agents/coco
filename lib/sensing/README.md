@@ -39,7 +39,7 @@ CREATE TABLE observations (
   - Further splits the action stream into *segments** — runs of actions that share roughly the same on-screen state — so near-identical consecutive frames collapse into one observation instead of many. The segmentation is based on per-row mean squared error (MSE).
 - Screenshot association: Links before/after screenshots to merged actions
 - Time tracking: Measures time ranges and gaps between actions
-- Cleanup: Deletes processed observations from DB and screenshots from disk. Set `COLLECT_TRAINING_SCREENSHOTS=1` to copy screenshots into observer_screenshots/ before deletion instead — useful for training the observer but disk-heavy.
+- Cleanup: Deletes rolling capture files after observation. Exact observer inputs are copied into `observer_screenshots/` until a checkpointed personalization update consumes them. Set `COLLECT_TRAINING_SCREENSHOTS=1` to keep those copies afterward.
 - API-ready: Provides time-range queries for action retrieval
 
 

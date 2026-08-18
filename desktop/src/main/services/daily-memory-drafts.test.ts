@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import {
   DailyMemoryDraftService,
-  mergeLearnedMemory,
+  renderEvolvedMemory,
 } from './daily-memory-drafts';
 
 function writeDraft(
@@ -64,7 +64,7 @@ describe('DailyMemoryDraftService', () => {
     ).toBe('today');
   });
 
-  it('preserves user memory and replaces the previous learned block on approval', () => {
+  it('stores approved model memory separately from user-written memory', () => {
     const dayStart = new Date(2026, 7, 17).getTime() / 1000;
     writeDraft(root, 'first', dayStart - 120, 'Offer help with reports');
     const service = new DailyMemoryDraftService(root, stateRoot);
@@ -73,19 +73,27 @@ describe('DailyMemoryDraftService', () => {
     fs.writeFileSync(path.join(root, 'coco-memory.txt'), 'User-written note\n');
 
     const first = service.approve(draft!.draftId);
-    expect(first.memory).toContain('User-written note');
     expect(first.memory).toContain('Offer help with reports');
+    expect(first.memory).toContain('Supporting examples:');
+    expect(first.memory).toContain('Example for Offer help with reports');
+    expect(fs.readFileSync(path.join(root, 'coco-memory.txt'), 'utf8')).toBe(
+      'User-written note\n',
+    );
+    expect(
+      fs.readFileSync(
+        path.join(stateRoot, 'evolved-memory.md'),
+        'utf8',
+      ),
+    ).toBe(first.memory);
 
     const replacement = {
       ...draft!,
       draftId: 'replacement',
       bullets: [{ ...draft!.bullets[0], content: 'Stay quiet during reports' }],
     };
-    const merged = mergeLearnedMemory(first.memory, replacement);
-    expect(merged).toContain('User-written note');
-    expect(merged).toContain('Stay quiet during reports');
-    expect(merged).not.toContain('Offer help with reports');
-    expect(merged.match(/coco-personalization:learned:start/g)).toHaveLength(1);
+    const rendered = renderEvolvedMemory(replacement);
+    expect(rendered).toContain('Stay quiet during reports');
+    expect(rendered).not.toContain('\n- Offer help with reports');
     expect(
       service.claimForToday(new Date(2026, 7, 18, 9).getTime()),
     ).toBeNull();
@@ -134,5 +142,8 @@ describe('DailyMemoryDraftService', () => {
         ],
       }),
     ]);
+    expect(renderEvolvedMemory(draft!)).toContain(
+      'The user reviewed completed job logs without requesting help.',
+    );
   });
 });

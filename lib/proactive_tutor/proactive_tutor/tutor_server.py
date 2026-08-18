@@ -634,18 +634,35 @@ async def set_problem_statement(req: ProblemStatementRequest):
 
 @app.get("/context/memory", response_model=MemoryResponse)
 async def get_memory():
-    """Return the long-term personalized memory (for the UI to view/edit)."""
+    """Return only user-authored memory for the Settings editor."""
     if tutor is None:
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
-    return MemoryResponse(memory=tutor.memory)
+    return MemoryResponse(memory=tutor.user_memory)
 
 
 @app.post("/context/memory", response_model=StatusResponse)
 async def set_memory(req: MemoryRequest):
-    """Replace the long-term personalized memory and persist it to disk."""
+    """Replace user-authored memory and preserve model-evolved memory."""
     if tutor is None:
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     tutor.set_memory(req.memory)
+    return StatusResponse(status="ok")
+
+
+@app.get("/context/evolved_memory", response_model=MemoryResponse)
+async def get_evolved_memory():
+    """Return the separately persisted model-evolved memory layer."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    return MemoryResponse(memory=tutor.evolved_memory)
+
+
+@app.post("/context/evolved_memory", response_model=StatusResponse)
+async def set_evolved_memory(req: MemoryRequest):
+    """Replace model-evolved memory without changing user-authored memory."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    tutor.set_evolved_memory(req.memory)
     return StatusResponse(status="ok")
 
 
