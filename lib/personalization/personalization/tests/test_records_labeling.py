@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import personalization.signals.retrospective as retrospective
 import pytest
@@ -9,18 +10,95 @@ from personalization.labeling import (
     revise_label_disagreements,
 )
 from personalization.records import flatten_sessions, load_records
+from personalization.schemas import FeedbackEvent
 from personalization.signals import derive_short_window_signals
 from personalization.signals.missed_opportunities import (
     derive_missed_opportunity_signals,
 )
 from personalization.signals.user_feedback import (
     FEEDBACK_POLICIES,
+    derive_feedback_signals,
     feedback_to_short_window_signal,
 )
 
 
 def _append_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+
+@pytest.mark.parametrize("kind", ["shown", "engage", "need_help"])
+def test_navigation_feedback_is_not_a_personalization_signal(kind):
+    event = FeedbackEvent(
+        ts=1.0,
+        session_id="s1",
+        kind=kind,
+        surface="bubble",
+        observation_id="obs-1",
+    )
+
+    assert feedback_to_short_window_signal(event) is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "polarity"),
+    [("thumbs_up", "positive"), ("thumbs_down", "negative"), ("dismiss", "negative")],
+)
+def test_authoritative_feedback_polarity(kind, polarity):
+    event = FeedbackEvent(
+        ts=1.0,
+        session_id="s1",
+        kind=kind,
+        surface="bubble",
+        observation_id="obs-1",
+    )
+
+    assert feedback_to_short_window_signal(event).polarity == polarity
+
+
+def _feedback(kind, *, ts=1.0):
+    return FeedbackEvent(
+        ts=ts,
+        session_id="s1",
+        kind=kind,
+        surface="bubble",
+        observation_id="obs-1",
+    )
+
+
+def test_unrated_reveal_is_positive_feedback():
+    signals = derive_feedback_signals([_feedback("shown"), _feedback("engage", ts=2)])
+
+    assert [(signal.kind, signal.polarity) for signal in signals] == [
+        ("reveal", "positive")
+    ]
+
+
+def test_thumb_down_prevents_an_unrated_reveal_positive():
+    signals = derive_feedback_signals(
+        [_feedback("engage"), _feedback("thumbs_down", ts=2)]
+    )
+
+    assert [(signal.kind, signal.polarity) for signal in signals] == [
+        ("thumbs_down", "negative")
+    ]
+
+
+def test_closing_expanded_content_does_not_negate_a_reveal():
+    signals = derive_feedback_signals([_feedback("engage"), _feedback("dismiss", ts=2)])
+
+    assert [(signal.kind, signal.polarity) for signal in signals] == [
+        ("reveal", "positive")
+    ]
+
+
+def test_thumb_up_supplies_positive_without_duplicate_reveal():
+    signals = derive_feedback_signals(
+        [_feedback("engage"), _feedback("thumbs_up", ts=2)]
+    )
+
+    assert [(signal.kind, signal.polarity) for signal in signals] == [
+        ("thumbs_up", "positive")
+    ]
 
 
 def test_load_records_and_label_feedback(tmp_path):
@@ -58,7 +136,7 @@ def test_load_records_and_label_feedback(tmp_path):
             {
                 "ts": 2.0,
                 "session_id": "s1",
-                "kind": "engage",
+                "kind": "thumbs_up",
                 "surface": "bubble",
                 "observation_id": "obs-1",
                 "status": "inefficient",
@@ -76,16 +154,16 @@ def test_load_records_and_label_feedback(tmp_path):
     assert moments[0].retained_image_paths == [str(retained_image)]
 
     signals = derive_short_window_signals(records)
-    assert [(s.kind, s.polarity) for s in signals] == [("engage", "positive")]
-    assert feedback_to_short_window_signal(records.feedback[0]).kind == "engage"
+    assert [(s.kind, s.polarity) for s in signals] == [("thumbs_up", "positive")]
+    assert feedback_to_short_window_signal(records.feedback[0]).kind == "thumbs_up"
     label_signals = label_signals_for_moment(moments[0], signals)
-    assert label_signals[0].weight == FEEDBACK_POLICIES["engage"].label_weight
-    assert label_signals[0].confidence == FEEDBACK_POLICIES["engage"].confidence
+    assert label_signals[0].weight == FEEDBACK_POLICIES["thumbs_up"].label_weight
+    assert label_signals[0].confidence == FEEDBACK_POLICIES["thumbs_up"].confidence
 
     labeled = label_records(records)
     assert len(labeled) == 1
     assert labeled[0].need_support == "yes"
-    assert labeled[0].label_sources == ["feedback:engage"]
+    assert labeled[0].label_sources == ["feedback:thumbs_up"]
     assert labeled[0].target_suggestion == "Help me automate the lookup."
     image_required = label_records(records, require_saved_images=True)
     assert len(image_required) == 1
@@ -722,6 +800,72 @@ def test_retrospective_max_observations_chunks_without_downsampling(
     assert [row["chunk_index"] for row in trace_rows] == [1, 2, 3]
 
 
+def test_retrospective_default_character_budget_chunks_large_timelines(
+    tmp_path, monkeypatch
+):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    long_field = "detailed workflow context " * 40
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": f"obs-{index}",
+                "session_id": "s1",
+                "ts": float(index),
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": json.dumps(
+                    {
+                        "need_support": "no",
+                        "observation": long_field,
+                        "user_intent": long_field,
+                        "rationale": long_field,
+                    }
+                ),
+            }
+            for index in range(100)
+        ],
+    )
+    prompt_sizes = []
+
+    def fake_completion(**kwargs):
+        prompt_sizes.append(len(kwargs["system_prompt"]) + len(kwargs["user_prompt"]))
+        return json.dumps({"support_opportunities": []})
+
+    monkeypatch.setattr(retrospective, "_complete", fake_completion)
+
+    signals = retrospective.derive_retrospective_signals(
+        load_records(tmp_path),
+        model="fake/model",
+    )
+
+    assert signals == []
+    assert len(prompt_sizes) > 1
+    assert max(prompt_sizes) <= retrospective._DEFAULT_MAX_INPUT_CHARS
+
+
+def test_retrospective_reserves_full_structured_output_budget(monkeypatch):
+    captured = {}
+
+    def fake_chat_completion(_messages, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(content='{"support_opportunities":[]}'), {}
+
+    monkeypatch.setattr(retrospective, "chat_completion", fake_chat_completion)
+
+    output = retrospective._complete(
+        model="fake/model",
+        system_prompt="system",
+        user_prompt="user",
+        operation="test",
+    )
+
+    assert output == '{"support_opportunities":[]}'
+    assert captured["max_tokens"] == 8192
+
+
 def test_trigger_grounding_uses_evidence_from_all_chunks(tmp_path, monkeypatch):
     session = tmp_path / "session_1"
     session.mkdir()
@@ -1105,7 +1249,7 @@ def test_disagreement_model_revises_observation_and_intent(tmp_path, monkeypatch
             {
                 "ts": 11.0,
                 "session_id": "s1",
-                "kind": "engage",
+                "kind": "thumbs_up",
                 "surface": "bubble",
                 "observation_id": "obs-false-negative",
             },
@@ -1119,7 +1263,7 @@ def test_disagreement_model_revises_observation_and_intent(tmp_path, monkeypatch
             {
                 "ts": 31.0,
                 "session_id": "s3",
-                "kind": "engage",
+                "kind": "thumbs_up",
                 "surface": "bubble",
                 "observation_id": "obs-agreement",
             },
@@ -1209,7 +1353,7 @@ def test_disagreement_revision_limit_bounds_llm_calls(tmp_path, monkeypatch):
             {
                 "ts": float(index) + 0.1,
                 "session_id": f"s{index}",
-                "kind": "engage",
+                "kind": "thumbs_up",
                 "surface": "bubble",
                 "observation_id": f"obs-{index}",
             }
@@ -1295,7 +1439,7 @@ def test_disagreement_revision_without_limit_revises_all(tmp_path, monkeypatch):
             {
                 "ts": float(index) + 0.1,
                 "session_id": f"s{index}",
-                "kind": "engage",
+                "kind": "thumbs_up",
                 "surface": "bubble",
                 "observation_id": f"obs-{index}",
             }
@@ -1360,7 +1504,7 @@ def _write_single_disagreement(tmp_path):
             {
                 "ts": 1.1,
                 "session_id": "s1",
-                "kind": "engage",
+                "kind": "thumbs_up",
                 "surface": "bubble",
                 "observation_id": "obs-retry",
             }

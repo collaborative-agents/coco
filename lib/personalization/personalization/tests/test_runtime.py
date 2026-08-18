@@ -11,7 +11,18 @@ from personalization.schemas import (
     LabeledMoment,
     ObservationRecord,
     SessionRecords,
+    ShortWindowSignal,
 )
+
+
+def test_frozen_resource_tracker_command_is_recognized():
+    assert (
+        runtime._resource_tracker_fd(
+            ["from multiprocessing.resource_tracker import main;main(9)"]
+        )
+        == 9
+    )
+    assert runtime._resource_tracker_fd(["evolve"]) is None
 
 
 def test_signal_step_appends_feedback_once_and_checkpoints(tmp_path, monkeypatch):
@@ -24,6 +35,70 @@ def test_signal_step_appends_feedback_once_and_checkpoints(tmp_path, monkeypatch
                 kind="dismiss",
                 surface="bubble",
                 observation_id="obs-1",
+            ),
+            FeedbackEvent(
+                ts=11.0,
+                session_id="s1",
+                kind="thumbs_down",
+                surface="bubble",
+                observation_id="obs-2",
+            ),
+            FeedbackEvent(
+                ts=12.0,
+                session_id="s1",
+                kind="shown",
+                surface="bubble",
+                observation_id="obs-3",
+            ),
+            FeedbackEvent(
+                ts=13.0,
+                session_id="s1",
+                kind="engage",
+                surface="bubble",
+                observation_id="obs-3",
+            ),
+            FeedbackEvent(
+                ts=14.0,
+                session_id="s1",
+                kind="need_help",
+                surface="bubble",
+                observation_id="obs-4",
+            ),
+        ],
+    )
+    monkeypatch.setattr(runtime, "load_records", lambda _root: [records])
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    (state_root / "signals.jsonl").write_text(
+        json.dumps({"signal_id": "legacy-shown", "kind": "shown"}) + "\n"
+    )
+
+    first = runtime.process_signal_step("records", state_root)
+    second = runtime.process_signal_step("records", state_root)
+
+    assert first["new_signals"] == 3
+    assert first["removed_legacy_signals"] == 1
+    assert second["new_signals"] == 0
+    assert len((state_root / "signals.jsonl").read_text().splitlines()) == 3
+    checkpoint = json.loads((state_root / "signals_checkpoint.json").read_text())
+    assert checkpoint["feedback_event_count"] == 5
+    assert checkpoint["signal_type_counts"] == {
+        "dismiss": 1,
+        "reveal": 1,
+        "thumbs_down": 1,
+    }
+
+
+def test_signal_step_retracts_reveal_after_later_thumb_down(tmp_path, monkeypatch):
+    records = SessionRecords(
+        path="session",
+        feedback=[
+            FeedbackEvent(
+                ts=10.0,
+                session_id="s1",
+                kind="engage",
+                surface="bubble",
+                observation_id="obs-1",
             )
         ],
     )
@@ -31,13 +106,174 @@ def test_signal_step_appends_feedback_once_and_checkpoints(tmp_path, monkeypatch
     state_root = tmp_path / "state"
 
     first = runtime.process_signal_step("records", state_root)
+    records.feedback.append(
+        FeedbackEvent(
+            ts=11.0,
+            session_id="s1",
+            kind="thumbs_down",
+            surface="history",
+            observation_id="obs-1",
+        )
+    )
     second = runtime.process_signal_step("records", state_root)
 
+    rows = [
+        json.loads(line)
+        for line in (state_root / "signals.jsonl").read_text().splitlines()
+    ]
     assert first["new_signals"] == 1
-    assert second["new_signals"] == 0
-    assert len((state_root / "signals.jsonl").read_text().splitlines()) == 1
-    checkpoint = json.loads((state_root / "signals_checkpoint.json").read_text())
-    assert checkpoint["feedback_event_count"] == 1
+    assert second["new_signals"] == 1
+    assert second["removed_legacy_signals"] == 1
+    assert [(row["kind"], row["polarity"]) for row in rows] == [
+        ("thumbs_down", "negative")
+    ]
+
+
+def test_evolve_mines_retrospective_opportunities_when_idle(tmp_path, monkeypatch):
+    observations = [
+        ObservationRecord(
+            observation_id=f"obs-{index}",
+            session_id="s1",
+            ts=float(index),
+            type="snapshot",
+            model="model",
+            observer_input="input",
+            observer_output='{"need_support":"no"}',
+        )
+        for index in range(20)
+    ]
+    records = SessionRecords(path="session", observations=observations)
+    retrospective_signal = ShortWindowSignal(
+        signal_id="retrospective-1",
+        session_id="s1",
+        observation_id="obs-1",
+        ts=1.0,
+        kind="retrospective:repetitive_work",
+        polarity="positive",
+        scope="observation",
+        expires_at=1801.0,
+        confidence=0.9,
+        evidence="Repeated workflow",
+    )
+    monkeypatch.setattr(runtime, "load_records", lambda _root: [records])
+    monkeypatch.setattr(
+        runtime,
+        "derive_retrospective_signals",
+        lambda _sessions, **_kwargs: [retrospective_signal],
+    )
+
+    def fake_label_records(_records, **kwargs):
+        assert kwargs["require_saved_images"] is True
+        assert [signal.signal_id for signal in kwargs["additional_signals"]] == [
+            "retrospective-1"
+        ]
+        return []
+
+    monkeypatch.setattr(runtime, "label_records", fake_label_records)
+    state_root = tmp_path / "state"
+
+    result = runtime.process_evolve_step(
+        tmp_path / "records",
+        state_root,
+        model="model",
+        memory_root=tmp_path / "memory",
+        collect_training_screenshots=True,
+    )
+
+    assert result == {
+        "status": "no_work",
+        "moments": 0,
+        "new_retrospective_signals": 1,
+    }
+    checkpoint = json.loads((state_root / "evolve_checkpoint.json").read_text())
+    assert checkpoint["retrospective_observation_count"] == 20
+    stored = [
+        json.loads(line)
+        for line in (state_root / "signals.jsonl").read_text().splitlines()
+    ]
+    assert [row["kind"] for row in stored] == ["retrospective:repetitive_work"]
+
+
+def test_evolve_continues_when_retrospective_mining_fails(tmp_path, monkeypatch):
+    records = SessionRecords(
+        path="session",
+        observations=[
+            ObservationRecord(
+                observation_id=f"obs-{index}",
+                session_id="s1",
+                ts=float(index),
+                type="snapshot",
+                model="model",
+                observer_input="input",
+                observer_output='{"need_support":"no"}',
+            )
+            for index in range(20)
+        ],
+    )
+    monkeypatch.setattr(runtime, "load_records", lambda _root: [records])
+    monkeypatch.setattr(
+        runtime,
+        "derive_retrospective_signals",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("context budget exceeded")
+        ),
+    )
+    monkeypatch.setattr(runtime, "label_records", lambda *_args, **_kwargs: [])
+    state_root = tmp_path / "state"
+
+    result = runtime.process_evolve_step(
+        tmp_path / "records",
+        state_root,
+        model="model",
+        memory_root=tmp_path / "memory",
+        collect_training_screenshots=True,
+    )
+
+    assert result == {
+        "status": "no_work",
+        "moments": 0,
+        "retrospective_error": "RuntimeError: context budget exceeded",
+    }
+    checkpoint = json.loads((state_root / "evolve_checkpoint.json").read_text())
+    assert checkpoint["last_retrospective_error"]["observation_count"] == 20
+    assert "retrospective_observation_count" not in checkpoint
+
+
+def test_evolve_rebuilds_active_run_from_older_signal_policy(tmp_path, monkeypatch):
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    (state_root / "evolve_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "active_run": {
+                    "run_id": "legacy-run",
+                    "status": "running",
+                    "run_dir": str(state_root / "runs" / "legacy-run"),
+                    "snapshot_path": str(
+                        state_root / "runs" / "legacy-run" / "labeled_moments.jsonl"
+                    ),
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(
+        runtime,
+        "load_records",
+        lambda _root: [SessionRecords(path="session")],
+    )
+
+    result = runtime.process_evolve_step(
+        tmp_path / "records",
+        state_root,
+        model="model",
+        memory_root=tmp_path / "memory",
+        collect_training_screenshots=True,
+    )
+
+    assert result == {"status": "no_work", "moments": 0}
+    checkpoint = json.loads((state_root / "evolve_checkpoint.json").read_text())
+    assert "active_run" not in checkpoint
+    assert checkpoint["last_incompatible_run"]["status"] == ("superseded_signal_policy")
 
 
 def test_evolve_deletes_period_images_only_after_success(tmp_path, monkeypatch):
@@ -199,6 +435,7 @@ def test_evolve_repairs_checkpoint_with_missing_images(tmp_path, monkeypatch):
                 "active_run": {
                     "run_id": "period-9",
                     "status": "running",
+                    "signal_policy_version": runtime.SIGNAL_POLICY_VERSION,
                     "period_start": 1.0,
                     "period_end": 9.0,
                     "snapshot_path": str(snapshot_path),

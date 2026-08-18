@@ -266,6 +266,23 @@ class ShortWindowSignal:
     source_record_ids: list[str] = field(default_factory=list)
     target_rationale: str | None = None
 
+    @classmethod
+    def from_dict(cls, row: JsonDict) -> ShortWindowSignal:
+        return cls(
+            signal_id=_as_str(row.get("signal_id")),
+            session_id=_as_str_or_none(row.get("session_id")),
+            observation_id=_as_str_or_none(row.get("observation_id")),
+            ts=_as_float(row.get("ts")),
+            kind=_as_str(row.get("kind")),
+            polarity=_as_str(row.get("polarity")),
+            scope=_as_str(row.get("scope")),
+            expires_at=_as_float(row.get("expires_at")),
+            confidence=_as_float(row.get("confidence")),
+            evidence=_as_str(row.get("evidence")),
+            source_record_ids=_as_str_list(row.get("source_record_ids")),
+            target_rationale=_as_str_or_none(row.get("target_rationale")),
+        )
+
     def to_label_signal(self, moment_id: str, weight: float = 1.0) -> LabelSignal:
         return LabelSignal(
             signal_id=self.signal_id,

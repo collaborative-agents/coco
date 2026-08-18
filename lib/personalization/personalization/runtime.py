@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import os
+import re
+import sys
 import time
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -19,15 +23,30 @@ from personalization.memory import EvolveConfig, SelfEvolvingLearner
 from personalization.memory.state import SectionedMemory
 from personalization.memory_store import MemoryStore, create_memory_draft
 from personalization.records import flatten_sessions, load_records, read_jsonl
+from personalization.schemas import ShortWindowSignal
 from personalization.signals.missed_opportunities import (
     derive_missed_opportunity_signals,
 )
+from personalization.signals.retrospective import derive_retrospective_signals
 from personalization.signals.user_feedback import derive_feedback_signals
 
 # Internal non-error exit code: the bounded job ran successfully but found no
 # eligible work. The desktop scheduler distinguishes this from exit code 0 so
 # it can apply a longer retry cooldown without reporting a job failure.
 NO_WORK = 3
+SIGNAL_POLICY_VERSION = 3
+_RESOURCE_TRACKER_COMMAND = re.compile(
+    r"from multiprocessing\.resource_tracker import main;main\((\d+)\)"
+)
+
+
+def _resource_tracker_fd(argv: list[str]) -> int | None:
+    """Recognize the helper argv shape produced by the frozen macOS worker."""
+    for argument in argv:
+        match = _RESOURCE_TRACKER_COMMAND.fullmatch(argument)
+        if match is not None:
+            return int(match.group(1))
+    return None
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -55,6 +74,55 @@ def _append_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
         os.fsync(stream.fileno())
 
 
+def _atomic_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        for row in rows:
+            stream.write(json.dumps(row, default=str) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def _supported_signal_kind(kind: object) -> bool:
+    return kind in {
+        "dismiss",
+        "reveal",
+        "thumbs_up",
+        "thumbs_down",
+        "user_prompt_after",
+    } or (isinstance(kind, str) and kind.startswith("retrospective:"))
+
+
+def _merge_signal_store(
+    path: Path,
+    signals: list[ShortWindowSignal],
+    *,
+    replace_kinds: frozenset[str] = frozenset(),
+) -> tuple[list[ShortWindowSignal], int, int]:
+    """Merge supported signals and remove legacy UI-event signal rows."""
+    original_rows = read_jsonl(path)
+    rows = [row for row in original_rows if _supported_signal_kind(row.get("kind"))]
+    replacement_ids = {
+        signal.signal_id for signal in signals if signal.kind in replace_kinds
+    }
+    rows = [
+        row
+        for row in rows
+        if row.get("kind") not in replace_kinds
+        or row.get("signal_id") in replacement_ids
+    ]
+    existing_ids = {str(row.get("signal_id")) for row in rows if row.get("signal_id")}
+    unseen = [signal for signal in signals if signal.signal_id not in existing_ids]
+    rows.extend(signal.to_dict() for signal in unseen)
+    removed = len(original_rows) - len(rows) + len(unseen)
+    if unseen or removed:
+        _atomic_jsonl(path, rows)
+    parsed = [ShortWindowSignal.from_dict(row) for row in rows]
+    return parsed, len(unseen), removed
+
+
 def process_signal_step(
     records_root: str | Path,
     state_root: str | Path,
@@ -68,12 +136,6 @@ def process_signal_step(
     checkpoint = _read_json(checkpoint_path, {})
     sessions = load_records(records_root)
     records = flatten_sessions(sessions)
-    existing_ids = {
-        str(row.get("signal_id"))
-        for row in read_jsonl(output_path)
-        if row.get("signal_id")
-    }
-
     derived = derive_feedback_signals(records.feedback)
     last_missed_count = int(checkpoint.get("missed_observation_count", 0) or 0)
     observation_count = len(records.observations)
@@ -84,8 +146,12 @@ def process_signal_step(
     if ran_missed:
         derived.extend(derive_missed_opportunity_signals(records))
 
-    unseen = [signal for signal in derived if signal.signal_id not in existing_ids]
-    _append_jsonl(output_path, [signal.to_dict() for signal in unseen])
+    stored, new_signal_count, removed_legacy_count = _merge_signal_store(
+        output_path,
+        derived,
+        replace_kinds=frozenset({"dismiss", "reveal", "thumbs_up", "thumbs_down"}),
+    )
+    signal_counts = Counter(signal.kind for signal in stored)
     _atomic_json(
         checkpoint_path,
         {
@@ -95,10 +161,16 @@ def process_signal_step(
             "missed_observation_count": (
                 observation_count if ran_missed else last_missed_count
             ),
-            "signal_count": len(existing_ids) + len(unseen),
+            "signal_count": len(stored),
+            "signal_type_counts": dict(sorted(signal_counts.items())),
+            "removed_legacy_signal_count": removed_legacy_count,
         },
     )
-    return {"new_signals": len(unseen), "ran_missed": ran_missed}
+    return {
+        "new_signals": new_signal_count,
+        "removed_legacy_signals": removed_legacy_count,
+        "ran_missed": ran_missed,
+    }
 
 
 def process_revision_step(
@@ -114,8 +186,11 @@ def process_revision_step(
     checkpoint = _read_json(checkpoint_path, {})
     completed = set(checkpoint.get("completed_moment_ids", []))
     records = flatten_sessions(load_records(records_root))
+    stored_signals, _, _ = _merge_signal_store(state_dir / "signals.jsonl", [])
     labeled = [
-        moment for moment in label_records(records) if moment.moment_id not in completed
+        moment
+        for moment in label_records(records, additional_signals=stored_signals)
+        if moment.moment_id not in completed
     ]
     revised, eligible = revise_label_disagreements(
         records,
@@ -188,6 +263,7 @@ def process_evolve_step(
     collect_training_screenshots: bool,
     min_moments: int = 8,
     max_moments: int = 64,
+    retrospective_observation_interval: int = 20,
 ) -> dict[str, int | str]:
     """Run or resume one frozen Coco-PE period and apply retention on success."""
     records_path = Path(records_root).expanduser()
@@ -195,19 +271,97 @@ def process_evolve_step(
     runtime_path = state_dir / "evolve_checkpoint.json"
     runtime_state = _read_json(runtime_path, {})
     active = runtime_state.get("active_run")
+    if (
+        isinstance(active, dict)
+        and active.get("status") != "complete"
+        and active.get("signal_policy_version") != SIGNAL_POLICY_VERSION
+    ):
+        runtime_state["last_incompatible_run"] = {
+            **active,
+            "status": "superseded_signal_policy",
+            "abandoned_at": time.time(),
+        }
+        runtime_state.pop("active_run", None)
+        _atomic_json(runtime_path, runtime_state)
+        active = None
     skipped_missing_images = 0
     restart_after_image_filter = False
+    new_retrospective_signals = 0
+    retrospective_error = ""
 
     if not isinstance(active, dict) or active.get("status") == "complete":
         completed_until = float(runtime_state.get("completed_until", 0.0) or 0.0)
-        records = flatten_sessions(load_records(records_path))
+        sessions = load_records(records_path)
+        records = flatten_sessions(sessions)
+        observation_count = len(records.observations)
+        last_retrospective_count = int(
+            runtime_state.get("retrospective_observation_count", 0) or 0
+        )
+        should_run_retrospective = (
+            observation_count >= retrospective_observation_interval
+            and observation_count - last_retrospective_count
+            >= retrospective_observation_interval
+        )
+        retrospective_signals = []
+        retrospective_succeeded = False
+        if should_run_retrospective:
+            try:
+                retrospective_signals = derive_retrospective_signals(
+                    sessions,
+                    model=model,
+                    show_progress=False,
+                    trace_out=state_dir / "retrospective_trace.jsonl",
+                )
+                retrospective_succeeded = True
+            except Exception as error:  # noqa: BLE001 - supplemental background work
+                retrospective_error = f"{type(error).__name__}: {error}"
+                print(
+                    "retrospective mining failed; continuing Coco-PE without "
+                    f"new retrospective signals: {retrospective_error}",
+                    file=sys.stderr,
+                )
+                runtime_state["last_retrospective_error"] = {
+                    "at": time.time(),
+                    "observation_count": observation_count,
+                    "error": retrospective_error,
+                }
+                _atomic_json(runtime_path, runtime_state)
+        stored_signals, new_retrospective_signals, _ = _merge_signal_store(
+            state_dir / "signals.jsonl", retrospective_signals
+        )
+        if retrospective_succeeded:
+            runtime_state["retrospective_observation_count"] = observation_count
+            runtime_state["retrospective_updated_at"] = time.time()
+            runtime_state["retrospective_signal_count"] = sum(
+                signal.kind.startswith("retrospective:") for signal in stored_signals
+            )
+            runtime_state.pop("last_retrospective_error", None)
+            signal_checkpoint_path = state_dir / "signals_checkpoint.json"
+            signal_checkpoint = _read_json(signal_checkpoint_path, {})
+            signal_checkpoint.update(
+                {
+                    "updated_at": time.time(),
+                    "signal_count": len(stored_signals),
+                    "signal_type_counts": dict(
+                        sorted(
+                            Counter(signal.kind for signal in stored_signals).items()
+                        )
+                    ),
+                }
+            )
+            _atomic_json(signal_checkpoint_path, signal_checkpoint)
+            _atomic_json(runtime_path, runtime_state)
         revised_by_id = {
             moment.moment_id: moment
             for moment in read_labeled_moments(state_dir / "revised_labels.jsonl")
         }
         labeled = [
             revised_by_id.get(moment.moment_id, moment)
-            for moment in label_records(records, require_saved_images=True)
+            for moment in label_records(
+                records,
+                require_saved_images=True,
+                additional_signals=stored_signals,
+            )
         ]
         labeled, newly_skipped, _ = _with_saved_images(labeled)
         skipped_missing_images += newly_skipped
@@ -219,6 +373,10 @@ def process_evolve_step(
             result = {"status": "no_work", "moments": len(labeled)}
             if skipped_missing_images:
                 result["skipped_missing_images"] = skipped_missing_images
+            if new_retrospective_signals:
+                result["new_retrospective_signals"] = new_retrospective_signals
+            if retrospective_error:
+                result["retrospective_error"] = retrospective_error
             return result
         period_end = max(moment.ts for moment in labeled)
         run_id = f"period-{int(period_end)}"
@@ -243,6 +401,7 @@ def process_evolve_step(
         active = {
             "run_id": run_id,
             "status": "running",
+            "signal_policy_version": SIGNAL_POLICY_VERSION,
             "period_start": min(moment.ts for moment in labeled),
             "period_end": period_end,
             "snapshot_path": str(snapshot_path),
@@ -356,10 +515,25 @@ def process_evolve_step(
     result = {"status": "complete", "moments": len(labeled), "deleted": deleted}
     if skipped_missing_images:
         result["skipped_missing_images"] = skipped_missing_images
+    if new_retrospective_signals:
+        result["new_retrospective_signals"] = new_retrospective_signals
+    if retrospective_error:
+        result["retrospective_error"] = retrospective_error
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
+    effective_argv = sys.argv[1:] if argv is None else argv
+    resource_tracker_fd = _resource_tracker_fd(effective_argv)
+    if resource_tracker_fd is not None:
+        # The shared PyInstaller bundle strips the helper's ``-c`` switch before
+        # its runtime hook sees argv. Dispatch the one trusted helper command
+        # explicitly instead of letting argparse treat it as a job name.
+        from multiprocessing.resource_tracker import main as resource_tracker_main
+
+        resource_tracker_main(resource_tracker_fd)
+        return 0
+
     parser = argparse.ArgumentParser(description="Run one bounded personalization job")
     parser.add_argument("job", choices=("signals", "revise", "evolve"))
     parser.add_argument("--records-root", required=True)
@@ -370,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-moments", type=int, default=8)
     parser.add_argument("--max-moments", type=int, default=64)
     parser.add_argument("--collect-training-screenshots", action="store_true")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(effective_argv)
 
     if args.job == "signals":
         result = process_signal_step(
@@ -401,4 +575,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # PyInstaller re-launches this executable with a private ``-c`` command for
+    # multiprocessing resource tracking. Intercept that child invocation before
+    # argparse mistakes the command string for a personalization job.
+    multiprocessing.freeze_support()
     raise SystemExit(main())

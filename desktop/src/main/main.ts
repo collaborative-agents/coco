@@ -1020,6 +1020,11 @@ ipcMain.handle(
     _event,
     { forceModelTest = false }: { forceModelTest?: boolean } = {},
   ) => {
+    // Sleep mode intentionally stops the sensing and tutor services. Do not
+    // probe them or report their expected absence as a health failure.
+    if (isCocoSleeping()) {
+      return { checkedAt: Date.now(), sleeping: true };
+    }
   type ModelAssessment = {
     status: ModelHealthAssessment['status'];
     detail: string;
@@ -1632,18 +1637,21 @@ async function setCocoSleepMode(sleeping: boolean) {
     return { success: false, error: 'Personalization is not ready.' };
   }
   if (sleeping && personalizationScheduler) {
+    // Make sleep authoritative before stopping services so a concurrent
+    // health request cannot misclassify their intentional shutdown.
+    personalizationScheduler.setSleepMode(true);
     if (isSessionActive) endCurrentSession();
     await Promise.all([
       serviceManager.stopService('sensing-server'),
       serviceManager.stopService('tutor-server'),
     ]);
-    personalizationScheduler.setSleepMode(true);
   } else if (personalizationScheduler) {
     personalizationScheduler.setSleepMode(false);
     serviceManager.startAll();
   }
   previewCocoSleepMode = sleeping;
   avatarWindow?.webContents.send('coco-sleep-mode-changed', { sleeping });
+  chatWindow?.webContents.send('coco-sleep-mode-changed', { sleeping });
   if (!sleeping) {
     avatarWindow?.webContents.send('daily-memory-draft-refresh');
   }

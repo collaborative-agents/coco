@@ -30,6 +30,11 @@ from personalization.utils.observer_output import (
 
 RETROSPECTIVE_CATEGORIES = {"repetitive_work", "stuck", "anticipate_need"}
 _MODEL_JSON_MAX_ATTEMPTS = 3
+_MODEL_MAX_OUTPUT_TOKENS = 8192
+# Keep the complete system + user input comfortably below the remaining input
+# side of a 32K context window. Observation fields are truncated before packing,
+# and the timeline is split at record boundaries when this limit is reached.
+_DEFAULT_MAX_INPUT_CHARS = 48_000
 
 DISCOVERY_SYSTEM_PROMPT = """\
 You retrospectively inspect a large chronological desktop-work timeline to discover a small set of HIGH-LEVEL, reusable proactive-support opportunities.
@@ -167,7 +172,7 @@ def derive_retrospective_signals(
     max_observations: int = 300,
     trigger_max_observations: int = 50,
     max_field_chars: int = 700,
-    max_input_chars: int = 240_000,
+    max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
     max_opportunities: int = 8,
     min_pattern_span_s: float = 5 * 60,
     ttl_s: float = DEFAULT_SIGNAL_TTL_S,
@@ -1218,7 +1223,9 @@ def _complete(
         ],
         model=model,
         temperature=0.0,
-        max_tokens=8192,
+        # Preserve enough room for complete structured opportunity output. The
+        # input side is truncated and chunked before requests reach this point.
+        max_tokens=_MODEL_MAX_OUTPUT_TOKENS,
         extra_body=_extra_body_for_model(model),
         operation=operation,
     )

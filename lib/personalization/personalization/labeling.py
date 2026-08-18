@@ -158,7 +158,12 @@ def label_signals_for_moment(
 ) -> list[LabelSignal]:
     """Collect signals that apply to ``moment``."""
     signals: list[LabelSignal] = []
+    has_reveal = any(event.kind == "engage" for event in moment.feedback_events)
     for event in moment.feedback_events:
+        # The close action after a reveal only closes the expanded content; it
+        # does not undo that positive interaction. A thumbs-down still does.
+        if event.kind == "dismiss" and has_reveal:
+            continue
         label = _feedback_label_signal(moment, event)
         if label is not None:
             signals.append(label)
@@ -166,9 +171,8 @@ def label_signals_for_moment(
     for signal in short_window_signals:
         if (
             signal.observation_id == moment.observation_id
-            and signal.kind not in FEEDBACK_POLICIES
+            and _is_derived_support_signal(signal.kind)
         ):
-            # Explicit feedback is already represented above with provenance.
             weight = _short_window_weight(signal.kind)
             signals.append(signal.to_label_signal(moment.moment_id, weight=weight))
 
@@ -199,9 +203,14 @@ def _feedback_label_signal(
 
 
 def _short_window_weight(kind: str) -> float:
-    if kind == "user_prompt_after" or kind.startswith("retrospective:"):
+    if kind in {"reveal", "user_prompt_after"} or kind.startswith("retrospective:"):
         return 0.7
     return 0.3
+
+
+def _is_derived_support_signal(kind: str) -> bool:
+    """Accept resolved engagement or missed-opportunity signals."""
+    return kind in {"reveal", "user_prompt_after"} or kind.startswith("retrospective:")
 
 
 def label_moment(
@@ -266,7 +275,7 @@ def _label_rationale(score: float, signals: list[LabelSignal]) -> str:
 
 def _target_suggestion(moment: CandidateMoment) -> str:
     for event in moment.feedback_events:
-        if event.kind in {"thumbs_up", "engage", "need_help"} and event.text:
+        if event.kind == "thumbs_up" and event.text:
             return event.text
     for call in moment.tutor_calls_after:
         if call.tutor_output:
@@ -286,8 +295,13 @@ def label_records(
     if not 0.0 <= unverified_no_support_confidence <= 1.0:
         raise ValueError("unverified_no_support_confidence must be between 0 and 1")
     moments = build_candidate_moments(records)
-    short_signals = derive_short_window_signals(records)
-    short_signals.extend(additional_signals or [])
+    short_signals = {
+        signal.signal_id: signal
+        for signal in [
+            *derive_short_window_signals(records),
+            *(additional_signals or []),
+        ]
+    }.values()
     labeled: list[LabeledMoment] = []
     for moment in moments:
         if require_saved_images:

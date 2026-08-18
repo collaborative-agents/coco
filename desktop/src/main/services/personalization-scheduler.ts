@@ -370,6 +370,11 @@ export class PersonalizationScheduler {
       let cooldownMs = 5_000;
       if (noWork) {
         cooldownMs = job === 'evolve' ? 15 * 60_000 : 5 * 60_000;
+      } else if (outcome === 'failed') {
+        // A persistent model/configuration error should not spawn a new heavy
+        // worker every scheduler tick. Keep preemption quick, but back off real
+        // failures long enough for resources or configuration to recover.
+        cooldownMs = job === 'evolve' ? 15 * 60_000 : 5 * 60_000;
       }
       this.nextAllowedAt[job] = Date.now() + cooldownMs;
       log.info(`[Personalization] ${job} exited code=${code} signal=${signal}`);
@@ -405,7 +410,7 @@ export class PersonalizationScheduler {
   }
 
   private writeDedicatedLog(message: string) {
-    const logPath = this.options.logPath;
+    const { logPath } = this.options;
     if (!logPath) return;
     try {
       if (!this.dedicatedLogReady) {

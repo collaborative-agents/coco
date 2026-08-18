@@ -224,6 +224,11 @@ interface ServiceHealthView {
   tutor: ServiceHealth;
 }
 
+interface SleepingServiceHealthView {
+  checkedAt: number;
+  sleeping: true;
+}
+
 interface ConnectionTestStatus {
   state: 'testing' | 'success' | 'error';
   message: string;
@@ -874,6 +879,8 @@ export default function SessionChatView() {
   const [serviceHealth, setServiceHealth] = useState<ServiceHealthView | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthError, setHealthError] = useState('');
+  const [cocoSleeping, setCocoSleeping] = useState(false);
+  const [cocoSleepModeKnown, setCocoSleepModeKnown] = useState(false);
   const [connectionTests, setConnectionTests] = useState<
     Record<string, ConnectionTestStatus>
   >({});
@@ -912,6 +919,7 @@ export default function SessionChatView() {
   const pendingContextRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const problemRef = useRef('');
+  const cocoSleepingRef = useRef(false);
 
   useEffect(() => {
     const applyZoomFactor = (value: unknown) => {
@@ -929,24 +937,48 @@ export default function SessionChatView() {
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
+  const applyCocoSleepMode = useCallback((sleeping: boolean) => {
+    cocoSleepingRef.current = sleeping;
+    setCocoSleeping(sleeping);
+    setCocoSleepModeKnown(true);
+    if (sleeping) {
+      setServiceHealth(null);
+      setHealthError('');
+      setHealthLoading(false);
+    }
+  }, []);
+
   const refreshServiceHealth = useCallback(async (forceModelTest = false) => {
+    if (cocoSleepingRef.current) return;
     setHealthLoading(true);
     setHealthError('');
     try {
       const result = await window.electron?.ipcRenderer.invoke(
         'get-service-health',
         { forceModelTest },
-      ) as ServiceHealthView | undefined;
-      if (!result?.sensing || !result?.tutor) {
+      ) as ServiceHealthView | SleepingServiceHealthView | undefined;
+      if (result && 'sleeping' in result && result.sleeping) {
+        applyCocoSleepMode(true);
+        return;
+      }
+      if (
+        !result ||
+        !('sensing' in result) ||
+        !('tutor' in result) ||
+        !result.sensing ||
+        !result.tutor
+      ) {
         throw new Error('No health response received.');
       }
-      setServiceHealth(result);
+      if (!cocoSleepingRef.current) setServiceHealth(result);
     } catch (error) {
-      setHealthError(error instanceof Error ? error.message : String(error));
+      if (!cocoSleepingRef.current) {
+        setHealthError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setHealthLoading(false);
+      if (!cocoSleepingRef.current) setHealthLoading(false);
     }
-  }, []);
+  }, [applyCocoSleepMode]);
 
   const refreshPersonalizationStatus = useCallback(
     async (showLoading = true) => {
@@ -1526,12 +1558,30 @@ export default function SessionChatView() {
   }, [refreshPersonalizationStatus, showSettings]);
 
   useEffect(() => {
+    window.electron?.ipcRenderer
+      .invoke('get-coco-sleep-mode')
+      .then((result: { sleeping?: boolean } | undefined) => {
+        applyCocoSleepMode(result?.sleeping === true);
+      })
+      .catch(() => applyCocoSleepMode(false));
+    const cleanup = window.electron?.ipcRenderer.on(
+      'coco-sleep-mode-changed',
+      (...args: unknown[]) => {
+        const result = args[0] as { sleeping?: boolean } | undefined;
+        applyCocoSleepMode(result?.sleeping === true);
+      },
+    );
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, [applyCocoSleepMode]);
+
+  useEffect(() => {
+    if (!cocoSleepModeKnown || cocoSleeping) return undefined;
     void refreshServiceHealth();
     const interval = window.setInterval(() => {
       void refreshServiceHealth();
     }, 30000);
     return () => window.clearInterval(interval);
-  }, [refreshServiceHealth]);
+  }, [cocoSleepModeKnown, cocoSleeping, refreshServiceHealth]);
 
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -1752,63 +1802,86 @@ export default function SessionChatView() {
           : []),
       ].join('\n')
     : 'Tutor model for this conversation';
-  const sensingUnavailable = serviceHealth?.sensing.connected === false;
-  const tutorUnavailable = serviceHealth?.tutor.connected === false;
+  const sensingUnavailable =
+    !cocoSleeping && serviceHealth?.sensing.connected === false;
+  const tutorUnavailable =
+    !cocoSleeping && serviceHealth?.tutor.connected === false;
   const serviceUnavailable = sensingUnavailable || tutorUnavailable;
-  const modelUnavailable = Boolean(serviceHealth && [
-    serviceHealth.sensing,
-    serviceHealth.tutor,
-  ].some((health) => health.modelAssessment?.status === 'failed'));
-  const modelsVerified = Boolean(serviceHealth && [
-    serviceHealth.sensing,
-    serviceHealth.tutor,
-  ].every((health) => health.modelAssessment?.status === 'verified'));
-  const modelConfigurationIssue = Boolean(serviceHealth && [
-    serviceHealth.sensing,
-    serviceHealth.tutor,
-  ].some((health) =>
-    health.modelAssessment?.status === 'legacy_unassessed' ||
-    health.modelAssessment?.status === 'not_configured'));
-  const chatHealthLabel = serviceUnavailable
-    ? 'Service issue'
-    : modelUnavailable
-      ? 'Model issue'
+  const modelUnavailable = Boolean(
+    !cocoSleeping &&
+      serviceHealth &&
+      [serviceHealth.sensing, serviceHealth.tutor].some(
+        (health) => health.modelAssessment?.status === 'failed',
+      ),
+  );
+  const modelsVerified = Boolean(
+    !cocoSleeping &&
+      serviceHealth &&
+      [serviceHealth.sensing, serviceHealth.tutor].every(
+        (health) => health.modelAssessment?.status === 'verified',
+      ),
+  );
+  const modelConfigurationIssue = Boolean(
+    !cocoSleeping &&
+      serviceHealth &&
+      [serviceHealth.sensing, serviceHealth.tutor].some(
+        (health) =>
+          health.modelAssessment?.status === 'legacy_unassessed' ||
+          health.modelAssessment?.status === 'not_configured',
+      ),
+  );
+  const chatHealthLabel = cocoSleeping
+    ? 'Sleeping'
+    : serviceUnavailable
+      ? 'Service issue'
+      : modelUnavailable
+        ? 'Model issue'
+        : modelConfigurationIssue
+          ? 'Configure models'
+          : serviceHealth
+            ? (modelsVerified ? 'Connected' : 'Services reachable')
+            : healthLoading
+              ? 'Checking health…'
+              : 'Health unknown';
+  const chatHealthColor = cocoSleeping
+    ? '#6b7280'
+    : serviceUnavailable || modelUnavailable
+      ? '#dc2626'
       : modelConfigurationIssue
-        ? 'Configure models'
-        : serviceHealth
-          ? (modelsVerified ? 'Connected' : 'Services reachable')
-          : healthLoading
-            ? 'Checking health…'
-            : 'Health unknown';
-  const chatHealthColor = serviceUnavailable || modelUnavailable
-    ? '#dc2626'
-    : modelConfigurationIssue
-      ? '#b45309'
-      : modelsVerified
-        ? '#16a34a'
-        : '#6b7280';
-  const chatHealthTitle = serviceUnavailable
-    ? [
-        sensingUnavailable ? 'Sensing server is not reachable.' : '',
-        tutorUnavailable ? 'Tutor agent is not reachable.' : '',
-        'Click to open Settings.',
-      ].filter(Boolean).join(' ')
-    : modelUnavailable
+        ? '#b45309'
+        : modelsVerified
+          ? '#16a34a'
+          : '#6b7280';
+  const chatHealthTitle = cocoSleeping
+    ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+    : serviceUnavailable
       ? [
-          serviceHealth?.sensing.modelAssessment?.status === 'failed'
-            ? `Sensing model: ${serviceHealth.sensing.modelAssessment.detail}`
-            : '',
-          serviceHealth?.tutor.modelAssessment?.status === 'failed'
-            ? `Tutor model: ${serviceHealth.tutor.modelAssessment.detail}`
-            : '',
+          sensingUnavailable ? 'Sensing server is not reachable.' : '',
+          tutorUnavailable ? 'Tutor agent is not reachable.' : '',
           'Click to open Settings.',
-        ].filter(Boolean).join(' ')
-      : modelConfigurationIssue
-        ? 'A saved model configuration is required. Click to open Settings.'
-        : serviceHealth
-          ? 'Local services and configured models passed their connection tests.'
-          : 'Checking local service health.';
-  const hasChatHealthIssue = serviceUnavailable || modelUnavailable || modelConfigurationIssue;
+        ]
+          .filter(Boolean)
+          .join(' ')
+      : modelUnavailable
+        ? [
+            serviceHealth?.sensing.modelAssessment?.status === 'failed'
+              ? `Sensing model: ${serviceHealth.sensing.modelAssessment.detail}`
+              : '',
+            serviceHealth?.tutor.modelAssessment?.status === 'failed'
+              ? `Tutor model: ${serviceHealth.tutor.modelAssessment.detail}`
+              : '',
+            'Click to open Settings.',
+          ]
+            .filter(Boolean)
+            .join(' ')
+        : modelConfigurationIssue
+          ? 'A saved model configuration is required. Click to open Settings.'
+          : serviceHealth
+            ? 'Local services and configured models passed their connection tests.'
+            : 'Checking local service health.';
+  const hasChatHealthIssue =
+    !cocoSleeping &&
+    (serviceUnavailable || modelUnavailable || modelConfigurationIssue);
 
   return (
     <div style={S.root}>
@@ -1930,14 +2003,21 @@ export default function SessionChatView() {
           <div style={S.sectionDivider} />
           <div style={S.groupLabel}>Health</div>
           <div style={S.helpText}>
-            Checks Coco's local services and sends short real requests to the
-            configured models. The sensing test includes a small test image.
+            {cocoSleeping
+              ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+              : "Checks Coco's local services and sends short real requests to the configured models. The sensing test includes a small test image."}
           </div>
-          <div style={S.healthList}>
-            {([
-              ['sensing', 'Sensing server', serviceHealth?.sensing],
-              ['tutor', 'Tutor agent', serviceHealth?.tutor],
-            ] as const).map(([key, label, health]) => {
+          {cocoSleeping && (
+            <div role="status" style={S.healthDetail}>
+              Sleeping intentionally stops the sensing server and tutor agent.
+            </div>
+          )}
+          {!cocoSleeping && (
+            <div style={S.healthList}>
+              {([
+                ['sensing', 'Sensing server', serviceHealth?.sensing],
+                ['tutor', 'Tutor agent', serviceHealth?.tutor],
+              ] as const).map(([key, label, health]) => {
               const serviceStatusLabel = health
                 ? `${health.connected ? 'Connected' : 'Not connected'} (service)`
                 : `${healthLoading ? 'Checking…' : 'Not checked'} (service)`;
@@ -2002,24 +2082,31 @@ export default function SessionChatView() {
                   </div>
                 </div>
               );
-            })}
-          </div>
-          <div style={S.healthActions}>
-            <button
-              type="button"
-              style={{ ...S.addBtn, ...(healthLoading ? S.sendBtnDisabled : {}) }}
-              disabled={healthLoading}
-              onClick={() => void refreshServiceHealth(true)}
-            >
-              {healthLoading ? 'Checking…' : 'Check again'}
-            </button>
-            {serviceHealth && !healthLoading && (
-              <span style={S.healthDetail}>
-                Checked {new Date(serviceHealth.checkedAt).toLocaleTimeString()}
-              </span>
-            )}
-          </div>
-          {healthError && (
+              })}
+            </div>
+          )}
+          {!cocoSleeping && (
+            <div style={S.healthActions}>
+              <button
+                type="button"
+                style={{
+                  ...S.addBtn,
+                  ...(healthLoading ? S.sendBtnDisabled : {}),
+                }}
+                disabled={healthLoading}
+                onClick={() => void refreshServiceHealth(true)}
+              >
+                {healthLoading ? 'Checking…' : 'Check again'}
+              </button>
+              {serviceHealth && !healthLoading && (
+                <span style={S.healthDetail}>
+                  Checked{' '}
+                  {new Date(serviceHealth.checkedAt).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+          )}
+          {!cocoSleeping && healthError && (
             <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
               Health check failed: {healthError}
             </div>

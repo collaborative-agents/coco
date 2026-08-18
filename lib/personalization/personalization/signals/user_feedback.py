@@ -19,8 +19,17 @@ from personalization.schemas import FeedbackEvent, ShortWindowSignal, stable_id
 DEFAULT_SIGNAL_TTL_S = 30 * 60
 
 
-# Canonical interpretation of explicit UI feedback for both runtime prompt
-# signals and offline support labels.
+# Canonical interpretation of authoritative UI feedback for both runtime prompt
+# signals and offline support labels. Display and navigation events such as
+# ``shown`` and ``need_help`` remain available in raw records for product
+# analytics, but are deliberately not direct personalization signals:
+#
+# - ``engage`` becomes a derived positive ``reveal`` when the same suggestion
+#   was not rated down (an explicit thumbs-up takes precedence and avoids
+#   double-counting the positive outcome; closing revealed content is benign);
+# - asking Coco for help is derived from the surrounding no-intervention moment
+#   by ``missed_opportunities`` instead of trusting a UI click in isolation;
+# - merely showing a suggestion carries no preference information.
 #
 # - ``polarity`` says whether this event argues that Coco should have helped
 #   here ("positive"), should have stayed quiet ("negative"), or should only be
@@ -47,33 +56,12 @@ class FeedbackPolicy:
 
 
 FEEDBACK_POLICIES: dict[str, FeedbackPolicy] = {
-    "shown": FeedbackPolicy(
-        polarity="neutral",
-        confidence=0.2,
-        scope="observation",
-        fallback_evidence="suggestion shown",
-        label_weight=0.0,
-    ),
-    "engage": FeedbackPolicy(
-        polarity="positive",
-        confidence=1.0,
-        scope="observation",
-        fallback_evidence="user accepted the proactive suggestion",
-        label_weight=1.2,
-    ),
     "dismiss": FeedbackPolicy(
         polarity="negative",
         confidence=1.0,
         scope="task",
         fallback_evidence="user dismissed the proactive suggestion",
         label_weight=1.2,
-    ),
-    "need_help": FeedbackPolicy(
-        polarity="positive",
-        confidence=1.0,
-        scope="observation",
-        fallback_evidence="user asked for help despite no suggestion",
-        label_weight=1.3,
     ),
     "thumbs_up": FeedbackPolicy(
         polarity="positive",
@@ -131,10 +119,58 @@ def derive_feedback_signals(
     *,
     ttl_s: float = DEFAULT_SIGNAL_TTL_S,
 ) -> list[ShortWindowSignal]:
-    """Convert feedback events into short-window personalization signals."""
+    """Resolve feedback outcomes into short-window personalization signals."""
+    events = list(events)
+    grouped: dict[tuple[str | None, str], list[FeedbackEvent]] = {}
+    for event in events:
+        if event.observation_id is not None:
+            grouped.setdefault((event.session_id, event.observation_id), []).append(
+                event
+            )
+
     out: list[ShortWindowSignal] = []
     for event in events:
+        group = (
+            grouped.get((event.session_id, event.observation_id), [])
+            if event.observation_id is not None
+            else []
+        )
+        # Closing an already-revealed suggestion is not rejection by itself.
+        # A thumbs-down remains authoritative negative feedback for that reveal.
+        if event.kind == "dismiss" and any(item.kind == "engage" for item in group):
+            continue
         signal = feedback_to_short_window_signal(event, ttl_s=ttl_s)
         if signal is not None:
             out.append(signal)
+
+    for (session_id, observation_id), group in grouped.items():
+        kinds = {event.kind for event in group}
+        if "engage" not in kinds or "thumbs_down" in kinds or "thumbs_up" in kinds:
+            continue
+        reveal = max(
+            (event for event in group if event.kind == "engage"),
+            key=lambda event: event.ts,
+        )
+        out.append(
+            ShortWindowSignal(
+                signal_id=stable_id("sig", session_id, observation_id, "reveal"),
+                session_id=session_id,
+                observation_id=observation_id,
+                ts=reveal.ts,
+                kind="reveal",
+                polarity="positive",
+                scope="observation",
+                expires_at=reveal.ts + ttl_s,
+                confidence=0.8,
+                evidence=(
+                    reveal.text
+                    or "user revealed the proactive suggestion without rating it down"
+                ),
+                source_record_ids=[
+                    rid
+                    for rid in (observation_id, reveal.message_id)
+                    if rid is not None
+                ],
+            )
+        )
     return out

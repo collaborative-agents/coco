@@ -241,6 +241,58 @@ describe('deferred suggestion context', () => {
     });
   });
 
+  it('shows sleep state without checking intentionally stopped services', async () => {
+    const listeners = new Map<string, (...args: any[]) => void>();
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-coco-sleep-mode') return { sleeping: true };
+      if (channel === 'get-service-health') {
+        const service = {
+          connected: true,
+          status: 'healthy',
+          modelAssessment: { status: 'verified', detail: 'Connected.' },
+        };
+        return { checkedAt: Date.now(), sensing: service, tutor: service };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (...args: any[]) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+
+    expect(
+      await screen.findByRole('status', { name: 'Sleeping' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Settings'));
+    expect(
+      screen.getByText(
+        'Sleeping intentionally stops the sensing server and tutor agent.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      invoke.mock.calls.filter(([channel]) => channel === 'get-service-health'),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      listeners.get('coco-sleep-mode-changed')?.({ sleeping: false });
+    });
+    await waitFor(() => {
+      expect(
+        invoke.mock.calls.filter(
+          ([channel]) => channel === 'get-service-health',
+        ),
+      ).toHaveLength(1);
+    });
+  });
+
   it('shows missing model configuration in the chat header', async () => {
     const invoke = jest.fn(async (channel: string) => {
       if (channel === 'get-service-health') {
