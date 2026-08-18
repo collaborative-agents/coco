@@ -36,6 +36,39 @@ export interface TrainingScreenshotRetentionInfo {
   configurationPath: string;
 }
 
+export interface PersonalizationStatusInfo {
+  available: boolean;
+  sleeping: boolean;
+  state:
+    | 'idle'
+    | 'running'
+    | 'checkpointed'
+    | 'completed'
+    | 'no_work'
+    | 'preempted'
+    | 'failed';
+  activeJob?: 'signals' | 'revise' | 'evolve';
+  activeStartedAt?: number;
+  checkpointStatus?: string;
+  processedSamples?: number;
+  totalSamples?: number;
+  periodStart?: number;
+  periodEnd?: number;
+  signals?: {
+    signalCount: number;
+    observationCount: number;
+    feedbackEventCount: number;
+    updatedAt?: number;
+  };
+  lastRun?: {
+    job: 'signals' | 'revise' | 'evolve';
+    outcome: 'completed' | 'no_work' | 'preempted' | 'failed';
+    endedAt: number;
+    detail?: string;
+  };
+  nextEvolveAttemptAt?: number;
+}
+
 /** Scan for the first balanced {...} block, respecting strings and escapes. */
 function extractJsonObject(text: string): string | null {
   let start = text.indexOf('{');
@@ -393,6 +426,60 @@ const S: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontFamily: FONT,
   },
+  personalizationCard: {
+    border: `1px solid ${BORDER}`,
+    borderRadius: 10,
+    background: '#f9fafb',
+    padding: '10px 11px',
+    marginBottom: 14,
+  },
+  personalizationHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  personalizationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    flexShrink: 0,
+  },
+  personalizationTitle: {
+    color: '#374151',
+    fontSize: 12.5,
+    fontWeight: 700,
+  },
+  personalizationMeta: {
+    color: '#6b7280',
+    fontSize: 11,
+    lineHeight: 1.45,
+    marginTop: 4,
+  },
+  personalizationProgressTrack: {
+    height: 6,
+    borderRadius: 999,
+    overflow: 'hidden',
+    background: '#e5e7eb',
+    marginTop: 7,
+  },
+  personalizationProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    background: ACCENT,
+    transition: 'width 180ms ease',
+  },
+  personalizationRefresh: {
+    marginLeft: 'auto',
+    border: 'none',
+    background: 'transparent',
+    color: ACCENT,
+    padding: 0,
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: 700,
+    fontFamily: FONT,
+  },
   toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
   toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
   toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
@@ -450,6 +537,131 @@ export function TrainingScreenshotRetentionNotice({
         </button>
       </div>
     </div>
+  );
+}
+
+const PERSONALIZATION_JOB_LABELS = {
+  signals: 'Collecting personalization signals',
+  revise: 'Revising feedback labels',
+  evolve: 'Self-evolving prompt',
+} as const;
+
+function formatPersonalizationTime(timestamp: number, seconds = false): string {
+  return new Date(seconds ? timestamp * 1000 : timestamp).toLocaleString();
+}
+
+export function PersonalizationStatusPanel({
+  status,
+  loading,
+  onRefresh,
+}: {
+  status: PersonalizationStatusInfo | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const activeLabel = status?.activeJob
+    ? PERSONALIZATION_JOB_LABELS[status.activeJob]
+    : null;
+  const title = !status?.available
+    ? 'Personalization is not ready'
+    : status.state === 'running'
+      ? `${activeLabel ?? 'Personalization'} is running`
+      : status.state === 'checkpointed'
+        ? 'Self-evolving prompt is checkpointed'
+        : status.state === 'completed'
+          ? 'Self-evolving prompt completed'
+          : status.state === 'no_work'
+            ? 'No eligible personalization work yet'
+            : status.state === 'preempted'
+              ? 'Personalization paused for interactive work'
+              : status.state === 'failed'
+                ? 'Personalization needs attention'
+                : status.sleeping
+                  ? 'Coco is ready for personalization work'
+                  : 'Personalization is waiting for idle time';
+  const color = status?.state === 'running'
+    ? '#2563eb'
+    : status?.state === 'failed'
+      ? '#dc2626'
+      : status?.state === 'completed'
+        ? '#16a34a'
+        : '#9ca3af';
+  const canShowProgress = Boolean(
+    status?.totalSamples &&
+      (!status.activeJob || status.activeJob === 'evolve'),
+  );
+  const processed = Math.min(
+    status?.processedSamples ?? 0,
+    status?.totalSamples ?? 0,
+  );
+  const percent = canShowProgress
+    ? Math.round((processed / (status?.totalSamples ?? 1)) * 100)
+    : 0;
+
+  return (
+    <section style={S.personalizationCard} aria-label="Personalization status">
+      <div style={S.personalizationHeader}>
+        <span style={{ ...S.personalizationDot, background: color }} />
+        <span style={S.personalizationTitle}>{title}</span>
+        <button
+          type="button"
+          style={S.personalizationRefresh}
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+      {canShowProgress && (
+        <>
+          <div style={S.personalizationMeta}>
+            {processed} of {status!.totalSamples} samples processed · {percent}%
+          </div>
+          <div
+            style={S.personalizationProgressTrack}
+            role="progressbar"
+            aria-label="Self-evolving prompt progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+          >
+            <div
+              style={{ ...S.personalizationProgressFill, width: `${percent}%` }}
+            />
+          </div>
+        </>
+      )}
+      {status?.checkpointStatus && (
+        <div style={S.personalizationMeta}>
+          Checkpoint: {status.checkpointStatus}
+        </div>
+      )}
+      {status?.periodStart && status.periodEnd && (
+        <div style={S.personalizationMeta}>
+          Data period: {formatPersonalizationTime(status.periodStart, true)} –{' '}
+          {formatPersonalizationTime(status.periodEnd, true)}
+        </div>
+      )}
+      {status?.signals && (
+        <div style={S.personalizationMeta}>
+          {status.signals.signalCount} signals from{' '}
+          {status.signals.observationCount} observations and{' '}
+          {status.signals.feedbackEventCount} feedback events
+        </div>
+      )}
+      {status?.lastRun && (
+        <div style={S.personalizationMeta}>
+          Last job: {PERSONALIZATION_JOB_LABELS[status.lastRun.job]} ·{' '}
+          {status.lastRun.outcome.replace('_', ' ')} ·{' '}
+          {formatPersonalizationTime(status.lastRun.endedAt)}
+        </div>
+      )}
+      {status?.nextEvolveAttemptAt && status.state !== 'running' && (
+        <div style={S.personalizationMeta}>
+          Next eligible retry: {formatPersonalizationTime(status.nextEvolveAttemptAt)}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -686,6 +898,10 @@ export default function SessionChatView() {
   const [memoryFlash, setMemoryFlash] = useState(false);
   const [trainingScreenshotRetention, setTrainingScreenshotRetention] =
     useState<TrainingScreenshotRetentionInfo | null>(null);
+  const [personalizationStatus, setPersonalizationStatus] =
+    useState<PersonalizationStatusInfo | null>(null);
+  const [personalizationStatusLoading, setPersonalizationStatusLoading] =
+    useState(false);
   // Current thumbs vote per tutor message, keyed by message id. Users may
   // replace it by choosing the opposite rating.
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
@@ -731,6 +947,23 @@ export default function SessionChatView() {
       setHealthLoading(false);
     }
   }, []);
+
+  const refreshPersonalizationStatus = useCallback(
+    async (showLoading = true) => {
+      if (showLoading) setPersonalizationStatusLoading(true);
+      try {
+        const result = await window.electron?.ipcRenderer.invoke(
+          'get-personalization-status',
+        ) as PersonalizationStatusInfo | undefined;
+        if (result) setPersonalizationStatus(result);
+      } catch {
+        setPersonalizationStatus(null);
+      } finally {
+        if (showLoading) setPersonalizationStatusLoading(false);
+      }
+    },
+    [],
+  );
 
   // Keep each active conversation on disk. A short debounce avoids a write for
   // every streaming token while still preserving completed turns promptly.
@@ -1284,6 +1517,15 @@ export default function SessionChatView() {
   }, [showSettings]);
 
   useEffect(() => {
+    if (!showSettings) return undefined;
+    void refreshPersonalizationStatus();
+    const interval = window.setInterval(() => {
+      void refreshPersonalizationStatus(false);
+    }, 2000);
+    return () => window.clearInterval(interval);
+  }, [refreshPersonalizationStatus, showSettings]);
+
+  useEffect(() => {
     void refreshServiceHealth();
     const interval = window.setInterval(() => {
       void refreshServiceHealth();
@@ -1675,6 +1917,17 @@ export default function SessionChatView() {
                 folderPath,
               )}
           />
+          <div style={S.groupLabel}>Personalization</div>
+          <div style={S.helpText}>
+            Coco-PE runs only while Coco is sleeping or the Mac is idle. It is
+            checkpointed and pauses immediately for interactive work.
+          </div>
+          <PersonalizationStatusPanel
+            status={personalizationStatus}
+            loading={personalizationStatusLoading}
+            onRefresh={() => void refreshPersonalizationStatus()}
+          />
+          <div style={S.sectionDivider} />
           <div style={S.groupLabel}>Health</div>
           <div style={S.helpText}>
             Checks Coco's local services and sends short real requests to the

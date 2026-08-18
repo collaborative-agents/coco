@@ -1715,6 +1715,15 @@ ipcMain.handle('get-training-screenshot-retention', () => {
   };
 });
 
+ipcMain.removeHandler('get-personalization-status');
+ipcMain.handle('get-personalization-status', () =>
+  personalizationScheduler?.getStatus() ?? {
+    available: false,
+    sleeping: isCocoSleeping(),
+    state: 'idle',
+  },
+);
+
 // ── Dynamic avatar-window resize ──────────────────────────────────────────────
 // Renderer asks for a new content size when the bubble or history panel
 // appears/disappears. We pin the bottom-right corner so the pet stays put

@@ -1,7 +1,75 @@
 import { ChildProcess, spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import log from 'electron-log';
 
-type PersonalizationJob = 'signals' | 'revise' | 'evolve';
+export type PersonalizationJob = 'signals' | 'revise' | 'evolve';
+
+export type PersonalizationRunOutcome =
+  | 'completed'
+  | 'no_work'
+  | 'preempted'
+  | 'failed';
+
+export interface PersonalizationStatus {
+  available: boolean;
+  sleeping: boolean;
+  state: 'idle' | 'running' | 'checkpointed' | PersonalizationRunOutcome;
+  activeJob?: PersonalizationJob;
+  activeStartedAt?: number;
+  checkpointStatus?: string;
+  processedSamples?: number;
+  totalSamples?: number;
+  periodStart?: number;
+  periodEnd?: number;
+  signals?: {
+    signalCount: number;
+    observationCount: number;
+    feedbackEventCount: number;
+    updatedAt?: number;
+  };
+  lastRun?: {
+    job: PersonalizationJob;
+    outcome: PersonalizationRunOutcome;
+    endedAt: number;
+    detail?: string;
+  };
+  nextEvolveAttemptAt?: number;
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function readJson(filePath: string): Record<string, unknown> | undefined {
+  try {
+    return asObject(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+  } catch {
+    return undefined;
+  }
+}
+
+function countJsonLines(filePath: string): number | undefined {
+  try {
+    return fs
+      .readFileSync(filePath, 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => line.trim()).length;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface PersonalizationSchedulerOptions {
   projectRoot: string;
@@ -22,6 +90,14 @@ export interface PersonalizationSchedulerOptions {
 /** Owns one low-priority, disposable personalization subprocess at a time. */
 export class PersonalizationScheduler {
   private active: ChildProcess | null = null;
+
+  private activeJob: PersonalizationJob | null = null;
+
+  private activeStartedAt: number | null = null;
+
+  private activeOutput = '';
+
+  private lastRun: PersonalizationStatus['lastRun'];
 
   private interactiveCount = 0;
 
@@ -93,6 +169,73 @@ export class PersonalizationScheduler {
 
   isSleeping() {
     return this.sleeping;
+  }
+
+  /** Return live scheduler state enriched with resume-safe disk checkpoints. */
+  getStatus(): PersonalizationStatus {
+    const signalCheckpoint = readJson(
+      path.join(this.options.stateRoot, 'signals_checkpoint.json'),
+    );
+    const evolveCheckpoint = readJson(
+      path.join(this.options.stateRoot, 'evolve_checkpoint.json'),
+    );
+    const activeRun = asObject(evolveCheckpoint?.active_run);
+    const runDir = stringValue(activeRun?.run_dir);
+    const snapshotPath = stringValue(activeRun?.snapshot_path);
+    const resumeState = runDir
+      ? readJson(path.join(runDir, 'resume_state.json'))
+      : undefined;
+    const totalSamples = snapshotPath
+      ? countJsonLines(snapshotPath)
+      : undefined;
+    const checkpointStatus =
+      stringValue(resumeState?.status) ?? stringValue(activeRun?.status);
+    let processedSamples = numberValue(resumeState?.n_seen);
+    if (
+      totalSamples !== undefined &&
+      (checkpointStatus === 'finalizing' || activeRun?.status === 'complete')
+    ) {
+      processedSamples = totalSamples;
+    }
+
+    let state: PersonalizationStatus['state'] = 'idle';
+    if (this.active && this.activeJob) state = 'running';
+    else if (activeRun?.status === 'running') state = 'checkpointed';
+    else if (activeRun?.status === 'complete') state = 'completed';
+    else if (this.lastRun) state = this.lastRun.outcome;
+
+    return {
+      available: true,
+      sleeping: this.sleeping,
+      state,
+      ...(this.activeJob && { activeJob: this.activeJob }),
+      ...(this.activeStartedAt && { activeStartedAt: this.activeStartedAt }),
+      ...(checkpointStatus && { checkpointStatus }),
+      ...(processedSamples !== undefined && { processedSamples }),
+      ...(totalSamples !== undefined && { totalSamples }),
+      ...(numberValue(activeRun?.period_start) !== undefined && {
+        periodStart: numberValue(activeRun?.period_start),
+      }),
+      ...(numberValue(activeRun?.period_end) !== undefined && {
+        periodEnd: numberValue(activeRun?.period_end),
+      }),
+      ...(signalCheckpoint && {
+        signals: {
+          signalCount: numberValue(signalCheckpoint.signal_count) ?? 0,
+          observationCount:
+            numberValue(signalCheckpoint.observation_count) ?? 0,
+          feedbackEventCount:
+            numberValue(signalCheckpoint.feedback_event_count) ?? 0,
+          ...(numberValue(signalCheckpoint.updated_at) !== undefined && {
+            updatedAt: numberValue(signalCheckpoint.updated_at),
+          }),
+        },
+      }),
+      ...(this.lastRun && { lastRun: this.lastRun }),
+      ...(this.nextAllowedAt.evolve > Date.now() && {
+        nextEvolveAttemptAt: this.nextAllowedAt.evolve,
+      }),
+    };
   }
 
   private tick() {
@@ -175,9 +318,15 @@ export class PersonalizationScheduler {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.active = child;
+    this.activeJob = job;
+    this.activeStartedAt = Date.now();
+    this.activeOutput = '';
     child.stdout?.on('data', (chunk) => {
       const message = String(chunk).trim();
-      if (message) log.info(`[Personalization:${job}] ${message}`);
+      if (message) {
+        this.activeOutput = message;
+        log.info(`[Personalization:${job}] ${message}`);
+      }
     });
     child.stderr?.on('data', (chunk) => {
       const message = String(chunk).trim();
@@ -188,10 +337,23 @@ export class PersonalizationScheduler {
     });
     child.on('exit', (code, signal) => {
       if (this.active === child) this.active = null;
+      if (this.activeJob === job) this.activeJob = null;
+      this.activeStartedAt = null;
       if (job === 'signals' && (code !== 0 || signal)) {
         this.pendingSignals = true;
       }
       const noWork = code === 3;
+      let outcome: PersonalizationRunOutcome = 'failed';
+      if (signal) outcome = 'preempted';
+      else if (noWork) outcome = 'no_work';
+      else if (code === 0) outcome = 'completed';
+      this.lastRun = {
+        job,
+        outcome,
+        endedAt: Date.now(),
+        ...(this.activeOutput && { detail: this.activeOutput }),
+      };
+      this.activeOutput = '';
       let cooldownMs = 5_000;
       if (noWork) {
         cooldownMs = job === 'evolve' ? 15 * 60_000 : 5 * 60_000;

@@ -2,6 +2,7 @@ import React from 'react';
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
 import {
+  PersonalizationStatusPanel,
   ToolCallCard,
   TrainingScreenshotRetentionNotice,
 } from '../renderer/components/SessionChatView';
@@ -109,7 +110,7 @@ describe('Training screenshot retention notice', () => {
       />,
     );
     expect(
-      screen.queryByText('Training screenshots are being retained'),
+      screen.queryByText('Screenshots are being retained'),
     ).not.toBeInTheDocument();
 
     rerender(
@@ -119,7 +120,7 @@ describe('Training screenshot retention notice', () => {
       />,
     );
     expect(
-      screen.getByText('Training screenshots are being retained'),
+      screen.getByText('Screenshots are being retained'),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/COLLECT_TRAINING_SCREENSHOTS=0/),
@@ -128,5 +129,39 @@ describe('Training screenshot retention notice', () => {
 
     screen.getByRole('button', { name: 'Open local records folder' }).click();
     expect(onOpenFolder).toHaveBeenCalledWith(info.recordsRoot);
+  });
+});
+
+describe('Personalization status', () => {
+  it('shows live self-evolving prompt progress and checkpoint details', () => {
+    render(
+      <PersonalizationStatusPanel
+        loading={false}
+        onRefresh={jest.fn()}
+        status={{
+          available: true,
+          sleeping: true,
+          state: 'running',
+          activeJob: 'evolve',
+          checkpointStatus: 'running',
+          processedSamples: 8,
+          totalSamples: 20,
+          signals: {
+            signalCount: 4,
+            observationCount: 24,
+            feedbackEventCount: 2,
+          },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText('Self-evolving prompt is running'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('8 of 20 samples processed · 40%')).toBeInTheDocument();
+    expect(screen.getByText('Checkpoint: running')).toBeInTheDocument();
+    expect(
+      screen.getByRole('progressbar', { name: 'Self-evolving prompt progress' }),
+    ).toHaveAttribute('aria-valuenow', '40');
   });
 });
