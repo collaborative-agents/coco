@@ -67,10 +67,12 @@ def _load_judge_prompt(scenario: str = "everyday_support") -> str:
     """Load the judge prompt for the given scenario.
 
     ``"student_learning"`` → prompts_problem_solving/judge.txt
+    ``"ai_upskilling"`` → prompts_worker/judge.txt
     Any other value (including ``"everyday_support"``) → prompts_everyday/judge.txt
     """
     prompt_dir = {
         "student_learning": "prompts_problem_solving",
+        "ai_upskilling": "prompts_worker",
     }.get(scenario, "prompts_everyday")
     return (Path(__file__).parent / prompt_dir / "judge.txt").read_text(
         encoding="utf-8"
@@ -761,11 +763,15 @@ class ProgressDetector:
         transparency_prefix = f"[{judgment.trigger_type} trigger — {judgment.struggle_category}] {judgment.evidence}\n\n"
         obs = transparency_prefix + obs
 
-        # Surface the struggle to live UI subscribers (e.g. the Electron avatar
-        # bubble) tagged as "struggle" so it's visually distinct from a plain
-        # pause and carries the prefixed transparency text.
+        # Preserve the time-sensitive Discernment trigger for the Electron UI;
+        # other proactive interventions continue to use the stuck treatment.
+        observation_type = (
+            "discernment_opportunity"
+            if judgment.trigger_type == "discernment_opportunity"
+            else "struggle"
+        )
         ai._broadcast_observation(
-            "struggle",
+            observation_type,
             obs,
             llm_metrics=metrics,
             image_paths=suggestion_image_paths,

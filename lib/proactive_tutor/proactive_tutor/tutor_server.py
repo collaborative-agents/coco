@@ -61,6 +61,19 @@ class GuidanceResponse(BaseModel):
     tool_calls: list[dict] = Field(default_factory=list)
 
 
+class RecapQuizResponse(BaseModel):
+    question: str
+    choices: list[str]
+    correct_index: int
+    explanation: str
+
+
+class RecapResponse(BaseModel):
+    summary_title: str
+    bullets: list[str]
+    quiz: RecapQuizResponse
+
+
 class InstantSuggestionRequest(BaseModel):
     observation: str
     image_paths: list[str] | None = None
@@ -552,6 +565,57 @@ async def handle_user_prompt_stream(req: EventRequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@app.post("/events/practice_suggestions/stream")
+async def handle_practice_suggestions_stream():
+    """Stream personalized activity ideas from the neutral suggestion prompt."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+
+    async def event_stream():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+
+        def publish(event: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                tutor.generate_practice_suggestions_with_metrics,
+                publish,
+            )
+        )
+        try:
+            while not worker.done() or not queue.empty():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            guidance, llm_metrics = await worker
+            while not queue.empty():
+                event = queue.get_nowait()
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            done = {
+                "type": "done",
+                "guidance": guidance,
+                "llm_metrics": llm_metrics,
+                "tool_calls": llm_metrics.get("tool_calls", []),
+                "observer_metrics": None,
+            }
+            yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            logger.error(
+                "Error in streaming practice suggestions: %s",
+                exc,
+                exc_info=True,
+            )
+            error = {"type": "error", "error": str(exc)}
+            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.post("/events/pause", response_model=GuidanceResponse)
 async def handle_pause(req: EventRequest):
     """Receive a pre-computed observation + context for a pause event and return tutor guidance."""
@@ -591,6 +655,21 @@ async def get_context():
         competency_counts=kargs.get("competency_counts", {}),
         intervention_count=kargs.get("intervention_count", 0),
     )
+
+
+@app.post("/recap", response_model=RecapResponse)
+async def generate_recap():
+    """Generate a summary and recap question from the active local transcript."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    try:
+        recap, _metrics = await asyncio.to_thread(tutor.generate_recap)
+        return RecapResponse(**recap)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Recap generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/config/model", response_model=StatusResponse)

@@ -22,8 +22,11 @@ from proactive_tutor.ai_tool_capabilities import (
     get_capabilities_for_tools,
 )
 
-_PROMPT_PATH = Path(__file__).parent / "prompts_everyday" / "instant_suggestion.txt"
-INSTANT_SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
+
+def _load_instant_system_prompt(scenario: str) -> str:
+    prompt_dir = "prompts_worker" if scenario == "ai_upskilling" else "prompts_everyday"
+    prompt_path = Path(__file__).parent / prompt_dir / "instant_suggestion.txt"
+    return prompt_path.read_text(encoding="utf-8")
 
 _VALID_KINDS = {"content", "delegate"}
 
@@ -175,8 +178,8 @@ def generate_instant_suggestion_with_metrics(
 
     Blocking (performs LLM I/O); call from a thread in async contexts.
 
-    ``scenario`` is accepted for parity with the observation event and future
-    scenario-specific prompts; the current prompt is scenario-agnostic.
+    The ``ai_upskilling`` scenario uses a 4D-specific coaching prompt; other
+    scenarios retain the ready-to-use everyday assistance prompt.
     """
     user_prompt = _build_user_prompt(
         observation,
@@ -190,7 +193,7 @@ def generate_instant_suggestion_with_metrics(
     # already captured by the proactive sensing flow.
     agent = TutorAgent(
         model,
-        INSTANT_SYSTEM_PROMPT,
+        _load_instant_system_prompt(scenario),
         enable_memory_tool=True,
         enable_screen_tool=False,
     )

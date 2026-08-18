@@ -70,10 +70,12 @@ def _load_observer_prompt(scenario: str = "everyday_support") -> str:
     """Load the observer prompt for the given scenario.
 
     ``"student_learning"`` → prompts_problem_solving/observer.txt
+    ``"ai_upskilling"`` → prompts_worker/observer.txt
     Any other value (including ``"everyday_support"``) → prompts_everyday/observer.txt
     """
     prompt_dir = {
         "student_learning": "prompts_problem_solving",
+        "ai_upskilling": "prompts_worker",
     }.get(scenario, "prompts_everyday")
     return (Path(__file__).parent / prompt_dir / "observer.txt").read_text(
         encoding="utf-8"
@@ -195,10 +197,6 @@ def _observe(
     # Disable reasoning for sensing model
     if hosted_model.startswith("thinkingmachines/inkling"):
         completion_kwargs["reasoning_effort"] = "none"
-    if "qwen" in hosted_model:
-        completion_kwargs["extra_body"] = {
-            "chat_template_kwargs": {"enable_thinking": False}
-        }
 
     result, metrics = chat_completion(**completion_kwargs)
 
@@ -623,6 +621,10 @@ class AiTutoringProcessor(SegmentProcessor):
         # Timestamp of the last task_suggested event; used to rate-limit
         # pre-session prompts so the user isn't pinged every observation cycle.
         self._last_suggestion_ts: float = 0.0
+        # Observation generation mutates shared snapshot/history state. Keep
+        # calls serialized while running the blocking model request off the
+        # FastAPI event loop so local health checks remain responsive.
+        self._observation_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Factory helper
@@ -751,7 +753,9 @@ class AiTutoringProcessor(SegmentProcessor):
         # bypass the JSON classifier (the observation text for these may not even
         # be JSON, e.g. the prefixed "[Struggle trigger — …]" string from
         # ProgressDetector._fire).
-        if type_ in ("pause", "struggle"):
+        if type_ == "discernment_opportunity":
+            status = "discernment_opportunity"
+        elif type_ in ("pause", "struggle"):
             status = "stuck"
         else:
             status = _classify_observation_status(
@@ -1053,6 +1057,19 @@ class AiTutoringProcessor(SegmentProcessor):
         type: str | None = None,
         hotkey_image_paths: list[str] | None = None,
     ) -> tuple[str, str, LLMCallMetrics]:
+        async with self._observation_lock:
+            return await self._handle_observation_serialized(
+                user_text=user_text,
+                type=type,
+                hotkey_image_paths=hotkey_image_paths,
+            )
+
+    async def _handle_observation_serialized(
+        self,
+        user_text: str | None = None,
+        type: str | None = None,
+        hotkey_image_paths: list[str] | None = None,
+    ) -> tuple[str, str, LLMCallMetrics]:
         from datetime import datetime as _dt
 
         text = await self._build_context_prompt()
@@ -1093,7 +1110,8 @@ class AiTutoringProcessor(SegmentProcessor):
         all_image_paths = snapshot_image_paths + hk_paths
 
         observation_id = uuid.uuid4().hex
-        obs, metrics = _observe(
+        obs, metrics = await asyncio.to_thread(
+            _observe,
             text_prompt,
             all_image_paths,
             system_prompt=self._observer_prompt,

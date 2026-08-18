@@ -570,6 +570,10 @@ function PetView() {
         // notification flow — they are not avatar states. Skip them here so
         // PetSprite never receives an unknown mood.
         if (!(incomingStatus in STATUS_TO_MOOD)) return;
+        // A revealed suggestion is pinned until the user closes it. Continue
+        // recording new observations in main, but do not replace the accepted
+        // suggestion on the avatar surface.
+        if (bubblePinnedRef.current) return;
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
         const phrase = pickPhrase(incomingStatus, seed);
@@ -665,6 +669,7 @@ function PetView() {
       (data: any) => {
         const message = String((data as { message?: unknown })?.message ?? '');
         if (!message) return;
+        if (bubblePinnedRef.current) return;
 
         // Tier 3 replaces any in-flight observation, including Tier 2.
         if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -771,7 +776,16 @@ function PetView() {
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
       if (sleepTimer.current) clearTimeout(sleepTimer.current);
-      setBubble((b) => (b ? { ...b, suggestion: res.suggestion, fadingOut: false } : null));
+      setBubble((b) =>
+        b
+          ? {
+              ...b,
+              suggestion: res.suggestion,
+              scenario: res.scenario,
+              fadingOut: false,
+            }
+          : null,
+      );
       return;
     }
 

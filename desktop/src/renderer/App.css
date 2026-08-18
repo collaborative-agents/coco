@@ -207,11 +207,18 @@ body,
 /* Revealed instant suggestion: wider bubble + scrollable, ready-to-copy body. */
 .observation-bubble.has-suggestion {
   max-width: 320px;
+  max-height: calc(100vh - 48px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .observation-suggestion-body {
   margin-top: 4px;
-  max-height: 320px;
+  flex: 1 1 180px;
+  min-height: 72px;
+  max-height: 240px;
   overflow-y: auto;
   white-space: pre-wrap;
   font-size: 13px;
@@ -223,6 +230,88 @@ body,
   border: 1px solid var(--bubble-accent-soft);
   -webkit-app-region: no-drag;
   user-select: text;
+}
+
+.bubble-framework-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.bubble-framework-heading {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.bubble-framework-concept {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+}
+
+.bubble-framework-term {
+  color: var(--bubble-accent);
+  font-weight: 700;
+}
+
+.bubble-framework-pager {
+  position: relative;
+  min-height: 30px;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.bubble-framework-page-bars {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translate(-50%, -50%);
+}
+
+.bubble-framework-page-bar {
+  width: 10px;
+  height: 3px;
+  border-radius: 999px;
+  background: #c7cad5;
+  transition: width 0.15s ease, background 0.15s ease;
+}
+
+.bubble-framework-page-bar.is-active {
+  width: 24px;
+  background: var(--bubble-accent);
+}
+
+.bubble-framework-arrow {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--bubble-accent-soft);
+  color: var(--bubble-accent);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.65;
+  -webkit-app-region: no-drag;
+}
+
+.bubble-framework-arrow:hover {
+  opacity: 1;
 }
 
 /* Transient confirmation after Copy / Approve. */
@@ -1363,6 +1452,102 @@ body,
   letter-spacing: 0.08em;
   line-height: 1.2;
   text-transform: uppercase;
+}
+
+/* Two-page 4D explainer shown before an AI-upskilling suggestion. */
+.toast-framework-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #1f2937;
+}
+
+.toast-framework-eyebrow {
+  color: #6366f1;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.toast-framework-heading {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.toast-framework-concept {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 7px;
+  color: #4b5563;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.toast-framework-term {
+  color: #4f46e5;
+  font-weight: 700;
+}
+
+.toast-card--framework-overview > .toast-footer {
+  display: none;
+}
+
+.toast-framework-pager {
+  position: relative;
+  min-height: 34px;
+  padding: 2px 14px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.toast-framework-page-bars {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translate(-50%, -60%);
+}
+
+.toast-framework-page-bar {
+  width: 10px;
+  height: 3px;
+  border-radius: 999px;
+  background: #c7cad5;
+  transition: width 0.15s ease, background 0.15s ease;
+}
+
+.toast-framework-page-bar.is-active {
+  width: 24px;
+  background: #6366f1;
+}
+
+.toast-framework-arrow {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(99, 102, 241, 0.12);
+  color: rgba(79, 70, 229, 0.62);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.toast-framework-arrow:hover {
+  background: rgba(99, 102, 241, 0.20);
+  color: #4f46e5;
 }
 
 /* Action button row */

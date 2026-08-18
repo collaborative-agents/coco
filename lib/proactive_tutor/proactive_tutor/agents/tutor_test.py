@@ -152,6 +152,31 @@ def test_tool_call_gets_recent_observations(monkeypatch) -> None:
     }
 
 
+def test_tool_call_normalizes_decimal_hour_offsets(monkeypatch) -> None:
+    captured: dict = {}
+
+    async def fake_recent_observations(**kwargs):
+        captured.update(kwargs)
+        return {"count": 0, "observations": []}
+
+    monkeypatch.setattr(
+        tutor_module,
+        "call_get_recent_observations",
+        fake_recent_observations,
+    )
+    agent = TutorAgent("test-model", "system")
+
+    result = agent._execute_tool_call(
+        {
+            "name": "get_recent_observations",
+            "arguments": {"start_hh_mm_ago": 0.5, "limit": 10},
+        }
+    )
+
+    assert result == {"count": 0, "observations": []}
+    assert captured["start_hh_mm_ago"] == "00:30"
+
+
 def test_tool_call_observes_screen_only_when_requested(monkeypatch) -> None:
     captured: dict = {}
     expected = {

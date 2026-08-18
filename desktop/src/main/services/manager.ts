@@ -4,6 +4,11 @@ import path from 'path';
 import os from 'os';
 import { app } from 'electron';
 import log from 'electron-log';
+import {
+  DEFAULT_SUPPORTED_MODES,
+  normalizeSupportedModes,
+} from '../../shared/agent-modes';
+import type { AgentModeId } from '../../shared/agent-modes';
 
 const PROVIDER_ENV_NAMES = new Set([
   'ANTHROPIC_API_KEY',
@@ -89,6 +94,8 @@ export class ServiceManager {
   private runtimeServicesRoot: string = '';
 
   private configPath: string | null = null;
+
+  private supportedModes: AgentModeId[] = [...DEFAULT_SUPPORTED_MODES];
 
   // Managed model configuration supplies each child only the credentials for
   // its role. Legacy/dev .env startup leaves this false for compatibility.
@@ -189,6 +196,7 @@ export class ServiceManager {
       }
       const raw = fs.readFileSync(candidate, 'utf8');
       const parsed = JSON.parse(raw);
+      this.supportedModes = normalizeSupportedModes(parsed.supportedModes);
       const services = parsed.services as ServiceConfig[];
       if (!Array.isArray(services)) return;
 
@@ -262,6 +270,12 @@ export class ServiceManager {
     } catch (e) {
       log.warn('[ServiceManager] failed to load service config', e);
     }
+  }
+
+  /** Return the mode allowlist embedded in the development or packaged config. */
+  public getSupportedModes(): AgentModeId[] {
+    if (!this.configPath) this.loadConfig();
+    return [...this.supportedModes];
   }
 
   /** start all services declared in config */

@@ -11,6 +11,13 @@ import {
   encodeCustomAgent,
 } from './observation-types';
 import type { LLMCallMetrics, TutorToolCall } from './observation-types';
+import {
+  AGENT_MODES,
+  DEFAULT_SUPPORTED_MODES,
+  defaultMode,
+  normalizeSupportedModes,
+} from '../../shared/agent-modes';
+import type { AgentModeId } from '../../shared/agent-modes';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -28,7 +35,6 @@ interface Guidance {
   examplePrompt?: string | null;
   vizCode?: string | null;
 }
-
 /** Scan for the first balanced {...} block, respecting strings and escapes. */
 function extractJsonObject(text: string): string | null {
   let start = text.indexOf('{');
@@ -135,6 +141,7 @@ interface ChatMessage {
   /** Exact request payload retained so an error can be retried in place. */
   retryText?: string;
   retryImages?: string[];
+  retryRequestKind?: 'chat' | 'practice_suggestions';
 }
 
 function copyableMessageText(message: ChatMessage): string {
@@ -307,7 +314,10 @@ const S: Record<string, React.CSSProperties> = {
   pending: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   pendingThumbWrap: { position: 'relative' },
   pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
-  inputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
+  inputRow: { display: 'flex', gap: 8, alignItems: 'stretch' },
+  composerActions: { display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 7, width: 94, flexShrink: 0 },
+  finishTaskBtn: { width: '100%', border: `1px solid ${ACCENT_BORDER}`, background: ACCENT_BG, color: ACCENT, borderRadius: 10, padding: '7px 8px', fontSize: 11.5, cursor: 'pointer', fontWeight: 700, fontFamily: FONT, whiteSpace: 'nowrap' },
+  finishTaskError: { marginBottom: 7, color: '#b91c1c', fontSize: 10.5, textAlign: 'right' },
   textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
   sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
   sendBtnDisabled: { opacity: 0.4, cursor: 'default' },
@@ -333,6 +343,13 @@ const S: Record<string, React.CSSProperties> = {
   feedbackBtnLocked: { opacity: 0.25, cursor: 'default' },
   typing: { alignSelf: 'flex-start', color: '#9ca3af', fontSize: 12, fontStyle: 'italic', paddingLeft: 32 },
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
+  starterPanel: { margin: 'auto', width: '100%', maxWidth: 390, boxSizing: 'border-box', color: '#374151' },
+  starterTitle: { fontSize: 16, fontWeight: 700, textAlign: 'center', marginBottom: 4 },
+  starterHelp: { fontSize: 12.5, color: '#6b7280', lineHeight: 1.45, textAlign: 'center', marginBottom: 14 },
+  personalizedTaskBtn: { width: '100%', border: `1px solid ${ACCENT_BORDER}`, background: ACCENT_BG, color: ACCENT, borderRadius: 12, padding: '10px 12px', fontSize: 12.5, lineHeight: 1.35, cursor: 'pointer', fontWeight: 700, fontFamily: FONT, textAlign: 'left', marginBottom: 10 },
+  starterLabel: { fontSize: 11, color: '#9ca3af', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 },
+  starterGrid: { display: 'flex', flexDirection: 'column', gap: 6 },
+  starterBtn: { width: '100%', border: `1px solid ${BORDER}`, background: '#fff', color: '#4b5563', borderRadius: 10, padding: '8px 10px', fontSize: 12, lineHeight: 1.35, cursor: 'pointer', fontFamily: FONT, textAlign: 'left' },
   // Settings panel (mirrors the onboarding toolkit step)
   settings: { borderBottom: `1px solid ${BORDER}`, background: '#ffffff', padding: '14px', maxHeight: 360, overflowY: 'auto' },
   healthList: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 },
@@ -368,10 +385,16 @@ const S: Record<string, React.CSSProperties> = {
 
 const CHATBOTS = Object.values(AI_TOOLS).filter((t) => t.category === 'chatbot');
 const AGENTS = Object.values(AI_TOOLS).filter((t) => t.category === 'agent');
-const MODE_OPTIONS = [
-  { id: 'everyday_support', label: 'Everyday Support' },
-  { id: 'student_learning', label: 'Student Learning' },
+const MODE_OPTIONS = AGENT_MODES.filter(({ id }) => id !== 'custom');
+
+const AI_UPSKILLING_STARTERS = [
+  'Review my recent work activity to find one part that AI could handle.',
+  'Show me how to ask AI for a useful first draft.',
+  'Help me with the current task on my screen.',
 ];
+
+const PERSONALIZED_TASK_REQUEST =
+  'Suggest meaningful tasks I can practice or topics I can learn based on my usual work and experience level.';
 
 function TutorMessage({ text }: { text: string }) {
   const g = parseGuidance(text);
@@ -549,6 +572,8 @@ export default function SessionChatView() {
   const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [startingNewSession, setStartingNewSession] = useState(false);
+  const [finishingTask, setFinishingTask] = useState(false);
+  const [finishTaskError, setFinishTaskError] = useState('');
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [contentZoomFactor, setContentZoomFactor] = useState(1);
@@ -579,6 +604,7 @@ export default function SessionChatView() {
   const [modelLoadError, setModelLoadError] = useState('');
   const [modelSaveError, setModelSaveError] = useState('');
   const [modelSavedFlash, setModelSavedFlash] = useState(false);
+  const [routerManaged, setRouterManaged] = useState(false);
   const [serviceHealth, setServiceHealth] = useState<ServiceHealthView | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthError, setHealthError] = useState('');
@@ -587,6 +613,9 @@ export default function SessionChatView() {
   >({});
   // Editable draft of the settings, synced from the loaded profile.
   const [editScenario, setEditScenario] = useState('everyday_support');
+  const [supportedModes, setSupportedModes] = useState<AgentModeId[]>(
+    DEFAULT_SUPPORTED_MODES,
+  );
   const [editTools, setEditTools] = useState<string[]>([]);
   const [editHideAvatar, setEditHideAvatar] = useState(false);
   const [avatarSaving, setAvatarSaving] = useState(false);
@@ -772,13 +801,23 @@ export default function SessionChatView() {
   }, [scrollToBottom]);
 
   const submitTutorRequest = useCallback(
-    async (requestId: string, userText: string, images: string[]) => {
+    async (
+      requestId: string,
+      userText: string,
+      images: string[],
+      displayText?: string,
+      isRetry = false,
+      requestKind: 'chat' | 'practice_suggestions' = 'chat',
+    ) => {
       setSending(true);
       scrollToBottom();
       const res = await window.electron?.ipcRenderer.invoke('send-chat-message', {
         requestId,
         userText,
+        displayText,
+        isRetry,
         images,
+        requestKind,
       });
       const r = res as {
         streamed?: boolean;
@@ -818,7 +857,11 @@ export default function SessionChatView() {
   // Core send: append the user turn and an empty tutor turn immediately. The
   // latter is filled by chat-stream-event updates while the IPC request runs.
   const sendMessage = useCallback(
-    async (text: string, images: string[]) => {
+    async (
+      text: string,
+      images: string[],
+      requestKind: 'chat' | 'practice_suggestions' = 'chat',
+    ) => {
       const trimmed = text.trim();
       if (!trimmed && images.length === 0) return;
       const requestId = makeMessageId();
@@ -837,11 +880,19 @@ export default function SessionChatView() {
           toolCalls: [],
           retryText: userText,
           retryImages: images,
+          retryRequestKind: requestKind,
         },
       ]);
       pendingContextRef.current = null;
       setPendingContextLabel(null);
-      await submitTutorRequest(requestId, userText, images);
+      await submitTutorRequest(
+        requestId,
+        userText,
+        images,
+        trimmed,
+        false,
+        requestKind,
+      );
     },
     [submitTutorRequest],
   );
@@ -866,7 +917,14 @@ export default function SessionChatView() {
             : item,
         ),
       );
-      await submitTutorRequest(requestId, message.retryText, images);
+      await submitTutorRequest(
+        requestId,
+        message.retryText,
+        images,
+        undefined,
+        true,
+        message.retryRequestKind ?? 'chat',
+      );
     },
     [sending, startingNewSession, submitTutorRequest],
   );
@@ -930,7 +988,13 @@ export default function SessionChatView() {
 
   // Load the user's onboarding profile (mode + AI tools) for the Settings panel.
   useEffect(() => {
-    window.electron?.ipcRenderer
+    const ipc = window.electron?.ipcRenderer;
+    if (!ipc) return;
+    ipc
+      .invoke('get-llm-router-status')
+      .then((status: any) => setRouterManaged(status?.configured === true))
+      .catch(() => {});
+    ipc
       .invoke('get-model-configuration')
       .then((config: any) => {
         if (!config?.sensing || !Array.isArray(config.tutors) || config.tutors.length === 0) {
@@ -964,21 +1028,29 @@ export default function SessionChatView() {
         );
       })
       .finally(() => setModelConfigLoading(false));
-    window.electron?.ipcRenderer
-      .invoke('get-profile')
-      .then((p: any) => {
-        if (!p) return;
+
+    Promise.all([ipc.invoke('get-profile'), ipc.invoke('get-supported-modes')])
+      .then(([p, configuredModes]: any[]) => {
+        const nextModes = normalizeSupportedModes(configuredModes);
+        setSupportedModes(nextModes);
+        const savedScenario =
+          typeof p?.tutorScenario === 'string' ? p.tutorScenario : '';
+        const nextScenario = nextModes.includes(savedScenario as AgentModeId)
+          ? savedScenario
+          : defaultMode(nextModes);
         const next = {
-          scenario: typeof p.tutorScenario === 'string' ? p.tutorScenario : 'everyday_support',
-          aiTools: Array.isArray(p.aiTools) ? p.aiTools : [],
-          hideAvatar: p.hideAvatar === true,
+          scenario: nextScenario,
+          aiTools: Array.isArray(p?.aiTools) ? p.aiTools : [],
+          hideAvatar: p?.hideAvatar === true,
         };
         setProfile(next);
         setEditScenario(next.scenario);
         setEditTools(next.aiTools);
         setEditHideAvatar(next.hideAvatar);
+        return undefined;
       })
       .catch(() => {});
+    return undefined;
   }, []);
 
   const switchTutorModel = async (modelId: string) => {
@@ -1302,6 +1374,24 @@ export default function SessionChatView() {
       });
     } finally {
       setStartingNewSession(false);
+    }
+  };
+
+  const handleFinishTask = async () => {
+    if (sending || startingNewSession || finishingTask || input.trim()) return;
+    setFinishingTask(true);
+    setFinishTaskError('');
+    try {
+      const result = (await window.electron?.ipcRenderer.invoke(
+        'finish-task-successfully',
+      )) as { success?: boolean; error?: string } | undefined;
+      if (!result?.success) {
+        setFinishTaskError(result?.error || 'Could not open the session recap.');
+      }
+    } catch {
+      setFinishTaskError('Could not open the session recap.');
+    } finally {
+      setFinishingTask(false);
     }
   };
 
@@ -1633,7 +1723,9 @@ export default function SessionChatView() {
 
           <div style={S.groupLabel}>Models &amp; providers</div>
           <div style={S.helpText}>
-            The sensing model receives screenshots. Saving changes restarts the local sensing and tutor services.
+            {routerManaged
+              ? 'Models use the managed CoCo Router. Personal API keys are not required; the sensing model is fixed, while Gemini tutor models remain configurable.'
+              : 'The sensing model receives screenshots. Saving changes restarts the local sensing and tutor services.'}
           </div>
           {modelConfigLoading && (
             <div style={{ ...S.helpText, marginTop: 8 }}>Loading model settings…</div>
@@ -1647,6 +1739,7 @@ export default function SessionChatView() {
                 <select
                   style={S.customInput}
                   value={sensingModel.provider}
+                  disabled={routerManaged}
                   onChange={(event) => setSensingModel({
                     ...sensingModel,
                     provider: event.target.value,
@@ -1659,6 +1752,7 @@ export default function SessionChatView() {
                 <input
                   style={S.customInput}
                   value={sensingModel.model}
+                  disabled={routerManaged}
                   placeholder={sensingModel.provider === 'hosted_vllm'
                     ? 'Exact model ID returned by /v1/models'
                     : 'Vision-capable sensing model'}
@@ -1667,7 +1761,7 @@ export default function SessionChatView() {
                     model: event.target.value,
                   })}
                 />
-                {MODEL_ENDPOINT_PROVIDERS.has(sensingModel.provider) && (
+                {!routerManaged && MODEL_ENDPOINT_PROVIDERS.has(sensingModel.provider) && (
                   <input
                     style={S.customInput}
                     value={sensingModel.baseUrl ?? ''}
@@ -1680,7 +1774,7 @@ export default function SessionChatView() {
                     })}
                   />
                 )}
-                {sensingModel.provider !== 'lm_studio' && (
+                {!routerManaged && sensingModel.provider !== 'lm_studio' && (
                   <input
                     style={S.customInput}
                     type="password"
@@ -1748,12 +1842,16 @@ export default function SessionChatView() {
                   <select
                     style={S.customInput}
                     value={model.provider}
+                    disabled={routerManaged}
                     onChange={(event) => setTutorModels((current) =>
                       current.map((item, i) => i === index
                         ? { ...item, provider: event.target.value }
                         : item))}
                   >
-                    {MODEL_PROVIDER_OPTIONS.map(([id, label]) => (
+                    {(routerManaged
+                      ? MODEL_PROVIDER_OPTIONS.filter(([id]) => id === 'gemini')
+                      : MODEL_PROVIDER_OPTIONS
+                    ).map(([id, label]) => (
                       <option key={id} value={id}>{label}</option>
                     ))}
                   </select>
@@ -1768,7 +1866,7 @@ export default function SessionChatView() {
                         ? { ...item, model: event.target.value }
                         : item))}
                   />
-                  {MODEL_ENDPOINT_PROVIDERS.has(model.provider) && (
+                  {!routerManaged && MODEL_ENDPOINT_PROVIDERS.has(model.provider) && (
                     <input
                       style={S.customInput}
                       value={model.baseUrl ?? ''}
@@ -1781,7 +1879,7 @@ export default function SessionChatView() {
                           : item))}
                     />
                   )}
-                  {model.provider !== 'lm_studio' && (
+                  {!routerManaged && model.provider !== 'lm_studio' && (
                     <input
                       style={S.customInput}
                       type="password"
@@ -1857,7 +1955,12 @@ export default function SessionChatView() {
                   const id = `tutor-${Date.now()}`;
                   setTutorModels((current) => [
                     ...current,
-                    { id, label: '', provider: 'anthropic', model: '' },
+                    {
+                      id,
+                      label: '',
+                      provider: routerManaged ? 'gemini' : 'anthropic',
+                      model: '',
+                    },
                   ]);
                 }}
               >
@@ -1910,7 +2013,9 @@ export default function SessionChatView() {
 
           <div style={S.groupLabel}>Agent mode</div>
           <div style={S.chips}>
-            {MODE_OPTIONS.map((m) => (
+            {MODE_OPTIONS.filter((mode) =>
+              supportedModes.includes(mode.id),
+            ).map((m) => (
               <button
                 key={m.id}
                 type="button"
@@ -2118,11 +2223,54 @@ export default function SessionChatView() {
           )}
           <div style={S.list} ref={listRef}>
         {visibleMessages.length === 0 && !sending && (
-          <div style={S.empty}>
-            Ask Coco about your task, an AI tool, or anything else.
-            <br />
-            You can paste a screenshot to show what you&apos;re working on.
-          </div>
+          profile.scenario === 'ai_upskilling' && !reviewing ? (
+            <div style={S.starterPanel}>
+              <div style={S.starterTitle}>What would you like to practice?</div>
+              <div style={S.starterHelp}>
+                Pick an example below, or let Coco suggest meaningful practice
+                tasks or topics that fit your work and experience.
+              </div>
+              <button
+                type="button"
+                style={{
+                  ...S.personalizedTaskBtn,
+                  ...(sending || startingNewSession ? S.sendBtnDisabled : {}),
+                }}
+                disabled={sending || startingNewSession}
+                onClick={() =>
+                  sendMessage(
+                    PERSONALIZED_TASK_REQUEST,
+                    [],
+                    'practice_suggestions',
+                  )
+                }
+              >
+                ✦ Suggest tasks for me
+                <span style={{ display: 'block', fontWeight: 400, marginTop: 2 }}>
+                  Find something useful to do or learn, with AI supporting you
+                </span>
+              </button>
+              <div style={S.starterLabel}>Or try an example</div>
+              <div style={S.starterGrid}>
+                {AI_UPSKILLING_STARTERS.map((starter) => (
+                  <button
+                    key={starter}
+                    type="button"
+                    style={S.starterBtn}
+                    onClick={() => setInput(starter)}
+                  >
+                    {starter}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={S.empty}>
+              Ask Coco about your task, an AI tool, or anything else.
+              <br />
+              You can paste a screenshot to show what you&apos;re working on.
+            </div>
+          )
         )}
         {visibleMessages.map((m, i) => (
           // eslint-disable-next-line react/no-array-index-key
@@ -2285,6 +2433,9 @@ export default function SessionChatView() {
             ))}
           </div>
         )}
+        {finishTaskError && (
+          <div style={S.finishTaskError}>{finishTaskError}</div>
+        )}
         {tutorModels.length > 0 && (
           <div style={S.composerModelRow} data-testid="composer-model-selector">
             <span style={S.composerModelLabel}>Tutor model</span>
@@ -2312,14 +2463,42 @@ export default function SessionChatView() {
             onPaste={onPaste}
             onKeyDown={onKeyDown}
           />
-          <button
-            type="button"
-            style={{ ...S.sendBtn, ...(canSend ? {} : S.sendBtnDisabled) }}
-            onClick={handleSend}
-            disabled={!canSend}
-          >
-            Send
-          </button>
+          <div style={S.composerActions}>
+            {profile.scenario === 'ai_upskilling' && !reviewing && (
+              <button
+                type="button"
+                style={{
+                  ...S.finishTaskBtn,
+                  ...(sending || startingNewSession || finishingTask || input.trim()
+                    ? S.sendBtnDisabled
+                    : {}),
+                }}
+                disabled={Boolean(
+                  sending || startingNewSession || finishingTask || input.trim(),
+                )}
+                onClick={handleFinishTask}
+                title={
+                  input.trim()
+                    ? 'Send or clear your message before finishing'
+                    : 'Finish this task and open the session recap'
+                }
+              >
+                {finishingTask ? 'Opening…' : '✓ Finish'}
+              </button>
+            )}
+            <button
+              type="button"
+              style={{
+                ...S.sendBtn,
+                width: '100%',
+                ...(canSend ? {} : S.sendBtnDisabled),
+              }}
+              onClick={handleSend}
+              disabled={!canSend}
+            >
+              Send
+            </button>
+          </div>
         </div>
         <div style={S.hotkeyHint}>
           Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot

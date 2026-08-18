@@ -38,6 +38,8 @@ jobs:
 
   package:
     needs: prepare
+    env:
+      LLM_ROUTER_URL: https://coco.router.saltlab.stanford.edu
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}

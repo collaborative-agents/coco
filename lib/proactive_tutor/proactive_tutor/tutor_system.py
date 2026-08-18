@@ -1,10 +1,12 @@
 import json
 import os
+import re
 import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from external_api.llm import prompt_to_text_with_metrics
 from external_api.types import LLMCallMetrics
 from proactive_tutor.agents.tutor import TutorAgent
 from proactive_tutor.ai_tool_capabilities import (
@@ -17,14 +19,55 @@ from py_utils.training_recorder import TrainingRecorder
 logger = init_logger(__name__)
 
 
+_RECAP_SYSTEM_PROMPT = """You are a learning coach summarizing a tutoring session.
+Given the conversation transcript, produce a JSON object with this exact shape:
+
+{
+  "summary_title": "<a concise title starting with 'You learned...' or 'You practiced...'>",
+  "bullets": [
+    "<one concrete thing the user learned or did>",
+    "<another concrete thing>",
+    "<optional third thing>"
+  ],
+  "quiz": {
+    "question": "<one multiple-choice question testing a key concept from the session>",
+    "choices": ["<answer>", "<answer>", "<answer>", "<answer>"],
+    "correct_index": 0,
+    "explanation": "<a friendly explanation of the correct answer>"
+  }
+}
+
+Rules:
+- Ground every field in the actual transcript; do not invent topics.
+- Make the quiz test a transferable concept that was genuinely covered.
+- Provide exactly four choices, shuffle the correct choice, and set correct_index accordingly.
+- If the 4D Framework was discussed, use its exact competency names when they
+  are relevant: Delegation, Description, Discernment, and Diligence.
+- Do not use the four competency names themselves as the four answer choices.
+  Do not substitute related labels such as Stage, Task, or Rules either.
+- The question must present a practical situation and ask what the user should
+  do next. Every choice must be a concrete action phrase or full sentence, not
+  a one-word concept label.
+- Bad question: "Which concept is this?" with choices "Stage", "Task", "Rules",
+  and "Discernment".
+- Good question: "Before using AI-generated payroll totals, what should you do?"
+  with four plausible actions the user could take.
+- Return only valid JSON, with no Markdown fences or extra keys.
+"""
+
+_PRACTICE_SUGGESTION_REQUEST = (
+    "Suggest meaningful tasks I can practice or topics I can learn based on my "
+    "usual work and experience level."
+)
+
+
 class TutorSystem:
     """
     Conversation manager for everyday chat and structured learning support.
 
-    Everyday support uses ordinary system/user/assistant messages and lets the
-    tutor retrieve long-term context through memory_mcp. Learning scenarios
-    retain their structured observation prompt. The class also exposes context
-    for the Streamer via GET /context.
+    Everyday support and AI upskilling can retrieve long-term context through
+    memory_mcp. Learning scenarios retain their structured observation prompt.
+    The class also exposes context for the Streamer via GET /context.
 
     Exposed over HTTP by tutor_server.py.
     """
@@ -39,7 +82,7 @@ class TutorSystem:
         self.tutor_agent = TutorAgent(
             model_name,
             (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
-            enable_memory_tool=scenario == "everyday_support",
+            enable_memory_tool=scenario in ("everyday_support", "ai_upskilling"),
         )
 
         self.problem_statement: str = ""
@@ -97,10 +140,12 @@ class TutorSystem:
         """Return the prompts directory Path for the given scenario.
 
         ``"student_learning"`` → prompts_problem_solving/
+        ``"ai_upskilling"`` → prompts_worker/
         Any other value (including ``"everyday_support"``) → prompts_everyday/
         """
         dir_name = {
             "student_learning": "prompts_problem_solving",
+            "ai_upskilling": "prompts_worker",
         }.get(scenario, "prompts_everyday")
         return Path(__file__).parent / dir_name
 
@@ -204,7 +249,7 @@ class TutorSystem:
         self.tutor_agent = TutorAgent(
             model_name,
             (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
-            enable_memory_tool=self._scenario == "everyday_support",
+            enable_memory_tool=self._scenario in ("everyday_support", "ai_upskilling"),
         )
 
     def set_ai_tools(self, tool_ids: list[str]) -> None:
@@ -226,7 +271,7 @@ class TutorSystem:
         self.tutor_agent = TutorAgent(
             model_name,
             (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
-            enable_memory_tool=scenario == "everyday_support",
+            enable_memory_tool=scenario in ("everyday_support", "ai_upskilling"),
         )
 
     @staticmethod
@@ -300,6 +345,111 @@ class TutorSystem:
 
         self._chat_messages = restored
         self.conversation_history = legacy_history
+
+    def generate_recap(self) -> tuple[dict, LLMCallMetrics]:
+        """Generate a grounded session summary and four-choice recap question."""
+        transcript = "\n".join(self.conversation_history).strip()
+        if not transcript:
+            raise ValueError("Session transcript is empty — cannot generate recap")
+
+        retry_instruction = ""
+        for attempt in range(2):
+            raw, metrics = prompt_to_text_with_metrics(
+                model=self.tutor_agent.model,
+                system_prompt=_RECAP_SYSTEM_PROMPT,
+                user_prompt=(
+                    "Here is the tutoring session transcript:\n\n"
+                    f"{transcript}\n\nGenerate the recap JSON."
+                    f"{retry_instruction}"
+                ),
+                operation="session_recap",
+            )
+            recap = self._parse_recap(raw)
+            try:
+                self._validate_recap_quiz_quality(recap)
+                return recap, metrics
+            except ValueError as exc:
+                if attempt == 1:
+                    raise
+                retry_instruction = (
+                    "\n\nThe previous quiz was rejected because "
+                    f"{exc}. Generate a new practical scenario question with "
+                    "four concrete action choices, not vocabulary labels."
+                )
+
+        raise ValueError("Could not generate a valid recap quiz")
+
+    @staticmethod
+    def _parse_recap(raw: str) -> dict:
+        """Extract and validate recap JSON returned by the model."""
+        text = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text, flags=re.IGNORECASE)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        recap = json.loads(match.group(0) if match else text)
+
+        if not isinstance(recap, dict):
+            raise ValueError("Recap must be a JSON object")
+        title = recap.get("summary_title")
+        bullets = recap.get("bullets")
+        quiz = recap.get("quiz")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("Recap is missing summary_title")
+        if not isinstance(bullets, list) or not 2 <= len(bullets) <= 3:
+            raise ValueError("Recap bullets must contain two or three items")
+        if not all(isinstance(item, str) and item.strip() for item in bullets):
+            raise ValueError("Recap bullets must be non-empty strings")
+        if not isinstance(quiz, dict):
+            raise ValueError("Recap is missing quiz")
+        if not isinstance(quiz.get("question"), str) or not quiz["question"].strip():
+            raise ValueError("Recap quiz is missing a question")
+        choices = quiz.get("choices")
+        if not isinstance(choices, list) or len(choices) != 4:
+            raise ValueError("Recap quiz must contain exactly four choices")
+        if not all(isinstance(choice, str) and choice.strip() for choice in choices):
+            raise ValueError("Recap choices must be non-empty strings")
+        correct_index = quiz.get("correct_index")
+        if not isinstance(correct_index, int) or not 0 <= correct_index < 4:
+            raise ValueError("Recap quiz has an invalid correct_index")
+        if (
+            not isinstance(quiz.get("explanation"), str)
+            or not quiz["explanation"].strip()
+        ):
+            raise ValueError("Recap quiz is missing an explanation")
+        return recap
+
+    @staticmethod
+    def _validate_recap_quiz_quality(recap: dict) -> None:
+        """Reject vocabulary-label quizzes that do not test applied judgment."""
+        choices = recap["quiz"]["choices"]
+        framework_labels = {
+            "delegation",
+            "description",
+            "discernment",
+            "diligence",
+            "stage",
+            "task",
+            "rule",
+            "rules",
+        }
+
+        label_choices = 0
+        short_choices = 0
+        for choice in choices:
+            normalized = re.sub(r"^[\s\-–—\d.)]+", "", choice.strip().lower())
+            leading_label = re.split(r"\s*[(:—–-]", normalized, maxsplit=1)[0]
+            if normalized in framework_labels or leading_label in framework_labels:
+                label_choices += 1
+            if len(re.findall(r"\b\w+\b", normalized)) < 3:
+                short_choices += 1
+
+        if label_choices >= 2:
+            raise ValueError(
+                "multiple answer choices are framework vocabulary labels"
+            )
+        if short_choices >= 3:
+            raise ValueError(
+                "most answer choices are too short to describe concrete actions"
+            )
 
     # ------------------------------------------------------------------
     # Long-term memory (user-editable, persisted across sessions)
@@ -398,12 +548,16 @@ class TutorSystem:
     ) -> list[dict[str, str]]:
         """Build normal chat messages with memory as separate system context."""
         memory = self.memory.strip() or "(no saved user memory)"
+        tools = (
+            self._ai_tools_context_block()
+            or "<ai_tools_context>(empty)</ai_tools_context>"
+        )
         messages = [
             {
                 "role": "system",
                 "content": (
                     "User memory follows. Use it only when relevant and do not "
-                    f"mention this context explicitly.\n\n{memory}"
+                    f"mention this context explicitly.\n\n{memory}\n\n{tools}"
                 ),
             },
             *[dict(message) for message in self._chat_messages],
@@ -486,6 +640,51 @@ class TutorSystem:
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
+
+    def generate_practice_suggestions_with_metrics(
+        self,
+        on_event: Callable[[dict], None] | None = None,
+    ) -> tuple[str, LLMCallMetrics]:
+        """Generate personalized practice ideas outside the literacy-coach prompt."""
+        prompt_path = self._prompts_dir("ai_upskilling") / "practice_suggestions.txt"
+        suggestion_agent = TutorAgent(
+            self.tutor_agent.model,
+            prompt_path.read_text(),
+            enable_memory_tool=True,
+            enable_screen_tool=False,
+        )
+        memory = self.memory.strip() or "(no saved user memory)"
+        tools = (
+            self._ai_tools_context_block()
+            or "<ai_tools_context>(empty)</ai_tools_context>"
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": f"<saved_user_context>\n{memory}\n</saved_user_context>\n\n{tools}",
+            },
+            {"role": "user", "content": _PRACTICE_SUGGESTION_REQUEST},
+        ]
+        response, metrics = suggestion_agent.chat_with_metrics(
+            messages,
+            on_event=on_event,
+        )
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversation_history.extend(
+            [
+                f"[{ts}] [User]: {_PRACTICE_SUGGESTION_REQUEST}",
+                f"[{ts}] [Tutor]: {response}",
+            ]
+        )
+        self._log_tutor_call(
+            "practice_suggestions",
+            json.dumps(messages, ensure_ascii=False),
+            response,
+            None,
+            llm_metrics=metrics,
+        )
+        return response, metrics
 
     def handle_user_prompt(
         self,

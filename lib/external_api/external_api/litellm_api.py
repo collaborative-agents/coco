@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
@@ -64,6 +65,11 @@ def get_litellm_completion(
 
     Doc: https://docs.litellm.ai/docs
     """
+    # Gemini 3 accepts sampling parameters for now, but its provider warns that
+    # they are deprecated and will be removed. Let the model use its defaults;
+    # behavioral guidance belongs in the system prompt for this model family.
+    model_name = model.rsplit("/", 1)[-1].lower()
+    uses_prompt_only_sampling = model_name.startswith("gemini-3")
     kwargs: dict = {
         "model": model,
         "messages": [
@@ -75,9 +81,10 @@ def get_litellm_completion(
             else message
             for message in messages
         ],
-        "temperature": temperature,
         "stream": stream,
     }
+    if not uses_prompt_only_sampling:
+        kwargs["temperature"] = temperature
     # max_tokens is required by some providers (e.g. Anthropic); only include
     # it when explicitly provided so providers with built-in defaults aren't
     # forced into a None value that their API rejects.
@@ -87,7 +94,7 @@ def get_litellm_completion(
     # avoid passing unsupported parameters to providers that don't accept them.
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
-    if top_p is not None:
+    if top_p is not None and not uses_prompt_only_sampling:
         kwargs["top_p"] = top_p
     if extra_body is not None:
         kwargs["extra_body"] = extra_body
@@ -97,6 +104,22 @@ def get_litellm_completion(
         kwargs["tools"] = tools
     if tool_choice is not None:
         kwargs["tool_choice"] = tool_choice
+
+    # When configured, send the same OpenAI-compatible payload through the
+    # hosted CoCo router. The router owns provider credentials; local users do
+    # not need to supply Gemini/OpenAI/Anthropic keys.
+    router_url = os.environ.get("LLM_ROUTER_URL", "").strip().rstrip("/")
+    if router_url:
+        router_key = os.environ.get("LLM_ROUTER_API_KEY", "").strip()
+        if not router_key:
+            raise RuntimeError(
+                "LLM_ROUTER_API_KEY is required when LLM_ROUTER_URL is set"
+            )
+        kwargs["api_base"] = (
+            router_url if router_url.endswith("/v1") else f"{router_url}/v1"
+        )
+        kwargs["api_key"] = router_key
+        kwargs["custom_llm_provider"] = "openai"
 
     response = completion(**kwargs)
     if stream:

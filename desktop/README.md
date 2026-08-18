@@ -124,8 +124,10 @@ xcrun stapler validate "release/build/mac-arm64/coco.app"
 
 The output directory can be `release/build/mac` for an x64 build.
 
-To test the first-launch flow without changing your normal profile, point the
-development app at a fresh directory:
+Development runs store their profile and authentication state in
+`~/Library/Application Support/coco-development`; packaged builds use
+`~/Library/Application Support/coco`. To test the first-launch flow repeatedly,
+point one development run at a fresh temporary directory:
 
 ```bash
 export COCO_TEST_DATA="$(mktemp -d /tmp/coco-model-test.XXXXXX)"

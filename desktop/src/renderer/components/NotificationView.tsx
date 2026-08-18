@@ -25,6 +25,31 @@ interface NotificationPayload {
   rawObservation?: string;
   suggestion?: InstantSuggestion;
   adjustable?: boolean;
+  scenario?: string;
+}
+
+function suggestionToolLabel(suggestion: InstantSuggestion): string {
+  const preferred = (suggestion.availableTools ?? []).find(
+    (tool) => tool.id === suggestion.targetTool,
+  );
+  if (preferred) return preferred.label;
+  if (suggestion.availableTools?.[0]) return suggestion.availableTools[0].label;
+  return 'an AI tool';
+}
+
+function preferredSuggestionTool(suggestion: InstantSuggestion) {
+  return (
+    (suggestion.availableTools ?? []).find(
+      (tool) => tool.id === suggestion.targetTool,
+    ) ?? suggestion.availableTools?.[0]
+  );
+}
+
+function usesStageTaskRules(suggestion: InstantSuggestion): boolean {
+  const prompt = suggestion.prompt ?? '';
+  return ['Stage', 'Task', 'Rules'].every((label) =>
+    new RegExp(`(^|\\n)\\s*${label}\\s*:`, 'i').test(prompt),
+  );
 }
 
 // ── Tutor JSON parsing ────────────────────────────────────────────────────────
@@ -180,6 +205,9 @@ export function NotificationBubble({
   adjustable,
   expanded,
   onToggleExpanded,
+  showFrameworkIntro,
+  frameworkPage = 0,
+  onFrameworkPageChange,
 }: {
   message: string;
   actionLabel?: string;
@@ -198,6 +226,9 @@ export function NotificationBubble({
   adjustable?: boolean;
   expanded?: boolean;
   onToggleExpanded?: () => void;
+  showFrameworkIntro?: boolean;
+  frameworkPage?: 0 | 1;
+  onFrameworkPageChange?: (page: 0 | 1) => void;
 }) {
   const isPrompt =
     notifType === 'session-start-prompt' || notifType === 'session-end-prompt';
@@ -205,6 +236,14 @@ export function NotificationBubble({
     notifType === 'proactive-suggestion' && suggestion != null;
   const isRevealedSuggestion =
     notifType === 'instant-suggestion' && suggestion != null;
+  const isFrameworkPager = showFrameworkIntro && suggestion != null;
+  const isFrameworkOverview = isFrameworkPager && frameworkPage === 0;
+  const suggestedTool = suggestion
+    ? preferredSuggestionTool(suggestion)
+    : undefined;
+  const hasStageTaskRules = suggestion
+    ? usesStageTaskRules(suggestion)
+    : false;
 
   // For default pause-event guidance, truncate to a short preview so the
   // card doesn't overflow with a multi-paragraph response.
@@ -218,7 +257,7 @@ export function NotificationBubble({
     <div
       className={`toast-card${isPrompt ? ' toast-card--compact' : ''}${
         isSuggestionPreview ? ' toast-card--suggestion-preview' : ''
-      }`}
+      }${isFrameworkOverview ? ' toast-card--framework-overview' : ''}`}
       onMouseEnter={() => onHoverChange?.(true)}
       onMouseLeave={() => onHoverChange?.(false)}
     >
@@ -253,21 +292,56 @@ export function NotificationBubble({
       </div>
 
       <div className="toast-body">
-        {isSuggestionPreview && (
+        {isSuggestionPreview && !isFrameworkOverview && (
           <div className="toast-suggestion-label">
             <span aria-hidden="true">✦</span>
             <span>Suggestion</span>
           </div>
         )}
-        <div className="toast-message toast-markdown">
-          <Markdown
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-            components={markdownComponents}
-          >
-            {displayMessage}
-          </Markdown>
-        </div>
+        {isFrameworkOverview && suggestion ? (
+          <div className="toast-framework-overview">
+            <div className="toast-framework-eyebrow">4D framework</div>
+            <div className="toast-framework-heading">
+              Turn this task into a clear AI handoff
+            </div>
+            <div className="toast-framework-concept">
+              <span className="toast-framework-term">Delegation</span>
+              <span>
+                Choose what AI should handle. This task can be handed off to{' '}
+                <strong>{suggestionToolLabel(suggestion)}</strong>.
+              </span>
+            </div>
+            <div className="toast-framework-concept">
+              <span className="toast-framework-term">Description</span>
+              <span>
+                {hasStageTaskRules ? (
+                  <>
+                    This prompt uses <strong>Stage</strong> for context,{' '}
+                    <strong>Task</strong> for the result you want, and{' '}
+                    <strong>Rules</strong> for important requirements. The next
+                    page shows all three parts.
+                  </>
+                ) : (
+                  <>
+                    Tell AI what you are working on, the result you want, and
+                    any important requirements. The next page gives you a
+                    prompt you can review and adapt.
+                  </>
+                )}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="toast-message toast-markdown">
+            <Markdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
+              components={markdownComponents}
+            >
+              {displayMessage}
+            </Markdown>
+          </div>
+        )}
       </div>
 
       {/* Two-button layout for proactive prompts; single action for tutor guidance */}
@@ -317,16 +391,15 @@ export function NotificationBubble({
           >
             Chat about it
           </button>
-          {(suggestion.availableTools ?? []).map((tool) => (
+          {suggestedTool && (
             <button
-              key={tool.id}
               type="button"
               className="toast-action toast-tool-action"
-              onClick={() => onSuggestionAction?.(tool.id)}
+              onClick={() => onSuggestionAction?.(suggestedTool.id)}
             >
-              Open {tool.label}
+              Open {suggestedTool.label}
             </button>
-          ))}
+          )}
         </div>
       ) : (
         actionLabel && (
@@ -366,6 +439,25 @@ export function NotificationBubble({
           </div>
         )
       )}
+
+      {isFrameworkPager && (
+        <div className="toast-framework-pager" aria-label="Suggestion pages">
+          <div className="toast-framework-page-bars" aria-hidden="true">
+            <span className={`toast-framework-page-bar${frameworkPage === 0 ? ' is-active' : ''}`} />
+            <span className={`toast-framework-page-bar${frameworkPage === 1 ? ' is-active' : ''}`} />
+          </div>
+          <button
+            type="button"
+            className="toast-framework-arrow"
+            aria-label={frameworkPage === 0
+              ? 'Show Description suggestion'
+              : 'Back to Delegation and Description overview'}
+            onClick={() => onFrameworkPageChange?.(frameworkPage === 0 ? 1 : 0)}
+          >
+            {frameworkPage === 0 ? '→' : '←'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -379,12 +471,26 @@ export default function NotificationView() {
   >(null);
   const [copyConfirmed, setCopyConfirmed] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [frameworkPage, setFrameworkPage] = useState<0 | 1>(0);
 
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
       'notification',
       (data: any) => {
         const incoming = data as NotificationPayload | undefined;
+        if (
+          incoming?.notifType === 'proactive-suggestion' &&
+          incoming.scenario === 'ai_upskilling' &&
+          incoming.suggestion
+        ) {
+          // Main already locks when creating this first framework page. Repeat
+          // the signal as a renderer handshake so the lock also survives any
+          // future alternate window-creation path.
+          window.electron?.ipcRenderer.sendMessage(
+            'proactive-suggestion-open-state',
+            { open: true },
+          );
+        }
         setPayload({
           message: String(incoming?.message ?? ''),
           actionLabel: incoming?.actionLabel
@@ -403,11 +509,13 @@ export default function NotificationView() {
           rawObservation: incoming?.rawObservation,
           suggestion: incoming?.suggestion,
           adjustable: incoming?.adjustable === true,
+          scenario: incoming?.scenario,
         });
         setLoadingSuggestion(false);
         setSuggestionRating(null);
         setCopyConfirmed(false);
         setExpanded(false);
+        setFrameworkPage(0);
         setVisible(true);
       },
     );
@@ -460,6 +568,10 @@ export default function NotificationView() {
     }
     if (payload.notifType === 'proactive-suggestion') {
       if (loadingSuggestion) return;
+      // Lock immediately on click, before awaiting a cached/in-flight
+      // suggestion. Otherwise an observation arriving during that await can
+      // replace the notification the user is actively opening.
+      ipc?.sendMessage('proactive-suggestion-open-state', { open: true });
       let suggestion = payload.suggestion;
       if (!suggestion) {
         setLoadingSuggestion(true);
@@ -527,6 +639,13 @@ export default function NotificationView() {
   const handleCancel = () => {
     setVisible(false);
     window.close();
+  };
+
+  const handleFrameworkPageChange = async (page: 0 | 1) => {
+    setFrameworkPage(page);
+    if (page === 1 && payload.notifType === 'proactive-suggestion') {
+      await handleAction();
+    }
   };
 
   const recordUnengagedDismissal = () => {
@@ -610,6 +729,11 @@ export default function NotificationView() {
         adjustable={payload.adjustable}
         expanded={expanded}
         onToggleExpanded={handleToggleExpanded}
+        showFrameworkIntro={
+          payload.scenario === 'ai_upskilling' && payload.suggestion != null
+        }
+        frameworkPage={frameworkPage}
+        onFrameworkPageChange={handleFrameworkPageChange}
       />
     </div>
   );

@@ -707,4 +707,156 @@ describe('deferred suggestion context', () => {
     expect(screen.queryByText('Coco is thinking…')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Helpful' })).toBeInTheDocument();
   });
+
+  it('lets AI Fluency Upskilling users manually open the session recap', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-profile') {
+        return { tutorScenario: 'ai_upskilling', aiTools: [] };
+      }
+      if (channel === 'get-supported-modes') return ['ai_upskilling'];
+      if (channel === 'finish-task-successfully') return { success: true };
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: '✓ Finish' }),
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('finish-task-successfully');
+    });
+  });
+
+  it('disables Finish while the message input has content', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-profile') {
+        return { tutorScenario: 'ai_upskilling', aiTools: [] };
+      }
+      if (channel === 'get-supported-modes') return ['ai_upskilling'];
+      if (channel === 'finish-task-successfully') return { success: true };
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    const finish = await screen.findByRole('button', { name: '✓ Finish' });
+    const inputBox = screen.getByPlaceholderText(/Ask the tutor/);
+
+    fireEvent.change(inputBox, { target: { value: 'Help with this draft' } });
+    expect(finish).toBeDisabled();
+    fireEvent.click(finish);
+    expect(invoke).not.toHaveBeenCalledWith('finish-task-successfully');
+
+    fireEvent.change(inputBox, { target: { value: '' } });
+    expect(finish).toBeEnabled();
+  });
+
+  it('shows approachable prompt examples in an empty AI upskilling chat', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-profile') {
+        return { tutorScenario: 'ai_upskilling', aiTools: [] };
+      }
+      if (channel === 'get-supported-modes') return ['ai_upskilling'];
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+
+    const starter = await screen.findByRole('button', {
+      name: 'Show me how to ask AI for a useful first draft.',
+    });
+    fireEvent.click(starter);
+
+    expect(screen.getByPlaceholderText(/Ask the tutor/)).toHaveValue(
+      'Show me how to ask AI for a useful first draft.',
+    );
+    expect(
+      screen.getByRole('button', { name: /Suggest tasks for me/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('asks the tutor for memory-aware practice ideas from the empty state', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-profile') {
+        return { tutorScenario: 'ai_upskilling', aiTools: [] };
+      }
+      if (channel === 'get-supported-modes') return ['ai_upskilling'];
+      if (channel === 'send-chat-message') {
+        return { guidance: 'Here are three tasks for you.' };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Suggest tasks for me/ }),
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'send-chat-message',
+        expect.objectContaining({
+          userText:
+            'Suggest meaningful tasks I can practice or topics I can learn based on my usual work and experience level.',
+          requestKind: 'practice_suggestions',
+        }),
+      );
+    });
+    expect(
+      screen.getByText(
+        'Suggest meaningful tasks I can practice or topics I can learn based on my usual work and experience level.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('does not show the manual recap control in other modes', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-profile') {
+        return { tutorScenario: 'everyday_support', aiTools: [] };
+      }
+      if (channel === 'get-supported-modes') return ['everyday_support'];
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('get-profile'));
+    expect(
+      screen.queryByRole('button', { name: '✓ Finish' }),
+    ).not.toBeInTheDocument();
+  });
 });

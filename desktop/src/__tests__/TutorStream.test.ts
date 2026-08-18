@@ -1,6 +1,7 @@
 import {
   consumeTutorStream,
   extractSseEvents,
+  TutorTurnTiming,
 } from '../main/services/tutor-stream';
 
 describe('tutor SSE parsing', () => {
@@ -76,5 +77,27 @@ describe('tutor SSE parsing', () => {
       global.fetch = originalFetch;
       jest.useRealTimers();
     }
+  });
+});
+
+describe('TutorTurnTiming', () => {
+  it('records only the first non-empty text delta', () => {
+    const times = [
+      new Date('2026-08-05T10:00:00.000Z'),
+      new Date('2026-08-05T10:00:00.400Z'),
+      new Date('2026-08-05T10:00:01.500Z'),
+    ];
+    const timing = new TutorTurnTiming(() => times.shift()!);
+
+    timing.recordTextDelta('   ');
+    timing.recordTextDelta('Hello');
+    timing.recordTextDelta(' world');
+
+    expect(timing.complete('test-model')).toEqual({
+      requestStartedAt: new Date('2026-08-05T10:00:00.000Z'),
+      firstTokenAt: new Date('2026-08-05T10:00:00.400Z'),
+      responseCompletedAt: new Date('2026-08-05T10:00:01.500Z'),
+      model: 'test-model',
+    });
   });
 });

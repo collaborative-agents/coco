@@ -218,7 +218,7 @@ export function saveConversation(input: {
   try {
     const file = storePath();
     const temp = `${file}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(updated));
+    fs.writeFileSync(temp, `${JSON.stringify(updated, null, 2)}\n`);
     fs.renameSync(temp, file);
   } catch (err) {
     log.warn('[conversation-store] save failed:', err);

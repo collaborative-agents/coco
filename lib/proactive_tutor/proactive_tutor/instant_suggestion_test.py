@@ -32,6 +32,15 @@ def _metrics(call_id: str) -> dict:
     }
 
 
+def test_worker_prompt_allows_launchable_delegate_suggestions() -> None:
+    prompt = instant_suggestion._load_instant_system_prompt("ai_upskilling")
+
+    assert "<kind>delegate</kind>" in prompt
+    assert "<targetTool>chatgpt</targetTool>" in prompt
+    assert "ready-to-paste Stage, Task, and Rules prompt" in prompt
+    assert "If no tools are provided, always return `content`" in prompt
+
+
 def test_instant_suggestion_can_retrieve_memory_before_generating(
     monkeypatch,
 ) -> None:

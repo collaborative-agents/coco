@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import uuid
 from collections.abc import Callable
@@ -150,6 +151,17 @@ def _metrics_with_tool_calls(
     return cast(LLMCallMetrics, enriched)
 
 
+def _normalize_hh_mm_ago(value: Any) -> Any:
+    """Normalize a numeric hour offset occasionally emitted by a model."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    if not math.isfinite(value) or value < 0:
+        return value
+    total_minutes = round(value * 60)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+
 class TutorAgent:
     def __init__(
         self,
@@ -288,6 +300,9 @@ class TutorAgent:
         unexpected = sorted(set(arguments) - allowed)
         if unexpected:
             return {"error": f"unexpected arguments: {', '.join(unexpected)}"}
+        for key in ("start_hh_mm_ago", "end_hh_mm_ago"):
+            if key in arguments:
+                arguments[key] = _normalize_hh_mm_ago(arguments[key])
         try:
             if name == "observe_screen":
                 focus = str(arguments.get("focus") or "").strip()

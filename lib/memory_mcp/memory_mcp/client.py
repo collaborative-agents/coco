@@ -12,6 +12,14 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
+def _exception_group_message(exc: BaseException) -> str:
+    """Flatten async transport failures into a useful, non-TaskGroup message."""
+    if isinstance(exc, BaseExceptionGroup):
+        messages = [_exception_group_message(nested) for nested in exc.exceptions]
+        return "; ".join(dict.fromkeys(message for message in messages if message))
+    return str(exc).strip() or type(exc).__name__
+
+
 def _memory_server_parameters(
     env: dict[str, str] | None = None,
 ) -> StdioServerParameters:
@@ -43,10 +51,15 @@ async def _call_memory_tool(
     if db_path is not None:
         child_env["COCO_MEMORY_DB_PATH"] = str(db_path.expanduser().resolve())
     server = _memory_server_parameters(child_env)
-    async with stdio_client(server) as streams:
-        async with ClientSession(*streams) as session:
-            await session.initialize()
-            result = await session.call_tool(name, arguments)
+    try:
+        async with stdio_client(server) as streams:
+            async with ClientSession(*streams) as session:
+                await session.initialize()
+                result = await session.call_tool(name, arguments)
+    except ExceptionGroup as exc:
+        raise RuntimeError(
+            f"{name} transport failed: {_exception_group_message(exc)}"
+        ) from exc
     if result.isError:
         message = "\n".join(str(getattr(item, "text", item)) for item in result.content)
         raise RuntimeError(message or f"{name} failed")

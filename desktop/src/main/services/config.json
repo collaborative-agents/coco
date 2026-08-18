@@ -2,6 +2,10 @@
   "app": {
     "name": "Coco"
   },
+  "supportedModes": [
+    "ai_upskilling",
+    "custom"
+  ],
   "services": [
     {
       "id": "tutor-server",
@@ -32,6 +36,7 @@
         "run", "python", "-m", "lib.sensing.sensing.sensing_server",
         "--port=8080",
         "--ai_tutoring=True",
+        "--enable_judge=True",
         "--tutor_url=http://localhost:8081",
         "--observer_model=${OBSERVER_MODEL}",
         "--observer_interval_seconds=60"

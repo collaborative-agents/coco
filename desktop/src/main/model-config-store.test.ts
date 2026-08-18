@@ -1,6 +1,9 @@
 import {
   buildRoleModelEnvironments,
   credentialId,
+  isLlmRouterConfigured,
+  normalizeRouterManagedModelConfiguration,
+  ROUTER_MANAGED_MODEL_CONFIGURATION,
   validateModelConfiguration,
 } from './model-config-store';
 
@@ -49,6 +52,48 @@ describe('model configuration', () => {
   it('uses role-scoped credential IDs', () => {
     expect(credentialId('sensing', 'gemini')).toBe('sensing:gemini');
     expect(credentialId('tutor', 'gemini')).toBe('tutor:gemini');
+  });
+
+  it('recognizes a fully configured hosted router', () => {
+    expect(
+      isLlmRouterConfigured({
+        LLM_ROUTER_URL: 'https://router.example.test',
+        LLM_ROUTER_API_KEY: 'project-key',
+      }),
+    ).toBe(true);
+    expect(
+      isLlmRouterConfigured({ LLM_ROUTER_URL: 'https://router.example.test' }),
+    ).toBe(false);
+  });
+
+  it('uses the pilot models when configuration is managed by the router', () => {
+    expect(ROUTER_MANAGED_MODEL_CONFIGURATION.sensing.model).toBe(
+      'gemini/gemini-2.5-pro',
+    );
+    expect(ROUTER_MANAGED_MODEL_CONFIGURATION.tutors[0].model).toBe(
+      'gemini/gemini-3-flash-preview',
+    );
+  });
+
+  it('replaces unsupported Router tutors while preserving Gemini choices', () => {
+    const anthropicOnly = validateModelConfiguration({
+      sensing,
+      tutors: [tutors[1]],
+      defaultTutorId: 'deep',
+    });
+    expect(
+      normalizeRouterManagedModelConfiguration(anthropicOnly).tutors,
+    ).toEqual(ROUTER_MANAGED_MODEL_CONFIGURATION.tutors);
+
+    const mixed = validateModelConfiguration({
+      sensing,
+      tutors,
+      defaultTutorId: 'fast',
+    });
+    expect(normalizeRouterManagedModelConfiguration(mixed)).toMatchObject({
+      tutors: [tutors[0]],
+      defaultTutorId: 'fast',
+    });
   });
 
   it('does not expose sensing credentials to tutors or tutor credentials to sensing', () => {

@@ -11,7 +11,7 @@ import json
 import os
 
 import pytest
-from proactive_tutor.tutor_system import TutorSystem
+from proactive_tutor.tutor_system import TutorSystem, _RECAP_SYSTEM_PROMPT
 from py_utils.training_recorder import TrainingRecorder
 
 MODEL = "gemini/gemini-3-flash-preview"
@@ -40,15 +40,26 @@ def test_initialization():
     assert ts.image_num == 0
 
 
-def test_memory_tool_is_limited_to_everyday_support():
+def test_recap_prompt_requires_behavior_based_choices_for_4d_questions():
+    assert "Do not use the four competency names" in _RECAP_SYSTEM_PROMPT
+    assert "four plausible actions" in _RECAP_SYSTEM_PROMPT
+    assert "present a practical situation" in _RECAP_SYSTEM_PROMPT
+
+
+def test_memory_tool_is_available_for_personalized_support_modes():
     everyday = TutorSystem(model_name=MODEL, scenario="everyday_support")
+    upskilling = TutorSystem(model_name=MODEL, scenario="ai_upskilling")
     student = TutorSystem(model_name=MODEL, scenario="student_learning")
 
     assert everyday.tutor_agent.enable_memory_tool is True
+    assert upskilling.tutor_agent.enable_memory_tool is True
     assert student.tutor_agent.enable_memory_tool is False
 
-    everyday.set_scenario("student_learning")
-    assert everyday.tutor_agent.enable_memory_tool is False
+    student.set_scenario("ai_upskilling")
+    assert student.tutor_agent.enable_memory_tool is True
+
+    student.set_scenario("student_learning")
+    assert student.tutor_agent.enable_memory_tool is False
 
 
 def test_handle_problem_statement():
@@ -71,6 +82,160 @@ def test_get_kargs():
     assert kargs["image_num"] == 3
     assert kargs["curriculum_state"] == ts.curriculum_state
     assert kargs["competency_counts"] == ts.competency_counts
+
+
+def test_practice_suggestions_use_a_separate_neutral_agent(monkeypatch) -> None:
+    ts = _make_tutor_system()
+    ts.memory = "The user regularly prepares technical presentations."
+    created: dict = {}
+
+    class FakeSuggestionAgent:
+        def __init__(
+            self,
+            model,
+            prompt,
+            enable_memory_tool=True,
+            enable_screen_tool=True,
+        ):
+            created.update(
+                model=model,
+                prompt=prompt,
+                enable_memory_tool=enable_memory_tool,
+                enable_screen_tool=enable_screen_tool,
+            )
+
+        def chat_with_metrics(self, messages, on_event=None):
+            created["messages"] = messages
+            return "1. **Architecture sketch** — Map one current system.", {
+                "tool_calls": []
+            }
+
+    monkeypatch.setattr(
+        "proactive_tutor.tutor_system.TutorAgent",
+        FakeSuggestionAgent,
+    )
+
+    response, _metrics = ts.generate_practice_suggestions_with_metrics()
+
+    assert response.startswith("1. **Architecture sketch**")
+    assert "AI LITERACY COACH" not in created["prompt"]
+    assert created["enable_memory_tool"] is True
+    assert created["enable_screen_tool"] is False
+    assert "technical presentations" in created["messages"][0]["content"]
+    assert "practice or topics" in created["messages"][1]["content"]
+
+
+def test_parse_recap_accepts_fenced_valid_json():
+    recap = TutorSystem._parse_recap(
+        """```json
+        {
+          "summary_title": "You learned to evaluate AI output",
+          "bullets": ["You checked claims.", "You compared the result to the goal."],
+          "quiz": {
+            "question": "What should you do before using AI output?",
+            "choices": ["Check it", "Ignore it", "Delete it", "Publish immediately"],
+            "correct_index": 0,
+            "explanation": "Checking the output helps catch errors."
+          }
+        }
+        ```"""
+    )
+
+    assert recap["quiz"]["correct_index"] == 0
+    assert len(recap["quiz"]["choices"]) == 4
+
+
+def test_parse_recap_rejects_quiz_without_four_choices():
+    raw = json.dumps(
+        {
+            "summary_title": "You learned to evaluate AI output",
+            "bullets": ["You checked claims.", "You compared the result to the goal."],
+            "quiz": {
+                "question": "What should you do before using AI output?",
+                "choices": ["Check it", "Ignore it"],
+                "correct_index": 0,
+                "explanation": "Checking the output helps catch errors.",
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="exactly four choices"):
+        TutorSystem._parse_recap(raw)
+
+
+def test_recap_quality_rejects_stage_task_rules_label_quiz():
+    recap = {
+        "quiz": {
+            "question": "Which concept best matches this prompt component?",
+            "choices": ["Stage", "Rules", "Task", "Discernment"],
+        }
+    }
+
+    with pytest.raises(ValueError, match="vocabulary labels"):
+        TutorSystem._validate_recap_quiz_quality(recap)
+
+
+def test_recap_quality_accepts_concrete_action_choices():
+    recap = {
+        "quiz": {
+            "question": "What should you do before using AI-generated totals?",
+            "choices": [
+                "Check the totals against the source data",
+                "Publish the first result immediately",
+                "Remove the calculation notes",
+                "Assume every generated value is correct",
+            ],
+        }
+    }
+
+    TutorSystem._validate_recap_quiz_quality(recap)
+
+
+def test_generate_recap_retries_when_first_quiz_uses_labels(monkeypatch):
+    bad = {
+        "summary_title": "You practiced describing AI tasks",
+        "bullets": ["You added context.", "You specified the desired result."],
+        "quiz": {
+            "question": "Which concept belongs in this prompt?",
+            "choices": ["Stage", "Rules", "Task", "Discernment"],
+            "correct_index": 0,
+            "explanation": "Stage supplies context.",
+        },
+    }
+    good = {
+        "summary_title": "You practiced describing AI tasks",
+        "bullets": ["You added context.", "You specified the desired result."],
+        "quiz": {
+            "question": "What should you add when AI lacks enough context?",
+            "choices": [
+                "Describe the relevant background and available inputs",
+                "Remove all details from the request",
+                "Accept the first answer without checking",
+                "Switch tools without changing the request",
+            ],
+            "correct_index": 0,
+            "explanation": "Relevant context helps AI understand the task.",
+        },
+    }
+    responses = [json.dumps(bad), json.dumps(good)]
+    prompts = []
+
+    def fake_completion(**kwargs):
+        prompts.append(kwargs["user_prompt"])
+        return responses.pop(0), {}
+
+    monkeypatch.setattr(
+        "proactive_tutor.tutor_system.prompt_to_text_with_metrics",
+        fake_completion,
+    )
+    tutor = _make_tutor_system()
+    tutor.conversation_history = ["[User]: Help me write a clearer request."]
+
+    recap, _metrics = tutor.generate_recap()
+
+    assert recap["quiz"]["question"] == good["quiz"]["question"]
+    assert len(prompts) == 2
+    assert "previous quiz was rejected" in prompts[1].lower()
 
 
 def test_handle_user_prompt_with_metrics_logs_tutor_call(tmp_path):
@@ -178,7 +343,8 @@ def test_everyday_chat_preserves_message_boundaries_and_omits_supplied_observati
         "assistant",
         "user",
     ]
-    assert calls[1][0]["content"].endswith("The user prefers concise answers.")
+    assert "The user prefers concise answers." in calls[1][0]["content"]
+    assert "<ai_tools_context>(empty)</ai_tools_context>" in calls[1][0]["content"]
     assert calls[1][1:] == [
         {"role": "user", "content": "First question"},
         {"role": "assistant", "content": "reply 1"},

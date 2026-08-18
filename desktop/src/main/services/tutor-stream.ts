@@ -27,6 +27,34 @@ export class TutorStreamTimeoutError extends Error {
   }
 }
 
+/** Tracks user-visible, end-to-end timing for one streamed tutor turn. */
+export class TutorTurnTiming {
+  readonly requestStartedAt: Date;
+
+  private firstTokenAt?: Date;
+
+  private readonly now: () => Date;
+
+  constructor(now: () => Date = () => new Date()) {
+    this.now = now;
+    this.requestStartedAt = now();
+  }
+
+  recordTextDelta(text: unknown): void {
+    if (this.firstTokenAt || String(text ?? '').trim().length === 0) return;
+    this.firstTokenAt = this.now();
+  }
+
+  complete(model?: string) {
+    return {
+      requestStartedAt: this.requestStartedAt,
+      ...(this.firstTokenAt ? { firstTokenAt: this.firstTokenAt } : {}),
+      responseCompletedAt: this.now(),
+      ...(model ? { model } : {}),
+    };
+  }
+}
+
 function extractSseEvents(buffer: string): {
   events: TutorStreamEvent[];
   remainder: string;

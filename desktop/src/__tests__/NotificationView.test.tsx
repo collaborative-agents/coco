@@ -15,8 +15,10 @@
  */
 
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { NotificationBubble } from '../renderer/components/NotificationView';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import NotificationView, {
+  NotificationBubble,
+} from '../renderer/components/NotificationView';
 import type { InstantSuggestion } from '../renderer/components/observation-types';
 
 // ---------------------------------------------------------------------------
@@ -291,8 +293,11 @@ describe('instant suggestion actions', () => {
           title: 'Ask an AI tool',
           prompt: 'Explain this error.',
           copyText: 'Explain this error.',
-          targetTool: 'chatgpt',
-          availableTools: [],
+          targetTool: 'claude-code',
+          availableTools: [
+            { id: 'claude-cowork', label: 'Claude Cowork', category: 'agent' },
+            { id: 'claude-code', label: 'Claude Code', category: 'agent' },
+          ],
         }}
         onChatAboutSuggestion={onChat}
       />,
@@ -300,6 +305,72 @@ describe('instant suggestion actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Chat about it' }));
     expect(onChat).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole('button', { name: 'Open Claude Code' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Open Claude Cowork' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the 4D overview before an AI-upskilling suggestion', () => {
+    const onPageChange = jest.fn();
+    render(
+      <NotificationBubble
+        message="Ask an AI tool"
+        notifType="proactive-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Ask an AI tool',
+          prompt: 'Explain this error.',
+          copyText: 'Explain this error.',
+          targetTool: 'chatgpt',
+          availableTools: [
+            { id: 'chatgpt', label: 'ChatGPT', category: 'chatbot' },
+          ],
+        }}
+        showFrameworkIntro
+        frameworkPage={0}
+        onFrameworkPageChange={onPageChange}
+      />,
+    );
+
+    expect(screen.getByText('Delegation')).toBeInTheDocument();
+    expect(screen.getByText('Description')).toBeInTheDocument();
+    expect(screen.getByText(/the result you want/)).toBeInTheDocument();
+    expect(screen.queryByText('Explain this error.')).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show Description suggestion' }),
+    );
+    expect(onPageChange).toHaveBeenCalledWith(1);
+  });
+
+  it('uses a left arrow to return from the Description suggestion', () => {
+    const onPageChange = jest.fn();
+    render(
+      <NotificationBubble
+        message={'**Ask an AI tool**\n\nExplain this error.'}
+        notifType="instant-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Ask an AI tool',
+          prompt: 'Explain this error.',
+          copyText: 'Explain this error.',
+          availableTools: [],
+        }}
+        showFrameworkIntro
+        frameworkPage={1}
+        onFrameworkPageChange={onPageChange}
+      />,
+    );
+
+    expect(screen.getByText('Explain this error.')).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Back to Delegation and Description overview',
+      }),
+    );
+    expect(onPageChange).toHaveBeenCalledWith(0);
   });
 });
 
@@ -349,5 +420,51 @@ describe('window controls', () => {
 
     rerender(<NotificationBubble message={message} adjustable expanded />);
     expect(screen.getByText(/full-message-ending/)).toBeInTheDocument();
+  });
+});
+
+describe('interactive notification locking', () => {
+  it('locks replacements while the first framework page is displayed', () => {
+    const listeners = new Map<string, (...args: any[]) => void>();
+    const sendMessage = jest.fn();
+    Object.defineProperty(window, 'electron', {
+      configurable: true,
+      value: {
+        ipcRenderer: {
+          sendMessage,
+          invoke: jest.fn(),
+          on: (channel: string, callback: (...args: any[]) => void) => {
+            listeners.set(channel, callback);
+            return () => listeners.delete(channel);
+          },
+        },
+      },
+    });
+
+    render(<NotificationView />);
+    act(() => {
+      listeners.get('notification')?.({
+        message: 'This task could use AI support.',
+        actionLabel: 'Reveal full suggestion',
+        notifType: 'proactive-suggestion',
+        observationId: 'obs-1',
+        status: 'inefficient',
+        scenario: 'ai_upskilling',
+        suggestion: {
+          kind: 'content',
+          title: 'Draft a clear request',
+          body: 'Include the context and constraints.',
+          copyText: 'Include the context and constraints.',
+        },
+      });
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'proactive-suggestion-open-state',
+      { open: true },
+    );
+    expect(
+      screen.getByRole('button', { name: 'Show Description suggestion' }),
+    ).toBeInTheDocument();
   });
 });

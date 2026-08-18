@@ -37,7 +37,56 @@ export interface ModelConfigurationView extends ModelConfiguration {
   credentialStatus: Record<string, boolean>;
 }
 
+export const ROUTER_MANAGED_MODEL_CONFIGURATION: ModelConfigurationInput = {
+  sensing: {
+    id: 'sensing',
+    label: 'Sensing',
+    provider: 'gemini',
+    model: 'gemini/gemini-2.5-pro',
+  },
+  tutors: [
+    {
+      id: 'tutor-1',
+      label: 'Gemini 3 Flash',
+      provider: 'gemini',
+      model: 'gemini/gemini-3-flash-preview',
+    },
+  ],
+  defaultTutorId: 'tutor-1',
+};
+
+export function normalizeRouterManagedModelConfiguration(
+  current: ModelConfiguration | null,
+): ModelConfigurationInput {
+  const geminiTutors = (current?.tutors ?? []).filter(
+    (model) => model.provider === 'gemini',
+  );
+  const tutors =
+    geminiTutors.length > 0
+      ? geminiTutors
+      : ROUTER_MANAGED_MODEL_CONFIGURATION.tutors;
+  const defaultTutorId = tutors.some(
+    (model) => model.id === current?.defaultTutorId,
+  )
+    ? (current?.defaultTutorId as string)
+    : tutors[0].id;
+
+  return {
+    sensing: ROUTER_MANAGED_MODEL_CONFIGURATION.sensing,
+    tutors,
+    defaultTutorId,
+  };
+}
+
 type CredentialMap = Record<string, string>;
+
+export const isLlmRouterConfigured = (
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean =>
+  Boolean(
+    environment.LLM_ROUTER_URL?.trim() &&
+      environment.LLM_ROUTER_API_KEY?.trim(),
+  );
 
 const PROVIDER_KEY_ENV: Partial<Record<ProviderId, string>> = {
   gemini: 'GEMINI_API_KEY',
@@ -217,9 +266,11 @@ export function saveModelConfiguration(
       (item): ['tutor', ProviderId] => ['tutor', item.provider],
     ),
   ];
+  const routerManaged = isLlmRouterConfigured();
   required.forEach(([role, provider]) => {
     const envName = PROVIDER_KEY_ENV[provider];
     if (
+      !routerManaged &&
       PROVIDERS[provider].requiresKey &&
       !credentials[credentialId(role, provider)] &&
       !process.env[envName ?? '']
@@ -313,7 +364,9 @@ export function prepareModelConnectionTest(
   const env = connectionEnv(connection, role, credentials, process.env);
   const keyName = PROVIDER_KEY_ENV[connection.provider];
   if (PROVIDERS[connection.provider].requiresKey && (!keyName || !env[keyName])) {
-    throw new Error(`${PROVIDERS[connection.provider].label} requires an API key.`);
+    if (!isLlmRouterConfigured()) {
+      throw new Error(`${PROVIDERS[connection.provider].label} requires an API key.`);
+    }
   }
   if (
     connection.provider === 'hosted_vllm' &&

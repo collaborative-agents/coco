@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react';
 import { encodeCustomChatbot, encodeCustomAgent } from './observation-types';
+import {
+  DEFAULT_SUPPORTED_MODES,
+  defaultMode,
+  normalizeSupportedModes,
+} from '../../shared/agent-modes';
+import type { AgentModeId } from '../../shared/agent-modes';
 import './OnboardingView.css';
 import foxWorking from '../../../assets/pet1.png';
 import foxWaiting from '../../../assets/wait1.png';
 import studentLearningIcon from '../../../assets/student_learning.png';
 import everydaySupportIcon from '../../../assets/everyday_support.png';
 import customModeIcon from '../../../assets/custom.png';
+import workerUpskillingIcon from '../../../assets/worker_upskilling.png';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -43,12 +50,14 @@ function ModelFields({
   sensing = false,
   onTest,
   testStatus,
+  routerManaged = false,
 }: {
   value: ModelDraft;
   onChange: (next: ModelDraft) => void;
   sensing?: boolean;
   onTest: () => void;
   testStatus?: ConnectionTestStatus;
+  routerManaged?: boolean;
 }) {
   const update = (field: keyof ModelDraft, next: string) =>
     onChange({ ...value, [field]: next });
@@ -80,6 +89,7 @@ function ModelFields({
       <select
         className="ob-custom-input"
         value={value.provider}
+        disabled={routerManaged && sensing}
         onChange={(event) => update('provider', event.target.value)}
       >
         {MODEL_PROVIDERS.map(([id, label]) => (
@@ -89,6 +99,7 @@ function ModelFields({
       <input
         className="ob-custom-input"
         value={value.model}
+        disabled={routerManaged && sensing}
         placeholder={modelPlaceholder}
         onChange={(event) => update('model', event.target.value)}
       />
@@ -100,7 +111,7 @@ function ModelFields({
           onChange={(event) => update('baseUrl', event.target.value)}
         />
       )}
-      {value.provider !== 'lm_studio' && (
+      {!routerManaged && value.provider !== 'lm_studio' && (
         <input
           className="ob-custom-input"
           type="password"
@@ -143,6 +154,7 @@ function StepModels({
   error,
   testStatuses,
   onTest,
+  routerManaged,
 }: {
   sensing: ModelDraft;
   setSensing: (next: ModelDraft) => void;
@@ -153,6 +165,7 @@ function StepModels({
   error: string;
   testStatuses: Record<string, ConnectionTestStatus>;
   onTest: (role: 'sensing' | 'tutor', model: ModelDraft) => void;
+  routerManaged: boolean;
 }) {
   const updateTutor = (index: number, next: ModelDraft) =>
     setTutors(tutors.map((item, i) => (i === index ? next : item)));
@@ -171,12 +184,19 @@ function StepModels({
         and curate context. Tutor models generate proactive suggestions and
         chat responses only when needed.
       </div>
+      {routerManaged && (
+        <div className="ob-model-warning">
+          Models are provided through the CoCo Router. No personal API key is
+          required.
+        </div>
+      )}
       <ModelFields
         value={sensing}
         onChange={setSensing}
         sensing
         onTest={() => onTest('sensing', sensing)}
         testStatus={testStatuses.sensing}
+        routerManaged={routerManaged}
       />
       <div className="ob-model-section-title">Tutor models</div>
       {tutors.map((tutor, index) => (
@@ -186,6 +206,7 @@ function StepModels({
             onChange={(next) => updateTutor(index, next)}
             onTest={() => onTest('tutor', tutor)}
             testStatus={testStatuses[tutor.id]}
+            routerManaged={routerManaged}
           />
           <div className="ob-model-actions">
             <label>
@@ -232,6 +253,12 @@ const MODES = [
     name: 'Everyday Support',
     desc: 'Coco acts as an AI Assistant — spotting tasks worth delegating and suggesting the right AI tool to do them.',
     img: everydaySupportIcon,
+  },
+  {
+    id: 'ai_upskilling',
+    name: 'AI Fluency Upskilling',
+    desc: 'Coco helps you build AI fluency through Delegation, Description, Discernment, and Diligence.',
+    img: workerUpskillingIcon,
   },
 ];
 
@@ -513,19 +540,26 @@ function StepMode({
   setSelectedMode,
   customSystemPrompt,
   setCustomSystemPrompt,
+  supportedModes,
 }: {
   selectedMode: string;
   setSelectedMode: (id: string) => void;
   customSystemPrompt: string;
   setCustomSystemPrompt: (v: string) => void;
+  supportedModes: AgentModeId[];
 }) {
+  const selectableModes = MODES.filter((mode) =>
+    supportedModes.includes(mode.id as AgentModeId),
+  );
   return (
     <>
       <div className="ob-title">How should Coco support you?</div>
       <div className="ob-sub">
-        Pick the mode Coco starts in. You can switch anytime from the chat box.
+        {supportedModes.length > 1
+          ? 'Pick the mode Coco starts in. You can switch anytime from the chat box.'
+          : 'This build is configured for the following mode.'}
       </div>
-      {MODES.map((m) => (
+      {selectableModes.map((m) => (
         <div
           key={m.id}
           className={`ob-path-card ${selectedMode === m.id ? 'on' : ''}`}
@@ -550,26 +584,28 @@ function StepMode({
       ))}
 
       {/* Custom mode — edit the system prompt directly */}
-      <div
-        className={`ob-path-card ${selectedMode === 'custom' ? 'on' : ''}`}
-        onClick={() => setSelectedMode('custom')}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && setSelectedMode('custom')}
-        style={{ display: 'flex', alignItems: 'center', gap: 12 }}
-      >
-        <img
-          src={customModeIcon}
-          alt=""
-          style={{ width: 46, height: 46, objectFit: 'contain', flexShrink: 0 }}
-        />
-        <div>
-          <div className="ob-path-title">Custom</div>
-          <div className="ob-path-desc" style={{ marginBottom: 0 }}>
-            Write your own instructions for how Coco should support you.
+      {supportedModes.includes('custom') && (
+        <div
+          className={`ob-path-card ${selectedMode === 'custom' ? 'on' : ''}`}
+          onClick={() => setSelectedMode('custom')}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === 'Enter' && setSelectedMode('custom')}
+          style={{ display: 'flex', alignItems: 'center', gap: 12 }}
+        >
+          <img
+            src={customModeIcon}
+            alt=""
+            style={{ width: 46, height: 46, objectFit: 'contain', flexShrink: 0 }}
+          />
+          <div>
+            <div className="ob-path-title">Custom</div>
+            <div className="ob-path-desc" style={{ marginBottom: 0 }}>
+              Write your own instructions for how Coco should support you.
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {selectedMode === 'custom' && (
         <>
@@ -929,16 +965,22 @@ function Step8({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function OnboardingView() {
-  const modelsOnly = new URLSearchParams(window.location.search).get('modelsOnly') === '1';
+  const query = new URLSearchParams(window.location.search);
+  const modelsOnly = query.get('modelsOnly') === '1';
+  const routerManagedFromMain = query.get('routerManaged') === '1';
   const [step, setStep] = useState(0);
   const [showProceedModal, setShowProceedModal] = useState(false);
+  const [supportedModes, setSupportedModes] = useState<AgentModeId[]>(
+    DEFAULT_SUPPORTED_MODES,
+  );
   const [modelError, setModelError] = useState('');
+  const [routerManaged, setRouterManaged] = useState(routerManagedFromMain);
   const [savingModels, setSavingModels] = useState(false);
   const [sensingModel, setSensingModel] = useState<ModelDraft>({
-    id: 'sensing', label: 'Sensing', provider: 'gemini', model: '', apiKey: '', baseUrl: '',
+    id: 'sensing', label: 'Sensing', provider: 'gemini', model: 'gemini/gemini-2.5-pro', apiKey: '', baseUrl: '',
   });
   const [tutorModels, setTutorModels] = useState<ModelDraft[]>([
-    { id: 'tutor-1', label: 'Primary tutor', provider: 'anthropic', model: '', apiKey: '', baseUrl: '' },
+    { id: 'tutor-1', label: 'Gemini 3 Flash', provider: 'gemini', model: 'gemini/gemini-3-flash-preview', apiKey: '', baseUrl: '' },
   ]);
   const [defaultTutorId, setDefaultTutorId] = useState('tutor-1');
   const [connectionTests, setConnectionTests] = useState<
@@ -994,6 +1036,11 @@ export default function OnboardingView() {
 
   useEffect(() => {
     window.electron?.ipcRenderer
+      .invoke('get-llm-router-status')
+      .then((status: any) => setRouterManaged(status?.configured === true))
+      .catch(() => {});
+
+    window.electron?.ipcRenderer
       .invoke('get-model-configuration')
       .then((config: any) => {
         if (!config?.sensing || !Array.isArray(config.tutors)) return;
@@ -1024,6 +1071,20 @@ export default function OnboardingView() {
       .invoke('get-profile')
       .then((profile: any) => setUserName(String(profile?.userName ?? '')))
       .catch(() => {});
+
+    window.electron?.ipcRenderer
+      .invoke('get-supported-modes')
+      .then((value) => {
+        const nextModes = normalizeSupportedModes(value);
+        setSupportedModes(nextModes);
+        setSelectedMode((current) =>
+          nextModes.includes(current as AgentModeId)
+            ? current
+            : defaultMode(nextModes),
+        );
+        return undefined;
+      })
+      .catch(() => {});
   }, []);
 
   // Step 6 – Mode
@@ -1051,7 +1112,7 @@ export default function OnboardingView() {
   const stepKeys = modelsOnly
     ? ['models']
     : [
-        'models',
+        ...(routerManaged ? [] : ['models']),
         'intro0',
         'howto',
         'ask',
@@ -1143,10 +1204,13 @@ export default function OnboardingView() {
   };
 
   const sendProfile = (skipped: boolean) => {
+    const configuredMode = supportedModes.includes(selectedMode as AgentModeId)
+      ? selectedMode
+      : defaultMode(supportedModes);
     const profile = {
       onboardingComplete: true,
       userName: skipped ? '' : userName.trim(),
-      tutorScenario: skipped ? 'everyday_support' : selectedMode,
+      tutorScenario: skipped ? 'everyday_support' : configuredMode,
       aiTools: skipped
         ? []
         : [
@@ -1161,7 +1225,7 @@ export default function OnboardingView() {
       // Custom system prompt only applies to the "custom" mode. Only the intro
       // is user-edited; the fixed input/output contract is always appended.
       customSystemPrompt:
-        skipped || selectedMode !== 'custom'
+        skipped || configuredMode !== 'custom'
           ? ''
           : `${customSystemPrompt.trim()}\n\n${CUSTOM_PROMPT_FIXED}`,
       completedAt: new Date().toISOString(),
@@ -1218,6 +1282,7 @@ export default function OnboardingView() {
               error={modelError}
               testStatuses={connectionTests}
               onTest={testModelConnection}
+              routerManaged={routerManaged}
             />
           )}
           {currentKey === 'intro0' && <Step0 />}
@@ -1229,6 +1294,7 @@ export default function OnboardingView() {
               setSelectedMode={setSelectedMode}
               customSystemPrompt={customSystemPrompt}
               setCustomSystemPrompt={setCustomSystemPrompt}
+              supportedModes={supportedModes}
             />
           )}
           {currentKey === 'toolkit' && (
