@@ -41,6 +41,7 @@ def test_connection(model: str, include_image: bool) -> str:
     kwargs: dict[str, object] = {}
     if (
         model.removeprefix("hosted_vllm/")
+        .removeprefix("tinker/")
         .lower()
         .startswith("thinkingmachines/inkling")
     ):

@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from external_api.types import LLMCallMetrics
 from proactive_tutor.agents.tutor import TutorAgent
@@ -11,6 +12,7 @@ from proactive_tutor.ai_tool_capabilities import (
     format_tool_names,
     get_capabilities_for_tools,
 )
+from proactive_tutor.audio_input import validate_wav_base64
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 
@@ -440,8 +442,8 @@ class TutorSystem:
         return "\n\n".join(parts) + "\n"
 
     def _everyday_chat_messages(
-        self, current_message: dict[str, str] | None = None
-    ) -> list[dict[str, str]]:
+        self, current_message: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         """Build normal chat messages with memory as separate system context."""
         memory = self.memory.strip() or "(no saved user memory)"
         messages = [
@@ -661,6 +663,52 @@ class TutorSystem:
         # User-prompt events don't have a structured trigger_type; treat as
         # a general coaching moment and update state if a competency was targeted.
         self._update_curriculum_state("teaching_moment", weak_competency)
+        return guidance, metrics
+
+    def handle_audio_prompt_with_metrics(
+        self,
+        audio_data: str,
+        on_event: Callable[[dict], None] | None = None,
+    ) -> tuple[str, LLMCallMetrics]:
+        """Process a WAV voice message with the current tutor agent."""
+        logger.info("[AUDIO_PROMPT] Handling voice message")
+        validate_wav_base64(audio_data)
+        audio_message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": audio_data, "format": "wav"},
+                }
+            ],
+        }
+        messages = self._everyday_chat_messages(audio_message)
+        guidance, metrics = self.tutor_agent.chat_with_metrics(
+            messages,
+            on_event=on_event,
+        )
+
+        # Raw audio is intentionally not retained. Keep a compact turn marker so
+        # the answer remains part of the same typed/voice conversation.
+        voice_marker = "[Voice message]"
+        self._chat_messages.extend(
+            [
+                {"role": "user", "content": voice_marker},
+                {"role": "assistant", "content": guidance},
+            ]
+        )
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversation_history.extend(
+            [f"[{ts}] [User]: {voice_marker}", f"[{ts}] [Tutor]: {guidance}"]
+        )
+        self._log_tutor_call(
+            "audio_prompt",
+            voice_marker,
+            guidance,
+            None,
+            llm_metrics=metrics,
+        )
+        logger.info(f"[TUTOR] {guidance}")
         return guidance, metrics
 
     def handle_pause(

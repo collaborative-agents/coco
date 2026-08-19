@@ -100,12 +100,14 @@ from external_api.tinfoil_api import (
     TinfoilMessage,
     get_tinfoil_completion,
 )
+from external_api.tinker_oai_api import get_tinker_oai_completion
 from external_api.types import LLMCallMetrics, TokenUsage
 
 LM_STUDIO_PREFIX = "lm_studio/"
 NV_INFERENCE_PREFIX = "nv_inference/"
 OA_PREFIX = "oa/"
 TINFOIL_PREFIX = "tinfoil/"
+TINKER_PREFIX = "tinker/"
 
 
 def _provider_for_model(model: str) -> str:
@@ -117,6 +119,8 @@ def _provider_for_model(model: str) -> str:
         return "oa"
     if model.startswith(TINFOIL_PREFIX):
         return "tinfoil"
+    if model.startswith(TINKER_PREFIX):
+        return "tinker"
     return "litellm"
 
 
@@ -126,7 +130,7 @@ def _infer_modality(messages: Sequence[LiteLLMMessage | dict]) -> Literal["llm",
         if content is None:
             continue
         for kind, _ in _iter_content_blocks(content):
-            if kind == "image":
+            if kind in {"image", "audio"}:
                 return "vlm"
     return "llm"
 
@@ -174,7 +178,8 @@ def _iter_content_blocks(content: Any) -> list[tuple[str, str]]:
 
     Accepts a bare string (treated as a single text block), a list of
     pydantic ``TextContent`` / ``ImageURLContent`` instances, or the dict shape
-    LiteLLM consumes (``{"type": "text", ...}`` / ``{"type": "image_url", ...}``).
+    LiteLLM consumes (``{"type": "text", ...}``, ``{"type": "image_url", ...}``,
+    or ``{"type": "input_audio", ...}``).
     """
     if isinstance(content, str):
         return [("text", content)]
@@ -193,6 +198,8 @@ def _iter_content_blocks(content: Any) -> list[tuple[str, str]]:
                 url = (b.get("image_url") or {}).get("url", "")
                 if url:
                     blocks.append(("image", url))
+            elif kind == "input_audio":
+                blocks.append(("audio", "input_audio"))
         elif hasattr(b, "text"):
             blocks.append(("text", b.text))
         elif hasattr(b, "image_url"):
@@ -489,6 +496,20 @@ def _chat_completion_provider(
         if on_chunk is not None:
             on_chunk(_response_text(converted))
         return converted, usage
+
+    if model.startswith(TINKER_PREFIX):
+        output, usage = get_tinker_oai_completion(
+            messages,
+            model=model[len(TINKER_PREFIX) :],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        if on_chunk is not None and not output.tool_calls:
+            on_chunk(_response_text(output))
+        return output, usage
 
     return get_litellm_completion(
         messages,

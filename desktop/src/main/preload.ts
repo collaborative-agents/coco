@@ -36,6 +36,7 @@ export type Channels =
   | 'session-init'
   | 'start-new-chat-session'
   | 'send-chat-message'
+  | 'send-audio-message'
   | 'chat-stream-event'
   | 'get-chat-conversations'
   | 'save-chat-conversation'
@@ -101,7 +102,19 @@ export type Channels =
   | 'coco-sleep-mode-changed'
   | 'get-daily-memory-draft'
   | 'approve-daily-memory-draft'
-  | 'daily-memory-draft-refresh';
+  | 'daily-memory-draft-refresh'
+  | 'get-wake-word-settings'
+  | 'set-wake-word-settings'
+  | 'wake-word-settings-changed'
+  | 'wake-word-status'
+  | 'wake-word-audio-frame'
+  | 'wake-word-detected'
+  | 'wake-word-detection-ack'
+  | 'set-wake-word-capture-paused'
+  | 'wake-word-capture-paused-changed'
+  | 'wake-word-capture-status'
+  | 'wake-word-capture-renderer-ready'
+  | 'wake-word-capture-window-ready';
 
 const electronHandler = {
   ipcRenderer: {

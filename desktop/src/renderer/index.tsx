@@ -5,6 +5,7 @@ import ImagePreviewView from './components/ImagePreviewView';
 import OnboardingView from './components/OnboardingView';
 import SessionSetupView from './components/SessionSetupView';
 import SessionChatView from './components/SessionChatView';
+import WakeWordCaptureView from './components/WakeWordCaptureView';
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
@@ -21,6 +22,8 @@ if (view === 'onboarding') {
   rendered = <SessionChatView />;
 } else if (view === 'image-preview') {
   rendered = <ImagePreviewView />;
+} else if (view === 'wake-word-capture') {
+  rendered = <WakeWordCaptureView />;
 } else {
   rendered = <App />;
 }

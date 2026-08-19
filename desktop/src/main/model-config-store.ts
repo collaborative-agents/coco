@@ -6,6 +6,7 @@ export type ProviderId =
   | 'gemini'
   | 'openai'
   | 'anthropic'
+  | 'tinker'
   | 'tinfoil'
   | 'hosted_vllm'
   | 'lm_studio'
@@ -43,6 +44,7 @@ const PROVIDER_KEY_ENV: Partial<Record<ProviderId, string>> = {
   gemini: 'GEMINI_API_KEY',
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
+  tinker: 'TINKER_API_KEY',
   tinfoil: 'TINFOIL_API_KEY',
   hosted_vllm: 'HOSTED_VLLM_API_KEY',
 };
@@ -54,6 +56,7 @@ export const PROVIDERS: Record<
   gemini: { label: 'Google Gemini', requiresKey: true, privacy: 'cloud' },
   openai: { label: 'OpenAI', requiresKey: true, privacy: 'cloud' },
   anthropic: { label: 'Anthropic', requiresKey: true, privacy: 'cloud' },
+  tinker: { label: 'Tinker', requiresKey: true, privacy: 'cloud' },
   tinfoil: { label: 'Tinfoil', requiresKey: true, privacy: 'confidential' },
   hosted_vllm: {
     label: 'OpenAI-compatible endpoint',
@@ -104,7 +107,7 @@ function normalizeConnection(value: unknown): ModelConnection | null {
   const expectedPrefix =
     item.provider === 'open_anonymity' ? 'oa/' : `${item.provider}/`;
   if (
-    item.provider === 'hosted_vllm' &&
+    (item.provider === 'hosted_vllm' || item.provider === 'tinker') &&
     !normalizedModel.startsWith(expectedPrefix)
   ) {
     normalizedModel = `${expectedPrefix}${normalizedModel}`;
@@ -252,6 +255,9 @@ function connectionEnv(
   if (keyName && key) env[keyName] = key;
   if (connection.provider === 'hosted_vllm' && connection.baseUrl) {
     env.HOSTED_VLLM_API_BASE = connection.baseUrl;
+  }
+  if (connection.provider === 'tinker' && fallbackEnv.TINKER_BASE_URL) {
+    env.TINKER_BASE_URL = fallbackEnv.TINKER_BASE_URL;
   }
   if (connection.provider === 'lm_studio' && connection.baseUrl) {
     env.LM_STUDIO_HOST = connection.baseUrl;

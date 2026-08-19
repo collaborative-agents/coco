@@ -5,5 +5,8 @@
   <!-- Electron's V8 runtime needs JIT compilation under Hardened Runtime. -->
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
+  <!-- Required for microphone capture in signed Hardened Runtime builds. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
 </dict>
 </plist>

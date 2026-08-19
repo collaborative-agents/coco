@@ -38,9 +38,6 @@ jobs:
 
   package:
     needs: prepare
-    env:
-      MAC_CERT: ${{ secrets.MAC_CERT }}
-      MAC_CERT_PWD: ${{ secrets.MAC_CERT_PWD }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -82,20 +79,64 @@ jobs:
         working-directory: ./desktop
         run: npm run build
 
-      - name: Package Electron app (macOS signed)
-        if: startsWith(matrix.platform, 'macos') && env.MAC_CERT != '' && env.MAC_CERT_PWD != ''
-        working-directory: ./desktop
-        run: npx electron-builder build --publish never --${{ matrix.arch }}
+      - name: Validate macOS release secrets
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
         env:
-          CSC_LINK: ${{ env.MAC_CERT }}
-          CSC_KEY_PASSWORD: ${{ env.MAC_CERT_PWD }}
+          MAC_CERT: ${{ secrets.MAC_CERT }}
+          MAC_CERT_PWD: ${{ secrets.MAC_CERT_PWD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          missing=()
+          for name in MAC_CERT MAC_CERT_PWD APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
 
-      - name: Package Electron app (macOS unsigned)
-        if: startsWith(matrix.platform, 'macos') && (env.MAC_CERT == '' || env.MAC_CERT_PWD == '')
+          if (( ${#missing[@]} )); then
+            echo "Missing required GitHub Actions secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Prepare App Store Connect API key
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+
+      - name: Package Electron app (macOS signed and notarized)
+        if: startsWith(matrix.platform, 'macos')
         working-directory: ./desktop
         run: npx electron-builder build --publish never --${{ matrix.arch }}
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          CSC_LINK: ${{ secrets.MAC_CERT }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PWD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+      - name: Verify macOS signature and notarization ticket
+        if: startsWith(matrix.platform, 'macos')
+        working-directory: ./desktop
+        shell: bash
+        run: |
+          app_path="$(find release/build -maxdepth 2 -name 'coco.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "Packaged coco.app was not found" >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --verbose --type exec "$app_path"
+          xcrun stapler validate "$app_path"
 
       - name: Package Electron app (Windows)
         if: ${{ !startsWith(matrix.platform, 'macos') }}

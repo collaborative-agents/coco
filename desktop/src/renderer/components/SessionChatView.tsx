@@ -5,6 +5,11 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import {
+  startVoiceRecorder,
+  type ActiveVoiceRecorder,
+  type VoiceRecorderStatus,
+} from '../voice-recorder';
+import {
   AI_TOOLS,
   parseAiTool,
   encodeCustomChatbot,
@@ -67,6 +72,14 @@ export interface PersonalizationStatusInfo {
     detail?: string;
   };
   nextEvolveAttemptAt?: number;
+}
+
+interface WakeWordSettingsInfo {
+  enabled: boolean;
+  keywords: string[];
+  status: 'disabled' | 'starting' | 'ready' | 'sleeping' | 'error';
+  detail?: string;
+  logPath?: string;
 }
 
 /** Scan for the first balanced {...} block, respecting strings and escapes. */
@@ -238,6 +251,7 @@ const MODEL_PROVIDER_OPTIONS = [
   ['gemini', 'Google Gemini'],
   ['openai', 'OpenAI'],
   ['anthropic', 'Anthropic'],
+  ['tinker', 'Tinker'],
   ['tinfoil', 'Tinfoil'],
   ['hosted_vllm', 'OpenAI-compatible endpoint'],
   ['lm_studio', 'LM Studio'],
@@ -357,6 +371,29 @@ const S: Record<string, React.CSSProperties> = {
   inputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
   textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
   sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
+  micBtn: {
+    width: 38,
+    height: 38,
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: 'none',
+    background: '#fff',
+    color: '#374151',
+    borderRadius: '50%',
+    padding: 0,
+    cursor: 'pointer',
+    fontFamily: FONT,
+    boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.14), 0 1px 3px rgba(15, 23, 42, 0.12)',
+  },
+  micBtnActive: {
+    background: '#dc2626',
+    color: '#fff',
+    boxShadow: '0 0 0 4px #fff, 0 0 0 5px rgba(220, 38, 38, 0.2)',
+  },
+  voiceHint: { marginTop: 6, fontSize: 11, color: '#6b7280', fontFamily: FONT, textAlign: 'center' },
+  voiceError: { marginTop: 6, fontSize: 11, color: '#b91c1c', fontFamily: FONT, textAlign: 'center' },
   sendBtnDisabled: { opacity: 0.4, cursor: 'default' },
   hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
   hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
@@ -845,6 +882,10 @@ export default function SessionChatView() {
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [voiceState, setVoiceState] = useState<
+    'idle' | 'requesting' | VoiceRecorderStatus
+  >('idle');
+  const [voiceError, setVoiceError] = useState('');
   const [startingNewSession, setStartingNewSession] = useState(false);
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
@@ -881,6 +922,13 @@ export default function SessionChatView() {
   const [healthError, setHealthError] = useState('');
   const [cocoSleeping, setCocoSleeping] = useState(false);
   const [cocoSleepModeKnown, setCocoSleepModeKnown] = useState(false);
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  const [wakeWordStatus, setWakeWordStatus] = useState<
+    WakeWordSettingsInfo['status']
+  >('disabled');
+  const [wakeWordDetail, setWakeWordDetail] = useState('');
+  const [wakeWordCaptureError, setWakeWordCaptureError] = useState('');
+  const [wakeWordSaving, setWakeWordSaving] = useState(false);
   const [connectionTests, setConnectionTests] = useState<
     Record<string, ConnectionTestStatus>
   >({});
@@ -920,6 +968,13 @@ export default function SessionChatView() {
   const messagesRef = useRef<ChatMessage[]>([]);
   const problemRef = useRef('');
   const cocoSleepingRef = useRef(false);
+  const voiceRecorderRef = useRef<ActiveVoiceRecorder | null>(null);
+  const handleVoiceClickRef = useRef<(fromWakeWord?: boolean) => Promise<void>>(
+    async () => {},
+  );
+  const wakeDetectionInProgressRef = useRef(false);
+
+  useEffect(() => () => voiceRecorderRef.current?.cancel(), []);
 
   useEffect(() => {
     const applyZoomFactor = (value: unknown) => {
@@ -1178,6 +1233,57 @@ export default function SessionChatView() {
     [scrollToBottom],
   );
 
+  const submitAudioRequest = useCallback(
+    async (requestId: string, audioData: string) => {
+      setSending(true);
+      scrollToBottom();
+      const res = await window.electron?.ipcRenderer.invoke('send-audio-message', {
+        requestId,
+        audioData,
+      });
+      const result = res as {
+        streamed?: boolean;
+        error?: string;
+      } | undefined;
+      if (!result?.streamed && result?.error) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.requestId === requestId
+              ? {
+                  ...message,
+                  text: result.error ?? 'The audio tutor could not respond.',
+                  isError: true,
+                  isStreaming: false,
+                }
+              : message,
+          ),
+        );
+        setSending(false);
+      }
+      scrollToBottom();
+    },
+    [scrollToBottom],
+  );
+
+  const sendVoiceMessage = useCallback(
+    async (audioData: string) => {
+      const requestId = makeMessageId();
+      setMessages((current) => [
+        ...current,
+        { role: 'user', text: '🎤 Voice message' },
+        {
+          role: 'tutor',
+          text: '',
+          requestId,
+          isStreaming: true,
+          toolCalls: [],
+        },
+      ]);
+      await submitAudioRequest(requestId, audioData);
+    },
+    [submitAudioRequest],
+  );
+
   // Core send: append the user turn and an empty tutor turn immediately. The
   // latter is filled by chat-stream-event updates while the IPC request runs.
   const sendMessage = useCallback(
@@ -1315,11 +1421,11 @@ export default function SessionChatView() {
         }
         setTutorModels(config.tutors.map((model: TutorModelOption) => ({
           ...model,
-          model: model.model.replace(/^hosted_vllm\//, ''),
+          model: model.model.replace(/^(?:hosted_vllm|tinker)\//, ''),
         })));
         setSensingModel({
           ...config.sensing,
-          model: String(config.sensing.model).replace(/^hosted_vllm\//, ''),
+          model: String(config.sensing.model).replace(/^(?:hosted_vllm|tinker)\//, ''),
         });
         setDefaultTutorModelId(config.defaultTutorId || '');
         setCurrentTutorModelId((current) => current || config.defaultTutorId || '');
@@ -1584,6 +1690,76 @@ export default function SessionChatView() {
   }, [cocoSleepModeKnown, cocoSleeping, refreshServiceHealth]);
 
   useEffect(() => {
+    const applySettings = (value: unknown) => {
+      const settings = value as Partial<WakeWordSettingsInfo> | undefined;
+      if (typeof settings?.enabled === 'boolean') {
+        setWakeWordEnabled(settings.enabled);
+      }
+      if (settings?.status) setWakeWordStatus(settings.status);
+      setWakeWordDetail(settings?.detail ?? '');
+    };
+    window.electron?.ipcRenderer
+      .invoke('get-wake-word-settings')
+      .then(applySettings)
+      .catch(() => {});
+    const removeSettingsListener = window.electron?.ipcRenderer.on(
+      'wake-word-settings-changed',
+      applySettings,
+    );
+    const removeStatusListener = window.electron?.ipcRenderer.on(
+      'wake-word-status',
+      (value: unknown) => {
+        const status = value as Partial<WakeWordSettingsInfo> | undefined;
+        if (status?.status) setWakeWordStatus(status.status);
+        setWakeWordDetail(status?.detail ?? '');
+      },
+    );
+    const removeDetectionListener = window.electron?.ipcRenderer.on(
+      'wake-word-detected',
+      (value: unknown) => {
+        const detection = value as { id?: unknown } | undefined;
+        if (typeof detection?.id === 'number') {
+          window.electron?.ipcRenderer.sendMessage(
+            'wake-word-detection-ack',
+            { id: detection.id },
+          );
+        }
+        if (wakeDetectionInProgressRef.current) return;
+        wakeDetectionInProgressRef.current = true;
+        handleVoiceClickRef.current(true).finally(() => {
+          wakeDetectionInProgressRef.current = false;
+        });
+      },
+    );
+    const removeCaptureStatusListener = window.electron?.ipcRenderer.on(
+      'wake-word-capture-status',
+      (value: unknown) => {
+        const capture = value as {
+          state?: unknown;
+          detail?: unknown;
+        } | undefined;
+        if (capture?.state === 'error') {
+          setWakeWordCaptureError(
+            typeof capture.detail === 'string'
+              ? capture.detail
+              : 'Microphone capture failed.',
+          );
+        } else if (capture?.state === 'active') {
+          setWakeWordCaptureError('');
+        }
+      },
+    );
+    return () => {
+      if (typeof removeSettingsListener === 'function') removeSettingsListener();
+      if (typeof removeStatusListener === 'function') removeStatusListener();
+      if (typeof removeDetectionListener === 'function') removeDetectionListener();
+      if (typeof removeCaptureStatusListener === 'function') {
+        removeCaptureStatusListener();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
       'open-chat-settings',
       () => {
@@ -1719,6 +1895,85 @@ export default function SessionChatView() {
     clearSentHotkeyImages();
   };
 
+  const handleVoiceClick = async (fromWakeWord = false) => {
+    if (voiceRecorderRef.current) {
+      voiceRecorderRef.current.stop();
+      return;
+    }
+    if (fromWakeWord) {
+      setShowSettings(false);
+      setShowHistory(false);
+      setReviewing(null);
+    }
+    const unavailable =
+      sending ||
+      startingNewSession ||
+      (!fromWakeWord && reviewing) ||
+      voiceState === 'requesting';
+    if (unavailable) {
+      if (fromWakeWord) {
+        await window.electron?.ipcRenderer.invoke(
+          'set-wake-word-capture-paused',
+          { paused: false },
+        );
+      }
+      return;
+    }
+    await window.electron?.ipcRenderer.invoke(
+      'set-wake-word-capture-paused',
+      { paused: true },
+    );
+    setVoiceError('');
+    setVoiceState('requesting');
+    let audioData: string | null = null;
+    try {
+      const recorder = await startVoiceRecorder({
+        silenceMs: 2_500,
+        maxDurationMs: 30_000,
+        onStatus: setVoiceState,
+      });
+      voiceRecorderRef.current = recorder;
+      const recording = await recorder.done;
+      audioData = recording.wavBase64;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== 'Voice recording cancelled.') setVoiceError(message);
+    } finally {
+      voiceRecorderRef.current = null;
+      setVoiceState('idle');
+      await window.electron?.ipcRenderer.invoke(
+        'set-wake-word-capture-paused',
+        { paused: false },
+      );
+    }
+    if (audioData) await sendVoiceMessage(audioData);
+  };
+  handleVoiceClickRef.current = handleVoiceClick;
+
+  const updateWakeWordEnabled = async (enabled: boolean) => {
+    if (wakeWordSaving) return;
+    setWakeWordSaving(true);
+    setWakeWordCaptureError('');
+    try {
+      const result = (await window.electron?.ipcRenderer.invoke(
+        'set-wake-word-settings',
+        { enabled },
+      )) as ({ success?: boolean; error?: string } &
+        Partial<WakeWordSettingsInfo>) | undefined;
+      if (!result?.success) {
+        throw new Error(result?.error ?? 'Could not update voice activation.');
+      }
+      setWakeWordEnabled(enabled);
+      if (result.status) setWakeWordStatus(result.status);
+    } catch (error) {
+      setWakeWordCaptureError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setWakeWordSaving(false);
+    }
+  };
+
   const handleNewSession = async () => {
     if (sending || startingNewSession) return;
     setStartingNewSession(true);
@@ -1779,7 +2034,17 @@ export default function SessionChatView() {
   const canSend =
     !sending &&
     !startingNewSession &&
+    voiceState === 'idle' &&
     (input.trim().length > 0 || pendingImages.length > 0);
+  const voiceActive = voiceState === 'listening' || voiceState === 'speaking';
+  let voiceStatusText = '';
+  if (voiceState === 'requesting') {
+    voiceStatusText = 'Requesting microphone access…';
+  } else if (voiceState === 'speaking') {
+    voiceStatusText = 'Listening… Coco will send after you stop speaking.';
+  } else if (voiceState === 'listening') {
+    voiceStatusText = 'Listening… start speaking, or press stop to send.';
+  }
   const visibleMessages = reviewing?.messages ?? messages;
   const hasRunningTool = visibleMessages.some(
     (message) =>
@@ -2109,6 +2374,57 @@ export default function SessionChatView() {
           {!cocoSleeping && healthError && (
             <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
               Health check failed: {healthError}
+            </div>
+          )}
+          <div style={S.sectionDivider} />
+
+          <div style={S.groupLabel}>Voice activation</div>
+          <label
+            style={{
+              ...S.healthRow,
+              alignItems: 'center',
+              cursor: wakeWordSaving ? 'default' : 'pointer',
+              marginBottom: 7,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={wakeWordEnabled}
+              disabled={wakeWordSaving}
+              onChange={(event) =>
+                updateWakeWordEnabled(event.target.checked)
+              }
+            />
+            <span>
+              <span style={S.healthName}>Listen for Coco</span>
+              <span style={{ ...S.healthDetail, display: 'block' }}>
+                Detects “Coco”, “Hi Coco”, and “Hey Coco”.
+              </span>
+            </span>
+          </label>
+          <div style={S.helpText}>
+            Audio is analyzed continuously by a small local model and discarded.
+            Coco pauses detection while recording a voice message.
+          </div>
+          {wakeWordEnabled && (
+            <div
+              role="status"
+              style={{
+                ...S.healthDetail,
+                marginTop: 6,
+                color:
+                  wakeWordCaptureError || wakeWordStatus === 'error'
+                    ? '#b91c1c'
+                    : '#16a34a',
+              }}
+            >
+              {wakeWordCaptureError
+                ? `Microphone unavailable: ${wakeWordCaptureError}`
+                : wakeWordStatus === 'error'
+                  ? wakeWordDetail || 'The local wake-word model could not start.'
+                  : wakeWordStatus === 'starting'
+                    ? 'Starting the local detector…'
+                    : 'Listening locally.'}
             </div>
           )}
           <div style={S.sectionDivider} />
@@ -2795,7 +3111,7 @@ export default function SessionChatView() {
               aria-label="Tutor model"
               title={selectedTutorTooltip}
               value={currentTutorModelId}
-              disabled={switchingModel || sending}
+              disabled={switchingModel || sending || voiceState !== 'idle'}
               onChange={(event) => switchTutorModel(event.target.value)}
             >
               {tutorModels.map((model) => (
@@ -2808,12 +3124,69 @@ export default function SessionChatView() {
           <textarea
             style={S.textarea}
             rows={2}
-            placeholder="Ask the tutor… (paste an image to attach)"
+            placeholder={
+              voiceState === 'idle'
+                ? 'Ask the tutor… (paste an image to attach)'
+                : 'Listening to your voice…'
+            }
             value={input}
+            disabled={voiceState !== 'idle'}
             onChange={(e) => setInput(e.target.value)}
             onPaste={onPaste}
             onKeyDown={onKeyDown}
           />
+          <button
+            type="button"
+            aria-label={
+              voiceActive ? 'Stop voice recording' : 'Start voice recording'
+            }
+            title={
+              voiceActive ? 'Stop and send voice message' : 'Talk to Coco'
+            }
+            style={{
+              ...S.micBtn,
+              ...(voiceActive ? S.micBtnActive : {}),
+              ...(sending || startingNewSession || reviewing || voiceState === 'requesting'
+                ? S.sendBtnDisabled
+                : {}),
+            }}
+            disabled={
+              sending ||
+              startingNewSession ||
+              Boolean(reviewing) ||
+              voiceState === 'requesting'
+            }
+            onClick={() => handleVoiceClick()}
+          >
+            {voiceActive ? (
+              <svg
+                aria-hidden="true"
+                width="13"
+                height="13"
+                viewBox="0 0 13 13"
+                fill="currentColor"
+              >
+                <rect x="2" y="2" width="9" height="9" rx="1.5" />
+              </svg>
+            ) : (
+              <svg
+                aria-hidden="true"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path d="M5.5 11.5v.5a6.5 6.5 0 0 0 13 0v-.5" />
+                <path d="M12 18.5V22" />
+                <path d="M9 22h6" />
+              </svg>
+            )}
+          </button>
           <button
             type="button"
             style={{ ...S.sendBtn, ...(canSend ? {} : S.sendBtnDisabled) }}
@@ -2823,9 +3196,17 @@ export default function SessionChatView() {
             Send
           </button>
         </div>
-        <div style={S.hotkeyHint}>
-          Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot
-        </div>
+        {voiceState !== 'idle' && (
+          <div style={S.voiceHint}>{voiceStatusText}</div>
+        )}
+        {voiceState === 'idle' && voiceError && (
+          <div style={S.voiceError}>{voiceError}</div>
+        )}
+        {voiceState === 'idle' && !voiceError && (
+          <div style={S.hotkeyHint}>
+            Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot
+          </div>
+        )}
       </div>
         </>
       )}

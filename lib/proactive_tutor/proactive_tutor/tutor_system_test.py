@@ -7,6 +7,7 @@ uv run python -m pytest proactive_tutor/tutor_system_test.py
 ```
 """
 
+import base64
 import json
 import os
 
@@ -278,6 +279,58 @@ def test_restore_conversation_populates_both_history_formats():
     assert len(ts.conversation_history) == 2
     assert "[User]: What should I do first?" in ts.conversation_history[0]
     assert "[Tutor]: Name the project owner." in ts.conversation_history[1]
+
+
+def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch):
+    ts = _make_tutor_system()
+    ts._chat_messages = [{"role": "user", "content": "Earlier typed context"}]
+    metrics = {
+        "call_id": "audio-call",
+        "operation": "tutor",
+        "model": "inkling",
+        "provider": "tinker",
+        "modality": "vlm",
+        "prompt_tokens": 4,
+        "completion_tokens": 2,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 4,
+        "output_tokens": 2,
+        "total_tokens": 6,
+        "duration_ms": 10,
+        "started_at": 1,
+        "ended_at": 1.01,
+        "success": True,
+        "error": None,
+        "tool_calls": [],
+    }
+    captured = {}
+    wav_header = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + bytes(36)
+    audio_data = base64.b64encode(wav_header).decode("ascii")
+
+    def fake_chat(messages, image_paths=None, on_event=None):
+        captured["messages"] = messages
+        captured["image_paths"] = image_paths
+        captured["on_event"] = on_event
+        return "Here is what I see.", metrics
+
+    monkeypatch.setattr(ts.tutor_agent, "chat_with_metrics", fake_chat)
+
+    answer, returned_metrics = ts.handle_audio_prompt_with_metrics(audio_data)
+
+    assert answer == "Here is what I see."
+    assert returned_metrics is metrics
+    assert captured["messages"][-2] == {
+        "role": "user",
+        "content": "Earlier typed context",
+    }
+    assert captured["messages"][-1]["content"][0]["type"] == "input_audio"
+    assert captured["messages"][-1]["content"][0]["input_audio"]["data"] == audio_data
+    assert ts._chat_messages[-2:] == [
+        {"role": "user", "content": "[Voice message]"},
+        {"role": "assistant", "content": "Here is what I see."},
+    ]
+    assert audio_data not in json.dumps(ts._chat_messages)
 
 
 if __name__ == "__main__":

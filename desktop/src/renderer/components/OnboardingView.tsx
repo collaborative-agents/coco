@@ -17,6 +17,7 @@ const MODEL_PROVIDERS = [
   ['gemini', 'Google Gemini'],
   ['openai', 'OpenAI'],
   ['anthropic', 'Anthropic'],
+  ['tinker', 'Tinker'],
   ['tinfoil', 'Tinfoil (confidential)'],
   ['hosted_vllm', 'OpenAI-compatible endpoint'],
   ['lm_studio', 'LM Studio (local)'],
@@ -999,14 +1000,14 @@ export default function OnboardingView() {
         if (!config?.sensing || !Array.isArray(config.tutors)) return;
         setSensingModel({
           ...config.sensing,
-          model: String(config.sensing.model).replace(/^hosted_vllm\//, ''),
+          model: String(config.sensing.model).replace(/^(?:hosted_vllm|tinker)\//, ''),
           apiKey: '',
           baseUrl: config.sensing.baseUrl ?? '',
         });
         setTutorModels(
           config.tutors.map((item: any) => ({
             ...item,
-            model: String(item.model).replace(/^hosted_vllm\//, ''),
+            model: String(item.model).replace(/^(?:hosted_vllm|tinker)\//, ''),
             apiKey: '',
             baseUrl: item.baseUrl ?? '',
           })),
