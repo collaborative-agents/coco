@@ -35,6 +35,8 @@ from personalization.signals.user_feedback import derive_feedback_signals
 # it can apply a longer retry cooldown without reporting a job failure.
 NO_WORK = 3
 SIGNAL_POLICY_VERSION = 3
+DEFAULT_EVOLVE_LLM_CONCURRENCY = 4
+MAX_EVOLVE_LLM_CONCURRENCY = 4
 _RESOURCE_TRACKER_COMMAND = re.compile(
     r"from multiprocessing\.resource_tracker import main;main\((\d+)\)"
 )
@@ -264,8 +266,13 @@ def process_evolve_step(
     min_moments: int = 8,
     max_moments: int = 64,
     retrospective_observation_interval: int = 20,
+    llm_concurrency: int = DEFAULT_EVOLVE_LLM_CONCURRENCY,
 ) -> dict[str, int | str]:
     """Run or resume one frozen Coco-PE period and apply retention on success."""
+    if not 1 <= llm_concurrency <= MAX_EVOLVE_LLM_CONCURRENCY:
+        raise ValueError(
+            f"llm_concurrency must be between 1 and {MAX_EVOLVE_LLM_CONCURRENCY}"
+        )
     records_path = Path(records_root).expanduser()
     state_dir = Path(state_root).expanduser()
     runtime_path = state_dir / "evolve_checkpoint.json"
@@ -402,6 +409,7 @@ def process_evolve_step(
             "run_id": run_id,
             "status": "running",
             "signal_policy_version": SIGNAL_POLICY_VERSION,
+            "llm_concurrency": llm_concurrency,
             "period_start": min(moment.ts for moment in labeled),
             "period_end": period_end,
             "snapshot_path": str(snapshot_path),
@@ -454,7 +462,7 @@ def process_evolve_step(
             epochs=1,
             batch_size=4,
             max_images=2,
-            concurrency=1,
+            concurrency=llm_concurrency,
             max_ops_per_batch=4,
         ),
     )
@@ -543,6 +551,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--missed-observation-interval", type=int, default=20)
     parser.add_argument("--min-moments", type=int, default=8)
     parser.add_argument("--max-moments", type=int, default=64)
+    parser.add_argument(
+        "--llm-concurrency",
+        type=int,
+        choices=range(1, MAX_EVOLVE_LLM_CONCURRENCY + 1),
+        default=DEFAULT_EVOLVE_LLM_CONCURRENCY,
+        help="parallel prediction/reflection requests per Coco-PE batch",
+    )
     parser.add_argument("--collect-training-screenshots", action="store_true")
     args = parser.parse_args(effective_argv)
 
@@ -569,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
             collect_training_screenshots=args.collect_training_screenshots,
             min_moments=args.min_moments,
             max_moments=args.max_moments,
+            llm_concurrency=args.llm_concurrency,
         )
     print(json.dumps(result))
     return NO_WORK if result.get("status") == "no_work" else 0

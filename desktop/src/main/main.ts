@@ -328,6 +328,13 @@ const requestedPort = (value: string | undefined, fallback: number): number => {
     : fallback;
 };
 
+const requestedPersonalizationConcurrency = (
+  value: string | undefined,
+): number => {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 4 ? parsed : 4;
+};
+
 const canBindPort = (port: number): Promise<boolean> =>
   new Promise((resolve) => {
     const server = createServer();
@@ -3142,6 +3149,9 @@ const startObserver = () => {
       packagedExecutable,
       providerEnv: runtime?.sensingEnv,
       collectTrainingScreenshots: trainingScreenshotRetentionEnabled(),
+      evolveConcurrency: requestedPersonalizationConcurrency(
+        process.env.COCO_PERSONALIZATION_LLM_CONCURRENCY,
+      ),
       logPath: path.join(
         app.getPath('userData'),
         'logs',

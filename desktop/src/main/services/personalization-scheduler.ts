@@ -84,6 +84,8 @@ export interface PersonalizationSchedulerOptions {
   revisionIdleSeconds?: number;
   evolveIdleSeconds?: number;
   missedObservationInterval?: number;
+  /** Parallel prediction/reflection requests within one Coco-PE batch. */
+  evolveConcurrency?: number;
   /** Dedicated subprocess log, alongside the sensing and tutor service logs. */
   logPath?: string;
   onJobComplete?: (job: PersonalizationJob) => void;
@@ -284,7 +286,12 @@ export class PersonalizationScheduler {
     ];
     if (job !== 'signals') common.push('--model', this.options.model);
     if (job === 'evolve') {
-      common.push('--memory-root', this.options.memoryRoot);
+      common.push(
+        '--memory-root',
+        this.options.memoryRoot,
+        '--llm-concurrency',
+        String(this.options.evolveConcurrency ?? 4),
+      );
       if (this.options.collectTrainingScreenshots) {
         common.push('--collect-training-screenshots');
       }

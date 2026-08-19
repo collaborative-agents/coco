@@ -52,6 +52,10 @@ class EvolveConfig:
             raise ValueError("target_utility cannot exceed the maximum utility of 1.0")
         if self.false_positive_cost < 0 or self.false_negative_cost < 0:
             raise ValueError("utility error costs must be non-negative")
+        if self.batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        if self.concurrency < 1:
+            raise ValueError("concurrency must be at least 1")
 
 
 @dataclass(slots=True)

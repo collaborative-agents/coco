@@ -91,4 +91,24 @@ describe('PersonalizationScheduler status', () => {
       "[evolve:stderr]\nTraceback line\nFailed to execute script 'runtime'",
     );
   });
+
+  it('passes bounded LLM concurrency to the evolve worker', () => {
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot: path.join(root, 'personalization'),
+      memoryRoot: root,
+      model: 'provider/model',
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+      evolveConcurrency: 3,
+    });
+    const commandBuilder = scheduler as unknown as {
+      command: (job: 'evolve') => { args: string[] };
+    };
+
+    const { args } = commandBuilder.command('evolve');
+
+    expect(args).toEqual(expect.arrayContaining(['--llm-concurrency', '3']));
+  });
 });

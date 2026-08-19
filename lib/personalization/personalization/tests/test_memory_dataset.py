@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 
 import pytest
 from personalization.dataset_builder import build_sft_examples
@@ -326,6 +328,33 @@ def test_learner_preserves_source_order_by_default(monkeypatch):
     learner.learn(["first", "second", "third"], log=False)
 
     assert batches == [["first", "second"], ["third"]]
+
+
+def test_learner_sends_generation_requests_in_parallel(monkeypatch):
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def fake_generate(*_args, **_kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return {"pred": "no", "gt": "no", "correct": True}
+
+    monkeypatch.setattr(memory_evolve, "generate", fake_generate)
+    learner = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=EvolveConfig(batch_size=4, concurrency=4),
+    )
+
+    results = learner._generate_batch(["a", "b", "c", "d"], "memory")
+
+    assert len(results) == 4
+    assert max_active > 1
 
 
 def test_learner_resumes_after_last_completed_batch(monkeypatch, tmp_path):

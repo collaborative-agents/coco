@@ -25,6 +25,23 @@ def test_frozen_resource_tracker_command_is_recognized():
     assert runtime._resource_tracker_fd(["evolve"]) is None
 
 
+def test_evolve_rejects_unbounded_llm_concurrency(tmp_path):
+    for concurrency in (0, runtime.MAX_EVOLVE_LLM_CONCURRENCY + 1):
+        try:
+            runtime.process_evolve_step(
+                tmp_path / "records",
+                tmp_path / "state",
+                model="model",
+                memory_root=tmp_path / "memory",
+                collect_training_screenshots=True,
+                llm_concurrency=concurrency,
+            )
+        except ValueError as error:
+            assert "llm_concurrency must be between" in str(error)
+        else:
+            raise AssertionError("unbounded concurrency should be rejected")
+
+
 def test_signal_step_appends_feedback_once_and_checkpoints(tmp_path, monkeypatch):
     records = SessionRecords(
         path="session",
