@@ -12,7 +12,7 @@ describe('participant authentication', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Enter your Participant ID.',
+      'Enter your username.',
     );
   });
 
@@ -25,7 +25,7 @@ describe('participant authentication', () => {
 
     expect(screen.getByLabelText(/Keep me signed in/)).toBeChecked();
     fireEvent.click(screen.getByRole('tab', { name: 'Sign up' }));
-    fireEvent.change(screen.getByLabelText('Participant ID'), {
+    fireEvent.change(screen.getByLabelText('Username'), {
       target: { value: 'participant-001' },
     });
     fireEvent.change(screen.getByLabelText('Password'), {

@@ -30,12 +30,12 @@ export default function AuthView() {
     event.preventDefault();
     const normalizedParticipantId = participantId.trim();
     if (!normalizedParticipantId) {
-      setError('Enter your Participant ID.');
+      setError('Enter your username.');
       return;
     }
     if (!/^[A-Za-z0-9._-]{3,64}$/.test(normalizedParticipantId)) {
       setError(
-        'Participant ID must be 3–64 characters and use only letters, numbers, periods, underscores, or hyphens.',
+        'Username must be 3–64 characters and use only letters, numbers, periods, underscores, or hyphens.',
       );
       return;
     }
@@ -100,7 +100,7 @@ export default function AuthView() {
 
         <form onSubmit={submit} className="auth-form" noValidate>
           <div className="auth-field-label" id="participant-id-label">
-            Participant ID
+            Username
           </div>
           <input
             id="participant-id"
@@ -111,7 +111,7 @@ export default function AuthView() {
             minLength={3}
             maxLength={64}
             pattern="[A-Za-z0-9._-]+"
-            placeholder="e.g. participant-001"
+            placeholder="e.g. username-001"
             required
           />
           {mode === 'signup' && (

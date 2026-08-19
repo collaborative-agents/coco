@@ -2943,7 +2943,7 @@ ipcMain.handle('set-user-id', async (event, userId) => {
     log.warn('[User] rejected an attempt to replace the authenticated userId');
     return {
       success: false,
-      error: 'Authenticated Participant ID cannot change.',
+      error: 'Authenticated username cannot change.',
     };
   }
   currentUserId = userId;
@@ -2982,7 +2982,7 @@ const authenticate = async (
   ) {
     return {
       success: false,
-      error: 'Participant ID and password are required.',
+      error: 'Username and password are required.',
     };
   }
   try {
