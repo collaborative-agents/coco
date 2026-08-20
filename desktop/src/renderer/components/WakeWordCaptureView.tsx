@@ -12,6 +12,7 @@ export default function WakeWordCaptureView() {
   const [windowReady, setWindowReady] = useState(false);
   const [enabled, setEnabled] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [sleeping, setSleeping] = useState(false);
   const [restartToken, setRestartToken] = useState(0);
   const listenerRef = useRef(new WakeWordListener());
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -64,9 +65,30 @@ export default function WakeWordCaptureView() {
   }, []);
 
   useEffect(() => {
+    window.electron?.ipcRenderer
+      .invoke('get-coco-sleep-mode')
+      .then((value: unknown) => {
+        const state = value as { sleeping?: unknown } | undefined;
+        setSleeping(state?.sleeping === true);
+        return undefined;
+      })
+      .catch(() => undefined);
+    const removeSleep = window.electron?.ipcRenderer.on(
+      'coco-sleep-mode-changed',
+      (value: unknown) => {
+        const state = value as { sleeping?: unknown } | undefined;
+        setSleeping(state?.sleeping === true);
+      },
+    );
+    return () => {
+      if (typeof removeSleep === 'function') removeSleep();
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     const listener = listenerRef.current;
-    const shouldListen = windowReady && enabled && !paused;
+    const shouldListen = windowReady && enabled && !paused && !sleeping;
     if (!shouldListen) {
       listener
         .stop()
@@ -134,7 +156,7 @@ export default function WakeWordCaptureView() {
       }
       listener.stop().catch(() => undefined);
     };
-  }, [enabled, paused, restartToken, windowReady]);
+  }, [enabled, paused, restartToken, sleeping, windowReady]);
 
   return null;
 }
