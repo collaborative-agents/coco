@@ -16,6 +16,16 @@ Working with AI today puts most of the burden on the human: you have to notice w
 
 Coco is a *collaboration layer* that sits between you and the AI tools you already use. We keep it intentionally lightweight in order to decouple proactive co-assistance from the execution capabilities provided by various general and vertical agents.
 
+## Three ways to “Ask Coco”
+
+Besides receiving proactive support, you can ask Coco for help at any time:
+
+1. **Click the avatar or toolbar button** to open Coco and type your question.
+2. **Press Command + Shift + Space** to open Coco and attach a screenshot as visual context.
+3. **Say “Hey Coco”** for the lowest-friction, voice-first entry point. Voice activation must first be enabled in Settings.
+
+You can ask for help through text, voice, or visual context and get assistance instantly.
+
 ## Demos
 
 **Automating repetitive work**

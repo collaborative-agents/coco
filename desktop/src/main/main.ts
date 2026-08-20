@@ -1527,7 +1527,7 @@ async function restoreSessionAfterModelRestart(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
-  const { aiTools, scenario, customObserverPrompt } = readProfile();
+  const { aiTools, scenario, customObserverPrompt, userName } = readProfile();
   await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
   await axios.post(
     `${tutor}/context/problem_statement`,
@@ -1537,6 +1537,11 @@ async function restoreSessionAfterModelRestart(): Promise<void> {
   await axios.post(
     `${tutor}/context/ai_tools`,
     { ai_tools: aiTools },
+    { timeout: 8000 },
+  );
+  await axios.post(
+    `${tutor}/context/user_name`,
+    { user_name: userName },
     { timeout: 8000 },
   );
   const memory = readLocalMemory();
@@ -2523,7 +2528,7 @@ async function createProactiveTutorSession(
   seed?: ChatSeed,
 ): Promise<string | null> {
   // Read the user's onboarding profile to get their selected AI tools and mode.
-  const { aiTools, scenario, customObserverPrompt } = readProfile();
+  const { aiTools, scenario, customObserverPrompt, userName } = readProfile();
 
   const sensingPort = process.env.SENSING_PORT || '8080';
   const tutorPort = process.env.TUTOR_PORT || '8081';
@@ -2564,6 +2569,11 @@ async function createProactiveTutorSession(
     await axios.post(
       `${tutor}/context/ai_tools`,
       { ai_tools: aiTools },
+      { timeout: 8000 },
+    );
+    await axios.post(
+      `${tutor}/context/user_name`,
+      { user_name: userName },
       { timeout: 8000 },
     );
     // Re-apply the persisted long-term memory so a freshly (re)started tutor
@@ -2652,7 +2662,7 @@ ipcMain.handle(
 
     const tutorPort = process.env.TUTOR_PORT || '8081';
     const tutor = `http://127.0.0.1:${tutorPort}`;
-    const { aiTools, scenario } = readProfile();
+    const { aiTools, scenario, userName } = readProfile();
     try {
       await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
       const modelConfig = readModelConfiguration();
@@ -2681,6 +2691,11 @@ ipcMain.handle(
       await axios.post(
         `${tutor}/context/ai_tools`,
         { ai_tools: aiTools },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/user_name`,
+        { user_name: userName },
         { timeout: 8000 },
       );
       const savedMemory = readLocalMemory();
@@ -3507,7 +3522,10 @@ const startObserver = () => {
       const { userName } = readProfile();
       serviceManager.configureServiceEnv(
         'tutor-server',
-        runtime.tutorEnv,
+        {
+          ...runtime.tutorEnv,
+          ...(userName && { COCO_USER_NAME: userName }),
+        },
         true,
       );
       serviceManager.configureServiceEnv(

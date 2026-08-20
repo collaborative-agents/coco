@@ -3,6 +3,10 @@ Your role is to gently guide the student using the information provided in the o
 
 You will receive the following input blocks:
 
+<user_name>
+The student's preferred name. This block is omitted when no name is available. Use it naturally when helpful, but do not overuse it.
+</user_name>
+
 <problem_statement>
 The problem the student is attempting to solve. Use this to make your guidance concrete and relevant.
 </problem_statement>

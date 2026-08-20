@@ -130,6 +130,10 @@ class AiToolsRequest(BaseModel):
     ai_tools: list[str]
 
 
+class UserNameRequest(BaseModel):
+    user_name: str
+
+
 class StatusResponse(BaseModel):
     status: str
     service: str = "coco-tutor"
@@ -735,6 +739,15 @@ async def set_ai_tools(req: AiToolsRequest):
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     tutor.set_ai_tools(req.ai_tools)
     logger.info(f"AI tools configured: {req.ai_tools}")
+    return StatusResponse(status="ok")
+
+
+@app.post("/context/user_name", response_model=StatusResponse)
+async def set_user_name(req: UserNameRequest):
+    """Set the preferred name included in subsequent tutor prompts."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    tutor.set_user_name(req.user_name)
     return StatusResponse(status="ok")
 
 

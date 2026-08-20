@@ -28,6 +28,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
+from html import escape
 from pathlib import Path
 
 import httpx
@@ -782,6 +783,11 @@ class AiTutoringProcessor(SegmentProcessor):
         self._observer_model = observer_model
         self._scenario = scenario
         self._memory_engine = memory_engine
+        self._user_name = (
+            getattr(memory_engine, "user_name", None)
+            or os.environ.get("COCO_USER_NAME")
+            or ""
+        ).strip()
         self._memory_session_id: str | None = None
         # Action batches and the periodic ticker share this lock/cursor. This
         # keeps user activity responsive without allowing the two trigger paths
@@ -1329,7 +1335,9 @@ class AiTutoringProcessor(SegmentProcessor):
     ) -> tuple[str, str, LLMCallMetrics]:
         from datetime import datetime as _dt
 
-        text = await self._build_context_prompt()
+        user_name_block = self._user_name_context_block()
+        text = f"{user_name_block}\n\n" if user_name_block else ""
+        text += await self._build_context_prompt()
         # Recent propositions summarize a longer horizon of user activity than
         # the immediately preceding observer outputs. Keep the two layers
         # separate so recency is useful without presenting memory as current
@@ -1480,6 +1488,12 @@ class AiTutoringProcessor(SegmentProcessor):
             retrieved_context=retrieved_context,
         )
         return obs, text, metrics
+
+    def _user_name_context_block(self) -> str:
+        """Build the observer prompt block containing the preferred user name."""
+        if not self._user_name:
+            return ""
+        return f"<user_name>\n{escape(self._user_name)}\n</user_name>"
 
     @staticmethod
     def _cleanup_consumed_screenshots(image_paths: list[str]) -> None:

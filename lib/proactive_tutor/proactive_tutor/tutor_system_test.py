@@ -59,6 +59,28 @@ def test_handle_problem_statement():
     assert ts.problem_statement == "Solve the equation: 2x + 5 = 13"
 
 
+def test_user_name_is_injected_into_tutor_context(monkeypatch):
+    monkeypatch.setenv("COCO_USER_NAME", "Ada & Lin")
+
+    everyday = TutorSystem(model_name=MODEL, scenario="everyday_support")
+    everyday_context = everyday._everyday_chat_messages()[0]["content"]
+    assert "<user_name>\nAda &amp; Lin\n</user_name>" in everyday_context
+
+    student = TutorSystem(model_name=MODEL, scenario="student_learning")
+    student.set_user_name("Grace")
+    assert "<user_name>\nGrace\n</user_name>" in student._build_context_prompt()
+
+    student.reset_session()
+    assert student.user_name == "Grace"
+
+    student.set_user_name("")
+    assert "<user_name>" not in student._build_context_prompt()
+
+    monkeypatch.delenv("COCO_USER_NAME", raising=False)
+    unnamed = TutorSystem(model_name=MODEL, scenario="everyday_support")
+    assert "<user_name>" not in unnamed._everyday_chat_messages()[0]["content"]
+
+
 def test_user_and_evolved_memory_are_persisted_as_separate_layers(
     tmp_path, monkeypatch
 ):
