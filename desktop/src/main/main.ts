@@ -2937,6 +2937,7 @@ ipcMain.handle(
       return { error: 'The voice recording is empty or too large.' };
     }
     const tutorPort = process.env.TUTOR_PORT || '8081';
+    personalizationScheduler?.beginInteractiveInference();
     try {
       await consumeTutorStream(
         `http://127.0.0.1:${tutorPort}/events/audio_prompt/stream`,
@@ -2973,6 +2974,8 @@ ipcMain.handle(
         error,
       });
       return { error };
+    } finally {
+      personalizationScheduler?.endInteractiveInference();
     }
   },
 );
