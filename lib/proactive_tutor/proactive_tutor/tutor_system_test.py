@@ -281,7 +281,7 @@ def test_restore_conversation_populates_both_history_formats():
     assert "[Tutor]: Name the project owner." in ts.conversation_history[1]
 
 
-def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch):
+def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tmp_path):
     ts = _make_tutor_system()
     ts._chat_messages = [{"role": "user", "content": "Earlier typed context"}]
     metrics = {
@@ -305,7 +305,6 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch):
         "tool_calls": [],
     }
     captured = {}
-    logged = {}
     wav_header = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + bytes(36)
     audio_data = base64.b64encode(wav_header).decode("ascii")
 
@@ -316,11 +315,7 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch):
         return "Here is what I see.", metrics
 
     monkeypatch.setattr(ts.tutor_agent, "chat_with_metrics", fake_chat)
-    monkeypatch.setattr(
-        ts,
-        "_log_tutor_call",
-        lambda *args, **kwargs: logged.update(args=args, kwargs=kwargs),
-    )
+    ts._recorder = TrainingRecorder(str(tmp_path), retain_screenshots=False)
     monkeypatch.setattr("proactive_tutor.tutor_system.time.time", lambda: 1234.5)
 
     answer, returned_metrics = ts.handle_audio_prompt_with_metrics(
@@ -341,8 +336,14 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch):
         {"role": "assistant", "content": "Here is what I see."},
     ]
     assert audio_data not in json.dumps(ts._chat_messages)
-    assert logged["kwargs"]["session_id"] == "audio-session"
-    assert logged["kwargs"]["event_ts"] == 1234.5
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "tutor_calls.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["trigger"] == "audio_prompt"
+    assert rows[0]["session_id"] == "audio-session"
+    assert rows[0]["ts"] == 1234.5
 
 
 if __name__ == "__main__":
