@@ -649,7 +649,7 @@ function PetView() {
       .invoke('get-coco-sleep-mode')
       .then((result) => {
         const state = result as { sleeping?: boolean } | undefined;
-        if (state?.sleeping === true) setCocoSleeping(true);
+        setCocoSleeping(state?.sleeping === true);
         return undefined;
       })
       .catch(() => undefined);

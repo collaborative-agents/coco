@@ -826,8 +826,9 @@ const createWakeWordCaptureWindow = (): void => {
 const syncWakeWordService = (): void => {
   if (!wakeWordService) return;
   if (!wakeWordEnabled) wakeWordService.stop('disabled');
-  else if (systemSuspended) wakeWordService.stop('sleeping');
-  else wakeWordService.start();
+  else if (isCocoSleeping() || systemSuspended) {
+    wakeWordService.stop('sleeping');
+  } else wakeWordService.start();
 };
 
 const initializeWakeWordService = (): void => {
@@ -856,7 +857,7 @@ const initializeWakeWordService = (): void => {
     packagedExecutable: executable,
     onStatus: publishWakeWordStatus,
     onDetected: (keyword) => {
-      if (!wakeWordEnabled || systemSuspended) return;
+      if (!wakeWordEnabled || isCocoSleeping() || systemSuspended) return;
       log.info(`[Wake word] Detected ${keyword}`);
       queueWakeWordDetection(keyword);
     },
@@ -1848,8 +1849,12 @@ async function setCocoSleepMode(sleeping: boolean) {
     serviceManager.startAll();
   }
   previewCocoSleepMode = sleeping;
+  syncWakeWordService();
   avatarWindow?.webContents.send('coco-sleep-mode-changed', { sleeping });
   chatWindow?.webContents.send('coco-sleep-mode-changed', { sleeping });
+  wakeWordCaptureWindow?.webContents.send('coco-sleep-mode-changed', {
+    sleeping,
+  });
   if (!sleeping) {
     avatarWindow?.webContents.send('daily-memory-draft-refresh');
   }
@@ -1991,6 +1996,7 @@ ipcMain.removeAllListeners('wake-word-audio-frame');
 ipcMain.on('wake-word-audio-frame', (event, frame: unknown) => {
   if (
     !wakeWordEnabled ||
+    isCocoSleeping() ||
     systemSuspended ||
     wakeWordCapturePaused ||
     !wakeWordCaptureWindow ||

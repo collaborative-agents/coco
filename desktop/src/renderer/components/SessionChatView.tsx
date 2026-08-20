@@ -2404,7 +2404,7 @@ export default function SessionChatView() {
           </label>
           <div style={S.helpText}>
             Audio is analyzed continuously by a small local model and discarded.
-            Coco pauses detection while recording a voice message.
+            Coco pauses listening while asleep and while recording a voice message.
           </div>
           {wakeWordEnabled && (
             <div
@@ -2422,9 +2422,11 @@ export default function SessionChatView() {
                 ? `Microphone unavailable: ${wakeWordCaptureError}`
                 : wakeWordStatus === 'error'
                   ? wakeWordDetail || 'The local wake-word model could not start.'
-                  : wakeWordStatus === 'starting'
-                    ? 'Starting the local detector…'
-                    : 'Listening locally.'}
+                  : cocoSleeping || wakeWordStatus === 'sleeping'
+                    ? 'Paused while Coco is asleep.'
+                    : wakeWordStatus === 'starting'
+                      ? 'Starting the local detector…'
+                      : 'Listening locally.'}
             </div>
           )}
           <div style={S.sectionDivider} />
