@@ -193,9 +193,6 @@
   "build": {
     "productName": "coco",
     "appId": "io.github.collaborative-agents.coco",
-    "extendInfo": {
-      "NSMicrophoneUsageDescription": "Coco uses the microphone for voice messages and, when you enable voice activation, to detect Coco wake phrases locally on this Mac."
-    },
     "asar": true,
     "compression": "maximum",
     "asarUnpack": "**\\*.{node,dll}",
@@ -207,6 +204,9 @@
       "!**/*.md"
     ],
     "mac": {
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Coco uses the microphone for voice messages and, when you enable voice activation, to detect Coco wake phrases locally on this Mac."
+      },
       "icon": "assets/pet1.png",
       "forceCodeSigning": true,
       "notarize": true,
