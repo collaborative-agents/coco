@@ -584,6 +584,7 @@ async def handle_audio_prompt_stream(req: AudioEventRequest):
                 tutor.handle_audio_prompt_with_metrics,
                 req.audio_data,
                 publish,
+                req.session_id,
             )
         )
         try:

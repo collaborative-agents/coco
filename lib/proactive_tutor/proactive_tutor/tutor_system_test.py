@@ -305,6 +305,7 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch):
         "tool_calls": [],
     }
     captured = {}
+    logged = {}
     wav_header = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + bytes(36)
     audio_data = base64.b64encode(wav_header).decode("ascii")
 
@@ -315,8 +316,17 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch):
         return "Here is what I see.", metrics
 
     monkeypatch.setattr(ts.tutor_agent, "chat_with_metrics", fake_chat)
+    monkeypatch.setattr(
+        ts,
+        "_log_tutor_call",
+        lambda *args, **kwargs: logged.update(args=args, kwargs=kwargs),
+    )
+    monkeypatch.setattr("proactive_tutor.tutor_system.time.time", lambda: 1234.5)
 
-    answer, returned_metrics = ts.handle_audio_prompt_with_metrics(audio_data)
+    answer, returned_metrics = ts.handle_audio_prompt_with_metrics(
+        audio_data,
+        session_id="audio-session",
+    )
 
     assert answer == "Here is what I see."
     assert returned_metrics is metrics
@@ -331,6 +341,8 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch):
         {"role": "assistant", "content": "Here is what I see."},
     ]
     assert audio_data not in json.dumps(ts._chat_messages)
+    assert logged["kwargs"]["session_id"] == "audio-session"
+    assert logged["kwargs"]["event_ts"] == 1234.5
 
 
 if __name__ == "__main__":
