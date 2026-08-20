@@ -181,6 +181,7 @@ export class CocoGatewayClient {
     sessionId: string,
     startTrigger: SessionStartTrigger,
     startedAt = new Date(),
+    startMessage?: string,
   ): Promise<void> {
     const tutorModel = process.env.TUTOR_MODEL?.trim();
     const observerModel = process.env.OBSERVER_MODEL?.trim();
@@ -190,6 +191,9 @@ export class CocoGatewayClient {
       user_id: this.userId,
       started_at: startedAt.toISOString(),
       start_trigger: startTrigger,
+      ...(startMessage?.trim()
+        ? { start_message: startMessage.trim() }
+        : {}),
       ...(tutorModel ? { tutor_model: tutorModel } : {}),
       ...(observerModel ? { observer_model: observerModel } : {}),
       ...(harness.gitCommitSha ? { git_commit_sha: harness.gitCommitSha } : {}),

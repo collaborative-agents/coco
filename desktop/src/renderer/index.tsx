@@ -1,11 +1,13 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import NotificationView from './components/NotificationView';
+import ImagePreviewView from './components/ImagePreviewView';
 import OnboardingView from './components/OnboardingView';
 import SessionSetupView from './components/SessionSetupView';
 import SessionChatView from './components/SessionChatView';
 import SessionRecapView from './components/SessionRecapView';
 import AuthView from './components/AuthView';
+import WakeWordCaptureView from './components/WakeWordCaptureView';
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
@@ -24,6 +26,10 @@ if (view === 'auth') {
   rendered = <SessionChatView />;
 } else if (view === 'session-recap') {
   rendered = <SessionRecapView />;
+} else if (view === 'image-preview') {
+  rendered = <ImagePreviewView />;
+} else if (view === 'wake-word-capture') {
+  rendered = <WakeWordCaptureView />;
 } else {
   rendered = <App />;
 }

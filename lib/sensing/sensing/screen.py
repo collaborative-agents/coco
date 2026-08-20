@@ -403,11 +403,6 @@ class Screen(Observer):
             except OSError:
                 pass  # File might already be deleted
 
-    # Maximum dimension (width or height) for saved screenshots.  The
-    # observer model works fine at reduced resolution and smaller files
-    # save disk space, memory, and base64-encoding time.
-    _SCREENSHOT_MAX_DIM: int = 1280
-
     # ─────────────────────────────── I/O helpers
     async def _save_frame(
         self,
@@ -439,20 +434,6 @@ class Screen(Observer):
             y2 = min(max(0, y + 20), frame.height - 1)
             draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
             del draw
-
-        # Downscale to save disk space and reduce base64 payload for the
-        # observer model.  Aspect ratio is preserved; images already within
-        # the limit are left untouched.
-        w, h = image.size
-        max_dim = self._SCREENSHOT_MAX_DIM
-        if max(w, h) > max_dim:
-            scale = max_dim / max(w, h)
-            new_w = int(w * scale)
-            new_h = int(h * scale)
-            _resample = getattr(Image, "LANCZOS", None) or getattr(
-                Image, "ANTIALIAS", 1
-            )
-            image = image.resize((new_w, new_h), _resample)
 
         # Save with lower quality to reduce memory usage
         await self._run_in_thread(
@@ -560,7 +541,7 @@ class Screen(Observer):
 
         Uses the cursor's live position (not the last-click monitor) so the
         capture always reflects the display the user is actively looking at
-        when they press Cmd+Shift+H.
+        when they press Cmd+Shift+Space.
 
         Returns ``(image_path, timestamp)`` on success, ``("", "")`` on failure.
         """
@@ -581,7 +562,12 @@ class Screen(Observer):
                 return "", ""
 
             path, ts = await self._save_frame(
-                frame, 0, 0, "hotkey", draw_box=False, target_dir=self._hotkey_dir
+                frame,
+                0,
+                0,
+                "hotkey",
+                draw_box=False,
+                target_dir=self._hotkey_dir,
             )
 
         print(f"[HOTKEY CAPTURE] saved to: {path} at {ts}")
@@ -630,7 +616,7 @@ class Screen(Observer):
             def schedule_key_event(key, typ: str):
                 asyncio.run_coroutine_threadsafe(key_event(key, typ), loop)
 
-            # ---- Cmd+Shift+H global hot-key --------------------------------
+            # ---- Cmd+Shift+Space global hot-key ----------------------------
             # GlobalHotKeys uses CGEventTap on macOS, which requires Input
             # Monitoring permission. If that permission is missing, macOS sends
             # SIGKILL to the process — a Python try/except cannot catch this.

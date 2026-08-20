@@ -49,7 +49,7 @@ class LiteLLMMessage(BaseModel):
 def get_litellm_completion(
     messages: Sequence[LiteLLMMessage | dict],
     model: str = "anthropic/claude-sonnet-4-20250514",
-    temperature: float = 1.0,
+    temperature: float | None = 1.0,
     max_tokens: int | None = None,
     top_p: float | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
@@ -83,7 +83,7 @@ def get_litellm_completion(
         ],
         "stream": stream,
     }
-    if not uses_prompt_only_sampling:
+    if not uses_prompt_only_sampling and temperature is not None:
         kwargs["temperature"] = temperature
     # max_tokens is required by some providers (e.g. Anthropic); only include
     # it when explicitly provided so providers with built-in defaults aren't

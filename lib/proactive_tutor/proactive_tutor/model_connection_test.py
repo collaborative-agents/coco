@@ -41,6 +41,7 @@ def test_connection(model: str, include_image: bool) -> str:
     kwargs: dict[str, object] = {}
     if (
         model.removeprefix("hosted_vllm/")
+        .removeprefix("tinker/")
         .lower()
         .startswith("thinkingmachines/inkling")
     ):
@@ -49,7 +50,10 @@ def test_connection(model: str, include_image: bool) -> str:
         [{"role": "user", "content": content}],
         model=model,
         max_tokens=8,
-        temperature=0,
+        # Some models, including GPT-5.5, only support their default sampling
+        # temperature. ``None`` keeps the connection probe model-agnostic and
+        # lets provider adapters omit the parameter entirely.
+        temperature=None,
         operation="connection_test",
         **kwargs,
     )

@@ -55,6 +55,12 @@ class EventRequest(BaseModel):
     )
 
 
+class AudioEventRequest(BaseModel):
+    audio_data: str = Field(min_length=1, max_length=16_000_000)
+    audio_format: str = "wav"
+    session_id: str | None = None
+
+
 class GuidanceResponse(BaseModel):
     guidance: str
     llm_metrics: dict | None = None
@@ -133,6 +139,10 @@ class MemoryResponse(BaseModel):
 
 class AiToolsRequest(BaseModel):
     ai_tools: list[str]
+
+
+class UserNameRequest(BaseModel):
+    user_name: str
 
 
 class StatusResponse(BaseModel):
@@ -616,6 +626,58 @@ async def handle_practice_suggestions_stream():
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@app.post("/events/audio_prompt/stream")
+async def handle_audio_prompt_stream(req: AudioEventRequest):
+    """Run a voice turn through the current tutor and stream tool activity."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    if req.audio_format != "wav":
+        raise HTTPException(status_code=400, detail="Only WAV audio is supported")
+
+    async def event_stream():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+
+        def publish(event: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                tutor.handle_audio_prompt_with_metrics,
+                req.audio_data,
+                publish,
+                req.session_id,
+            )
+        )
+        try:
+            while not worker.done() or not queue.empty():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            raw_guidance, llm_metrics = await worker
+            while not queue.empty():
+                event = queue.get_nowait()
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
+            done = {
+                "type": "done",
+                "guidance": guidance,
+                "llm_metrics": llm_metrics,
+                "tool_calls": llm_metrics.get("tool_calls", []),
+                "observer_metrics": None,
+            }
+            yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            logger.error("Error in streaming audio prompt: %s", exc, exc_info=True)
+            error = {"type": "error", "error": str(exc)}
+            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.post("/events/pause", response_model=GuidanceResponse)
 async def handle_pause(req: EventRequest):
     """Receive a pre-computed observation + context for a pause event and return tutor guidance."""
@@ -732,6 +794,15 @@ async def set_ai_tools(req: AiToolsRequest):
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     tutor.set_ai_tools(req.ai_tools)
     logger.info(f"AI tools configured: {req.ai_tools}")
+    return StatusResponse(status="ok")
+
+
+@app.post("/context/user_name", response_model=StatusResponse)
+async def set_user_name(req: UserNameRequest):
+    """Set the preferred name included in subsequent tutor prompts."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    tutor.set_user_name(req.user_name)
     return StatusResponse(status="ok")
 
 

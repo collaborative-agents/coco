@@ -24,6 +24,11 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "pillow>=10.0.0",
     "numpy>=1.24.0",
+    # Fully local, streaming wake-word inference for the desktop app.
+    "sherpa-onnx==1.13.6",
+    # sherpa-onnx 1.13.6 declares this runtime companion in wheel metadata,
+    # but keeping it explicit prevents installers from omitting its dylibs.
+    "sherpa-onnx-core==1.13.6",
     "pynput>=1.8.1; sys_platform != 'linux'",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
     "redis[asyncio]>=5.0.0",

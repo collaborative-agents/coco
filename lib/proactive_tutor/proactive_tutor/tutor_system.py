@@ -4,7 +4,9 @@ import re
 import time
 from collections.abc import Callable
 from datetime import datetime
+from html import escape
 from pathlib import Path
+from typing import Any
 
 from external_api.llm import prompt_to_text_with_metrics
 from external_api.types import LLMCallMetrics
@@ -13,6 +15,7 @@ from proactive_tutor.ai_tool_capabilities import (
     format_tool_names,
     get_capabilities_for_tools,
 )
+from proactive_tutor.audio_input import validate_wav_base64
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 
@@ -86,6 +89,7 @@ class TutorSystem:
         )
 
         self.problem_statement: str = ""
+        self.user_name: str = (os.environ.get("COCO_USER_NAME") or "").strip()
         # Long-term personalized context for worker/everyday scenarios, rendered as
         # the <memory> block (replaces <problem_statement> for those scenarios).
         # User-editable and persisted to disk so it carries across sessions and
@@ -156,14 +160,17 @@ class TutorSystem:
         tutor_output: str,
         image_paths: list[str] | None,
         llm_metrics: dict | None = None,
+        *,
+        session_id: str | None = None,
+        event_ts: float | None = None,
     ) -> None:
         """Record the tutor LLM call (input + generated guidance) for training."""
         if self._recorder is None:
             return
         try:
             self._recorder.log_tutor(
-                ts=time.time(),
-                session_id=None,  # the tutor process doesn't track the Mongo session id
+                ts=event_ts if event_ts is not None else time.time(),
+                session_id=session_id,
                 trigger=trigger,
                 scenario=self._scenario,
                 model=getattr(self.tutor_agent, "model", ""),
@@ -261,6 +268,11 @@ class TutorSystem:
         self._ai_tools = list(tool_ids)
         self._ai_tools_capability_text = get_capabilities_for_tools(tool_ids)
         logger.info(f"[AI TOOLS] Configured: {tool_ids}")
+
+    def set_user_name(self, user_name: str) -> None:
+        """Configure the preferred name exposed to the tutor prompt."""
+        self.user_name = (user_name or "").strip()
+        logger.info("[USER NAME] Configured for tutor context")
 
     def set_scenario(self, scenario: str) -> None:
         """Switch to a different scenario, reloading prompts for the current model."""
@@ -521,20 +533,30 @@ class TutorSystem:
             if self.conversation_history
             else "(no conversation history yet)"
         )
-        # Student-tutoring scenarios carry a real problem the student is solving;
-        # the worker/everyday product scenarios instead carry long-term personalized
-        # memory (empty until a personalization/self-evolvement layer fills it).
+        # AI Upskilling must retain the session's problem statement just like
+        # the monorepo implementation; otherwise 4D coaching is detached from
+        # the task that caused the session. Personalized memory is additive,
+        # not a replacement for that current-task anchor.
         if self._scenario in ("student_learning", "cs224n"):
-            ctx_block = (
+            context_blocks = [
                 f"<problem_statement>\n{self.problem_statement}\n</problem_statement>"
-            )
+            ]
+        elif self._scenario == "ai_upskilling":
+            memory = getattr(self, "memory", "") or "(no memory yet)"
+            context_blocks = [
+                f"<problem_statement>\n{self.problem_statement}\n</problem_statement>",
+                f"<memory>\n{memory}\n</memory>",
+            ]
         else:
             memory = getattr(self, "memory", "") or "(no memory yet)"
-            ctx_block = f"<memory>\n{memory}\n</memory>"
+            context_blocks = [f"<memory>\n{memory}\n</memory>"]
         parts = [
-            ctx_block,
+            *context_blocks,
             f"<conversation_history>\n{conv_block}\n</conversation_history>",
         ]
+        user_name_block = self._user_name_context_block()
+        if user_name_block:
+            parts.insert(0, user_name_block)
         ai_tools_block = self._ai_tools_context_block()
         if ai_tools_block:
             parts.append(ai_tools_block)
@@ -544,27 +566,35 @@ class TutorSystem:
         return "\n\n".join(parts) + "\n"
 
     def _everyday_chat_messages(
-        self, current_message: dict[str, str] | None = None
-    ) -> list[dict[str, str]]:
+        self, current_message: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         """Build normal chat messages with memory as separate system context."""
         memory = self.memory.strip() or "(no saved user memory)"
         tools = (
             self._ai_tools_context_block()
             or "<ai_tools_context>(empty)</ai_tools_context>"
         )
+        user_name_block = self._user_name_context_block()
+        profile_context = (f"{user_name_block}\n\n" if user_name_block else "") + (
+            "User memory follows. Use it only when relevant and do not "
+            f"mention this context explicitly.\n\n{memory}\n\n{tools}"
+        )
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "User memory follows. Use it only when relevant and do not "
-                    f"mention this context explicitly.\n\n{memory}\n\n{tools}"
-                ),
+                "content": profile_context,
             },
             *[dict(message) for message in self._chat_messages],
         ]
         if current_message is not None:
             messages.append(current_message)
         return messages
+
+    def _user_name_context_block(self) -> str:
+        """Build the prompt block containing the user's preferred name."""
+        if not self.user_name:
+            return ""
+        return f"<user_name>\n{escape(self.user_name)}\n</user_name>"
 
     def _handle_everyday_user_prompt(
         self,
@@ -794,6 +824,56 @@ class TutorSystem:
         # User-prompt events don't have a structured trigger_type; treat as
         # a general coaching moment and update state if a competency was targeted.
         self._update_curriculum_state("teaching_moment", weak_competency)
+        return guidance, metrics
+
+    def handle_audio_prompt_with_metrics(
+        self,
+        audio_data: str,
+        on_event: Callable[[dict], None] | None = None,
+        session_id: str | None = None,
+    ) -> tuple[str, LLMCallMetrics]:
+        """Process a WAV voice message with the current tutor agent."""
+        event_ts = time.time()
+        logger.info("[AUDIO_PROMPT] Handling voice message")
+        validate_wav_base64(audio_data)
+        audio_message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": audio_data, "format": "wav"},
+                }
+            ],
+        }
+        messages = self._everyday_chat_messages(audio_message)
+        guidance, metrics = self.tutor_agent.chat_with_metrics(
+            messages,
+            on_event=on_event,
+        )
+
+        # Raw audio is intentionally not retained. Keep a compact turn marker so
+        # the answer remains part of the same typed/voice conversation.
+        voice_marker = "[Voice message]"
+        self._chat_messages.extend(
+            [
+                {"role": "user", "content": voice_marker},
+                {"role": "assistant", "content": guidance},
+            ]
+        )
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversation_history.extend(
+            [f"[{ts}] [User]: {voice_marker}", f"[{ts}] [Tutor]: {guidance}"]
+        )
+        self._log_tutor_call(
+            "audio_prompt",
+            voice_marker,
+            guidance,
+            None,
+            llm_metrics=metrics,
+            session_id=session_id,
+            event_ts=event_ts,
+        )
+        logger.info(f"[TUTOR] {guidance}")
         return guidance, metrics
 
     def handle_pause(

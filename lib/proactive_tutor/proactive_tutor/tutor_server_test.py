@@ -73,3 +73,19 @@ def test_model_switch_updates_session_and_stateless_suggestions(monkeypatch) -> 
 
     assert selected == ["new-model"]
     assert tutor_server.configured_model_name == "new-model"
+
+
+def test_user_name_endpoint_updates_tutor_context(monkeypatch) -> None:
+    selected: list[str] = []
+
+    class FakeTutor:
+        def set_user_name(self, user_name: str) -> None:
+            selected.append(user_name)
+
+    monkeypatch.setattr(tutor_server, "tutor", FakeTutor())
+
+    asyncio.run(
+        tutor_server.set_user_name(tutor_server.UserNameRequest(user_name="Ada"))
+    )
+
+    assert selected == ["Ada"]

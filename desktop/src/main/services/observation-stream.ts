@@ -29,6 +29,8 @@ export interface ObservationEvent {
   image_paths?: string[];
   /** "yes"/"no" — whether the user is applying AI output (discernment opportunities). */
   applying_ai_output?: string;
+  /** Marks an interruption explicitly approved by the sensing-side Judge. */
+  intervention_source?: 'judge';
   llm_metrics?: LLMCallMetrics;
 }
 

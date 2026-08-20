@@ -27,6 +27,7 @@ import {
   dialog,
   screen,
   powerMonitor,
+  systemPreferences,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
@@ -34,6 +35,17 @@ import axios from 'axios';
 import { resolveHtmlPath } from './util';
 import { serviceManager } from './services/manager';
 import { configureServiceModelArguments } from './services/model-arguments';
+import {
+  retryOperation,
+  RetryCancelledError,
+} from './services/retry-operation';
+import {
+  shouldStartSessionFromUserMessage,
+} from './services/session-start-policy';
+import {
+  shouldOfferInstantSuggestion,
+  shouldSurfaceObservation,
+} from './services/intervention-policy';
 import {
   startObservationStream,
   stopObservationStream,
@@ -50,6 +62,10 @@ import {
   readAuthSession,
   saveAuthSession,
 } from './auth-session-store';
+import {
+  WakeWordService,
+  type WakeWordStatusEvent,
+} from './services/wake-word-service';
 import {
   appendActivity,
   readActivity,
@@ -169,9 +185,13 @@ class AppUpdater {
 //                     created on demand, hidden (not destroyed) on close so the
 //                     conversation survives a reopen. Talks only to the local
 //                     tutor/sensing servers — no external backend or WebSocket.
+// imagePreviewWindow: full-display preview for pending and sent chat images.
 // sessionSetupWindow: small floating window for proactive session config
 let avatarWindow: BrowserWindow | null = null;
 let chatWindow: BrowserWindow | null = null;
+let imagePreviewWindow: BrowserWindow | null = null;
+let imagePreviewDataUrl: string | null = null;
+let wakeWordCaptureWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
 let proactiveSuggestionOpen = false;
@@ -184,7 +204,77 @@ let tray: Tray | null = null;
 let hideAvatarMode = false;
 let avatarRendererReady = false;
 let pendingOpenHistory = false;
+let cocoSleeping = false;
 const observationSleepGuard = new ObservationSleepGuard();
+let wakeWordService: WakeWordService | null = null;
+let wakeWordEnabled = false;
+let wakeWordStatus: WakeWordStatusEvent = { status: 'disabled' };
+let systemSuspended = false;
+let wakeWordCapturePaused = false;
+let wakeWordCapturePauseTimer: ReturnType<typeof setTimeout> | null = null;
+let wakeWordCaptureState = 'stopped';
+let wakeWordDetectionSequence = 0;
+let pendingWakeWordDetection: {
+  id: number;
+  keyword: string;
+  attempts: number;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+} | null = null;
+
+const WAKE_WORDS = ['COCO', 'HI COCO', 'HEY COCO'] as const;
+const WAKE_WORD_MODEL =
+  'sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01';
+
+const isCocoSleeping = () => cocoSleeping;
+
+const wakeWordSettingsPath = () =>
+  path.join(app.getPath('userData'), 'wake-word.json');
+
+const readWakeWordEnabled = (): boolean => {
+  const settingsPath = wakeWordSettingsPath();
+  try {
+    const enabled = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+      ?.enabled === true;
+    log.info(`[Wake word] Loaded enabled=${enabled} from ${settingsPath}`);
+    return enabled;
+  } catch (error) {
+    log.info(
+      `[Wake word] No saved setting at ${settingsPath}; defaulting disabled (${(error as Error).message})`,
+    );
+    return false;
+  }
+};
+
+const saveWakeWordEnabled = (enabled: boolean): void => {
+  fs.writeFileSync(
+    wakeWordSettingsPath(),
+    `${JSON.stringify({ enabled }, null, 2)}\n`,
+    'utf8',
+  );
+};
+
+const publishWakeWordStatus = (status: WakeWordStatusEvent): void => {
+  wakeWordStatus = status;
+  chatWindow?.webContents.send('wake-word-status', status);
+  if (status.detail) log.warn(`[Wake word] ${status.status}: ${status.detail}`);
+  else log.info(`[Wake word] ${status.status}`);
+};
+
+const setWakeWordCapturePaused = (paused: boolean): void => {
+  wakeWordCapturePaused = paused;
+  if (wakeWordCapturePauseTimer) clearTimeout(wakeWordCapturePauseTimer);
+  wakeWordCapturePauseTimer = null;
+  wakeWordCaptureWindow?.webContents.send('wake-word-capture-paused-changed', {
+    paused,
+  });
+  if (paused) {
+    // Voice recording is capped at 30 seconds. Never leave activation paused
+    // indefinitely if the chat renderer fails during the handoff.
+    wakeWordCapturePauseTimer = setTimeout(() => {
+      setWakeWordCapturePaused(false);
+    }, 45_000);
+  }
+};
 
 // Hot-key screen captures (Cmd/Ctrl+Shift+Space) waiting to be shown as preview
 // thumbnails in the chat input bar. When the hot key opens a fresh chat window,
@@ -256,7 +346,10 @@ let currentSessionId: string | null = null;
 let pendingTaskLabel: string | null = null;
 let gatewayClient: CocoGatewayClient | null = null;
 let currentTutorModelId: string | null = null;
-// Invite timing is owned by the sensing-side judge; no renderer-side cooldown.
+// Preserve the original Upskilling session invitation cadence even though the
+// sensing-side Judge owns the decision itself.
+const TASK_SUGGESTION_COOLDOWN_MS = 5 * 60_000;
+let lastTaskSuggestionMs = 0;
 
 const requestedPort = (value: string | undefined, fallback: number): number => {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -358,7 +451,11 @@ const createAuthWindow = () => {
     frame: false,
     alwaysOnTop: true,
     resizable: false,
-    skipTaskbar: true,
+    // On macOS skipTaskbar changes the activation policy for the entire app,
+    // which makes Coco disappear from the Dock even while it is still running.
+    // macOS already groups every window under a single Dock icon, so only use
+    // this option on platforms with per-window taskbar entries.
+    skipTaskbar: process.platform !== 'darwin',
     webPreferences: { preload: preloadPath() },
   });
   authWindow.loadURL(`${resolveHtmlPath('index.html')}?view=auth`);
@@ -396,7 +493,7 @@ const createOnboardingWindow = (modelsOnly = false) => {
     frame: false,
     alwaysOnTop: true,
     resizable: false,
-    skipTaskbar: true,
+    skipTaskbar: process.platform !== 'darwin',
     webPreferences: { preload: preloadPath() },
   });
 
@@ -441,9 +538,14 @@ const createAvatarWindow = () => {
     frame: false,
     alwaysOnTop: true,
     hasShadow: false,
-    skipTaskbar: true,
+    skipTaskbar: process.platform !== 'darwin',
     webPreferences: { preload: preloadPath() },
   });
+  if (process.platform === 'darwin') {
+    // The avatar is a companion surface, not a second Coco document. Keep it
+    // out of the Dock's window list while the main chat remains listed there.
+    avatarWindow.excludedFromShownWindowsMenu = true;
+  }
 
   avatarWindow.loadURL(resolveHtmlPath('index.html'));
 
@@ -496,9 +598,9 @@ const createChatWindow = () => {
     frame: false,
     transparent: true,
     resizable: false,
-    skipTaskbar: true,
+    skipTaskbar: process.platform !== 'darwin',
     alwaysOnTop: true,
-    webPreferences: { preload: preloadPath() },
+    webPreferences: { preload: preloadPath(), backgroundThrottling: false },
   });
 
   chatWindow.loadURL(`${resolveHtmlPath('index.html')}?view=session`);
@@ -546,9 +648,8 @@ const createChatWindow = () => {
     reportChatContentZoom();
   });
 
-  // Closing hides rather than destroys so the in-memory conversation survives a
-  // reopen; the avatar always comes back to the foreground. On a real app quit
-  // (isQuitting) we let the window close so shutdown isn't blocked.
+  // Closing hides rather than destroys so the in-memory conversation survives
+  // a reopen. On a real app quit, let it close so shutdown isn't blocked.
   chatWindow.on('close', (event) => {
     if (isQuitting) return;
     event.preventDefault();
@@ -598,6 +699,180 @@ const showChatPanel = () => {
   }
 };
 
+const openImagePreviewWindow = (
+  sourceWindow: BrowserWindow | null,
+  imageDataUrl: string,
+) => {
+  imagePreviewDataUrl = imageDataUrl;
+  const display = sourceWindow
+    ? screen.getDisplayMatching(sourceWindow.getBounds())
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+
+  if (imagePreviewWindow && !imagePreviewWindow.isDestroyed()) {
+    imagePreviewWindow.setBounds(display.bounds);
+    if (!imagePreviewWindow.webContents.isLoadingMainFrame()) {
+      imagePreviewWindow.webContents.send('image-preview', { imageDataUrl });
+      imagePreviewWindow.show();
+      imagePreviewWindow.focus();
+    }
+    return;
+  }
+
+  imagePreviewWindow = new BrowserWindow({
+    show: false,
+    ...display.bounds,
+    frame: false,
+    transparent: false,
+    backgroundColor: '#111827',
+    alwaysOnTop: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: process.platform !== 'darwin',
+    hasShadow: false,
+    webPreferences: { preload: preloadPath() },
+  });
+  if (process.platform === 'darwin') {
+    imagePreviewWindow.excludedFromShownWindowsMenu = true;
+  }
+  imagePreviewWindow.setAlwaysOnTop(true, 'floating');
+  imagePreviewWindow.loadURL(
+    `${resolveHtmlPath('index.html')}?view=image-preview`,
+  );
+  imagePreviewWindow.on('closed', () => {
+    imagePreviewWindow = null;
+    imagePreviewDataUrl = null;
+  });
+};
+
+const deliverPendingWakeWordDetection = (): void => {
+  const pending = pendingWakeWordDetection;
+  if (!pending) return;
+  if (pending.attempts >= 30) {
+    log.warn(
+      `[Wake word] Chat did not acknowledge detection ${pending.id}; resuming listening`,
+    );
+    pendingWakeWordDetection = null;
+    setWakeWordCapturePaused(false);
+    return;
+  }
+  pending.attempts += 1;
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.webContents.send('wake-word-detected', {
+      id: pending.id,
+      keyword: pending.keyword,
+    });
+  }
+  pending.retryTimer = setTimeout(deliverPendingWakeWordDetection, 500);
+};
+
+const queueWakeWordDetection = (keyword: string): void => {
+  if (pendingWakeWordDetection?.retryTimer) {
+    clearTimeout(pendingWakeWordDetection.retryTimer);
+  }
+  wakeWordDetectionSequence += 1;
+  pendingWakeWordDetection = {
+    id: wakeWordDetectionSequence,
+    keyword,
+    attempts: 0,
+    retryTimer: null,
+  };
+  setWakeWordCapturePaused(true);
+  showChatPanel();
+  deliverPendingWakeWordDetection();
+};
+
+const createWakeWordCaptureWindow = (): void => {
+  if (wakeWordCaptureWindow && !wakeWordCaptureWindow.isDestroyed()) return;
+  const { x, y } = screen.getPrimaryDisplay().workArea;
+  wakeWordCaptureWindow = new BrowserWindow({
+    show: false,
+    x,
+    y,
+    width: 1,
+    height: 1,
+    opacity: 0,
+    transparent: true,
+    frame: false,
+    focusable: false,
+    skipTaskbar: process.platform !== 'darwin',
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: preloadPath(),
+      backgroundThrottling: false,
+    },
+  });
+  if (process.platform === 'darwin') {
+    wakeWordCaptureWindow.excludedFromShownWindowsMenu = true;
+  }
+  wakeWordCaptureWindow.setIgnoreMouseEvents(true);
+  wakeWordCaptureWindow.setAlwaysOnTop(true, 'floating');
+  wakeWordCaptureWindow.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+    // Electron otherwise transforms the whole macOS process into an
+    // accessory/UIElement app here. Coco keeps running, but the Dock indicator
+    // disappears and macOS makes it look as though the app has quit.
+    skipTransformProcessType: true,
+  });
+  wakeWordCaptureWindow.loadURL(
+    `${resolveHtmlPath('index.html')}?view=wake-word-capture`,
+  );
+  wakeWordCaptureWindow.webContents.on(
+    'render-process-gone',
+    (_event, details) => {
+      log.error(
+        `[Wake word] Capture renderer exited: ${details.reason} (${details.exitCode})`,
+      );
+    },
+  );
+  wakeWordCaptureWindow.on('closed', () => {
+    wakeWordCaptureWindow = null;
+  });
+};
+
+const syncWakeWordService = (): void => {
+  if (!wakeWordService) return;
+  if (!wakeWordEnabled) wakeWordService.stop('disabled');
+  else if (isCocoSleeping() || systemSuspended) {
+    wakeWordService.stop('sleeping');
+  } else wakeWordService.start();
+};
+
+const initializeWakeWordService = (): void => {
+  if (wakeWordService) return;
+  wakeWordEnabled = readWakeWordEnabled();
+  const modelDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'wake-word', WAKE_WORD_MODEL)
+    : path.resolve(process.cwd(), 'assets', 'wake-word', WAKE_WORD_MODEL);
+  const executable = app.isPackaged
+    ? path.join(
+        process.resourcesPath,
+        'service-dist',
+        'coco-services',
+        process.platform === 'win32'
+          ? 'wake-word-worker.exe'
+          : 'wake-word-worker',
+      )
+    : undefined;
+  wakeWordService = new WakeWordService({
+    projectRoot: app.isPackaged
+      ? process.resourcesPath
+      : path.resolve(process.cwd(), '..'),
+    modelDir,
+    stateDir: path.join(app.getPath('userData'), 'wake-word'),
+    logPath: path.join(app.getPath('userData'), 'logs', 'wake-word.log'),
+    packagedExecutable: executable,
+    onStatus: publishWakeWordStatus,
+    onDetected: (keyword) => {
+      if (!wakeWordEnabled || isCocoSleeping() || systemSuspended) return;
+      log.info(`[Wake word] Detected ${keyword}`);
+      queueWakeWordDetection(keyword);
+    },
+  });
+  syncWakeWordService();
+};
+
 const openChatSettings = () => {
   createChatWindow();
   if (!chatWindow || chatWindow.isDestroyed()) return;
@@ -614,13 +889,37 @@ const openChatSettings = () => {
   }
 };
 
+// The compact menu lives in the avatar renderer, while Settings lives in the
+// chat renderer. Bridge the action through main so the chat becomes visible
+// before its renderer is asked to reveal Settings.
+ipcMain.removeAllListeners('open-chat-settings');
+ipcMain.on('open-chat-settings', () => {
+  openChatSettings();
+});
+
 async function openCoco(): Promise<void> {
   if (isSessionActive && currentSessionId) {
     openChatForSession(currentSessionId, pendingTaskLabel || '');
     return;
   }
+  if (currentSessionId) {
+    openChatForSession(
+      currentSessionId,
+      pendingTaskLabel || 'General help session',
+    );
+    log.info(`[Chat] Reopened existing draft: ${currentSessionId}`);
+    return;
+  }
+  // Merely opening the chat feed must not count as a learning session. Give
+  // the renderer a draft id so it can render and retain the empty chat; the id
+  // is activated and persisted only after the first non-empty user message.
   const problemStatement = pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, 120, 'user_message');
+  const draftSessionId = randomUUID();
+  currentSessionId = draftSessionId;
+  const modelConfig = readModelConfiguration();
+  currentTutorModelId = modelConfig ? defaultTutor(modelConfig).id : null;
+  openChatForSession(draftSessionId, problemStatement);
+  log.info(`[Chat] Draft opened without starting a session: ${draftSessionId}`);
 }
 
 function setupPending(): boolean {
@@ -671,12 +970,15 @@ function createTray(): void {
     tray = new Tray(image);
     tray.on('click', handleTrayClick);
   }
-  tray.setToolTip('Coco');
   const pendingSetup = setupPending();
   const authRequired = !isAuthenticated;
   let setupLabel = 'Continue Setup';
   if (authRequired) setupLabel = 'Sign in';
   else if (isOnboardingComplete()) setupLabel = 'Open Model Setup';
+  const sleeping = isCocoSleeping();
+  tray.setToolTip(
+    pendingSetup ? 'Coco' : `Coco — ${sleeping ? 'Sleeping' : 'Awake'}`,
+  );
   tray.setContextMenu(
     Menu.buildFromTemplate(
       pendingSetup
@@ -689,6 +991,19 @@ function createTray(): void {
             { label: 'Quit', click: () => app.quit() },
           ]
         : [
+            {
+              label: sleeping ? 'Status: Sleeping' : 'Status: Awake',
+              enabled: false,
+            },
+            {
+              label: sleeping ? 'Wake Coco' : 'Put Coco to Sleep',
+              click: () => {
+                setCocoSleepMode(!sleeping).catch((err) =>
+                  log.warn(`[Tray] Could not change sleep mode: ${err}`),
+                );
+              },
+            },
+            { type: 'separator' },
             {
               label: 'Open Chat',
               click: openPrimaryTrayAction,
@@ -741,6 +1056,8 @@ interface ChatSeed {
   rawObservation: string;
   /** Attach context to the user's next turn instead of sending immediately. */
   deferUntilUserMessage?: boolean;
+  /** Pre-fill Coco's composer without sending the message. */
+  initialInput?: string;
 }
 
 // Open the chat panel for a session, pushing the session context (and an
@@ -770,6 +1087,24 @@ const openChatForSession = (
   }
 };
 
+// Open a conversation surface without starting or recording a session. Any
+// suggestion context is held until the user submits their own non-empty turn;
+// that first turn then starts a regular `user_message` session.
+const openDraftChat = (problemStatement: string, seed?: ChatSeed): string => {
+  if (!isSessionActive && currentSessionId) {
+    openChatForSession(currentSessionId, problemStatement, seed);
+    log.info(`[Chat] Reused existing draft: ${currentSessionId}`);
+    return currentSessionId;
+  }
+  const draftSessionId = randomUUID();
+  currentSessionId = draftSessionId;
+  const modelConfig = readModelConfiguration();
+  currentTutorModelId = modelConfig ? defaultTutor(modelConfig).id : null;
+  openChatForSession(draftSessionId, problemStatement, seed);
+  log.info(`[Chat] Draft opened without starting a session: ${draftSessionId}`);
+  return draftSessionId;
+};
+
 // ── Session-setup floating window ────────────────────────────────────────────
 // Small always-on-top panel shown after the user accepts a proactive "start
 // a session?" prompt.  Lets them pick a model and struggle-check interval.
@@ -793,9 +1128,12 @@ const showSessionSetupWindow = async (taskLabel: string | null) => {
     frame: false,
     alwaysOnTop: true,
     resizable: false,
-    skipTaskbar: true,
+    skipTaskbar: process.platform !== 'darwin',
     webPreferences: { preload: preloadPath() },
   });
+  if (process.platform === 'darwin') {
+    sessionSetupWindow.excludedFromShownWindowsMenu = true;
+  }
 
   const url = `${resolveHtmlPath('index.html')}?view=session-setup`;
   sessionSetupWindow.loadURL(url);
@@ -834,9 +1172,12 @@ const showSessionRecapWindow = () => {
     frame: false,
     alwaysOnTop: true,
     resizable: false,
-    skipTaskbar: true,
+    skipTaskbar: process.platform !== 'darwin',
     webPreferences: { preload: preloadPath() },
   });
+  if (process.platform === 'darwin') {
+    sessionRecapWindow.excludedFromShownWindowsMenu = true;
+  }
 
   sessionRecapWindow.loadURL(
     `${resolveHtmlPath('index.html')}?view=session-recap`,
@@ -875,8 +1216,16 @@ const showSessionRecapWindow = () => {
 const NOTIF_WIDTH = 360;
 // Keep the card compact; longer Markdown guidance scrolls inside the body.
 const NOTIF_HEIGHT = 220;
+// Two-page suggestions need enough room for the grounded 4D explanation and
+// the prompt/actions on page 2 without requiring manual window resizing.
+const NOTIF_SUGGESTION_WIDTH = 480;
+const NOTIF_SUGGESTION_HEIGHT = 420;
 const NOTIF_EXPANDED_WIDTH = 560;
 const NOTIF_EXPANDED_HEIGHT = 520;
+let notificationCollapsedSize = {
+  width: NOTIF_WIDTH,
+  height: NOTIF_HEIGHT,
+};
 
 type VizState = 'none' | 'success' | 'error';
 type NotifType =
@@ -936,8 +1285,15 @@ const showNotification = (payload: {
   notificationHovered = false;
   notificationWindow?.destroy();
 
+  const isInteractiveSuggestion =
+    payload.notifType === 'proactive-suggestion' && payload.suggestion != null;
+  notificationCollapsedSize = isInteractiveSuggestion
+    ? { width: NOTIF_SUGGESTION_WIDTH, height: NOTIF_SUGGESTION_HEIGHT }
+    : { width: NOTIF_WIDTH, height: NOTIF_HEIGHT };
+  const { width: initialWidth, height: initialHeight } =
+    notificationCollapsedSize;
   const { workArea } = screen.getPrimaryDisplay();
-  const x = workArea.x + workArea.width - NOTIF_WIDTH - 16;
+  const x = workArea.x + workArea.width - initialWidth - 16;
   const y = workArea.y + 16;
   const adjustable = hideAvatarMode;
 
@@ -945,8 +1301,8 @@ const showNotification = (payload: {
     show: false,
     x,
     y,
-    width: NOTIF_WIDTH,
-    height: NOTIF_HEIGHT,
+    width: initialWidth,
+    height: initialHeight,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -955,9 +1311,12 @@ const showNotification = (payload: {
     maximizable: false,
     minWidth: adjustable ? 320 : undefined,
     minHeight: adjustable ? 180 : undefined,
-    skipTaskbar: true,
+    skipTaskbar: process.platform !== 'darwin',
     webPreferences: { preload: preloadPath() },
   });
+  if (process.platform === 'darwin') {
+    nextNotificationWindow.excludedFromShownWindowsMenu = true;
+  }
   notificationWindow = nextNotificationWindow;
 
   // AI-upskilling suggestions open directly on the interactive framework
@@ -1060,6 +1419,11 @@ ipcMain.handle(
     _event,
     { forceModelTest = false }: { forceModelTest?: boolean } = {},
   ) => {
+    // Sleep mode intentionally stops the sensing and tutor services. Do not
+    // report their expected absence as a health failure.
+    if (isCocoSleeping()) {
+      return { checkedAt: Date.now(), sleeping: true };
+    }
     type ModelAssessment = {
       status: ModelHealthAssessment['status'];
       detail: string;
@@ -1363,7 +1727,7 @@ async function restoreSessionAfterModelRestart(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
-  const { aiTools, scenario, customObserverPrompt } = readProfile();
+  const { aiTools, scenario, customObserverPrompt, userName } = readProfile();
   await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
   await axios.post(
     `${tutor}/context/problem_statement`,
@@ -1373,6 +1737,11 @@ async function restoreSessionAfterModelRestart(): Promise<void> {
   await axios.post(
     `${tutor}/context/ai_tools`,
     { ai_tools: aiTools },
+    { timeout: 8000 },
+  );
+  await axios.post(
+    `${tutor}/context/user_name`,
+    { user_name: userName },
     { timeout: 8000 },
   );
   const memory = readLocalMemory();
@@ -1588,23 +1957,17 @@ ipcMain.on(
       return;
     }
 
-    // Pre-session: create a session, then inject the observation once it loads.
+    // Pre-session: opening help is not acceptance of a coaching session. Keep
+    // the observation as context for the user's first actual message.
     const problemStatement =
       payload?.phrase?.trim() ||
       payload?.label?.trim() ||
       pendingTaskLabel ||
       'General help session';
-    const sessionId = await createProactiveTutorSession(
-      problemStatement,
-      120,
-      'proactive_suggestion',
-      payload,
-    );
-    if (!sessionId) {
-      log.warn(
-        '[Chat] Could not start a local tutor session for help-me-with-this.',
-      );
-    }
+    openDraftChat(problemStatement, {
+      ...payload,
+      deferUntilUserMessage: true,
+    });
   },
 );
 
@@ -1655,12 +2018,10 @@ ipcMain.on(
     if (isSessionActive && currentSessionId) {
       openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
     } else {
-      await createProactiveTutorSession(
-        rawObservation || 'General help session',
-        120,
-        'proactive_suggestion',
-        seed,
-      );
+      openDraftChat(rawObservation || 'General help session', {
+        ...seed,
+        deferUntilUserMessage: true,
+      });
     }
   },
 );
@@ -1682,6 +2043,198 @@ ipcMain.on('training-feedback', async (_event, payload) => {
     log.warn(
       `[Feedback] failed to post: ${(err as { message?: string })?.message}`,
     );
+  }
+});
+
+ipcMain.removeHandler('get-coco-sleep-mode');
+ipcMain.handle('get-coco-sleep-mode', () => ({
+  sleeping: isCocoSleeping(),
+}));
+
+async function setCocoSleepMode(sleeping: boolean) {
+  if (cocoSleeping === sleeping) {
+    return { success: true, sleeping };
+  }
+
+  // Make the requested state authoritative before service shutdown so health
+  // checks and wake-word callbacks cannot mistake an intentional pause for a
+  // failure or accept another interaction while shutdown is in progress.
+  cocoSleeping = sleeping;
+  syncWakeWordService();
+
+  if (sleeping) {
+    if (isSessionActive) endCurrentSession();
+    await Promise.all([
+      serviceManager.stopService('sensing-server'),
+      serviceManager.stopService('tutor-server'),
+    ]);
+  } else if (observerStarted) {
+    await serviceManager.startAll();
+  }
+
+  const state = { sleeping };
+  avatarWindow?.webContents.send('coco-sleep-mode-changed', state);
+  chatWindow?.webContents.send('coco-sleep-mode-changed', state);
+  wakeWordCaptureWindow?.webContents.send('coco-sleep-mode-changed', state);
+  if (tray && !tray.isDestroyed()) createTray();
+  return { success: true, sleeping };
+}
+
+ipcMain.removeHandler('set-coco-sleep-mode');
+ipcMain.handle(
+  'set-coco-sleep-mode',
+  async (_event, { sleeping }: { sleeping?: boolean } = {}) => {
+    if (typeof sleeping !== 'boolean') {
+      return { success: false, error: 'Invalid sleep mode.' };
+    }
+    try {
+      return await setCocoSleepMode(sleeping);
+    } catch (error) {
+      log.error('[Sleep] Could not change Coco sleep mode:', error);
+      return {
+        success: false,
+        sleeping: isCocoSleeping(),
+        error: (error as Error).message,
+      };
+    }
+  },
+);
+
+ipcMain.removeHandler('get-wake-word-settings');
+ipcMain.handle('get-wake-word-settings', () => ({
+  enabled: wakeWordEnabled,
+  keywords: [...WAKE_WORDS],
+  capturePaused: wakeWordCapturePaused,
+  ...wakeWordStatus,
+  logPath: path.join(app.getPath('userData'), 'logs', 'wake-word.log'),
+}));
+
+ipcMain.removeHandler('set-wake-word-settings');
+ipcMain.handle(
+  'set-wake-word-settings',
+  async (_event, { enabled }: { enabled?: boolean } = {}) => {
+    if (typeof enabled !== 'boolean') {
+      return { success: false, error: 'Invalid voice activation setting.' };
+    }
+    if (
+      enabled &&
+      process.platform === 'darwin' &&
+      systemPreferences.getMediaAccessStatus('microphone') !== 'granted'
+    ) {
+      const granted = await systemPreferences.askForMediaAccess('microphone');
+      if (!granted) {
+        return {
+          success: false,
+          error:
+            'Microphone access is required. Enable Coco under Privacy & Security → Microphone.',
+        };
+      }
+    }
+    wakeWordEnabled = enabled;
+    if (!enabled) setWakeWordCapturePaused(false);
+    saveWakeWordEnabled(enabled);
+    syncWakeWordService();
+    const settings = {
+      enabled,
+      keywords: [...WAKE_WORDS],
+      capturePaused: wakeWordCapturePaused,
+      ...wakeWordStatus,
+    };
+    chatWindow?.webContents.send('wake-word-settings-changed', settings);
+    wakeWordCaptureWindow?.webContents.send(
+      'wake-word-settings-changed',
+      settings,
+    );
+    return { success: true, ...settings };
+  },
+);
+
+ipcMain.removeHandler('set-wake-word-capture-paused');
+ipcMain.handle(
+  'set-wake-word-capture-paused',
+  (_event, { paused }: { paused?: boolean } = {}) => {
+    if (typeof paused !== 'boolean') return { success: false };
+    setWakeWordCapturePaused(paused);
+    return { success: true, paused };
+  },
+);
+
+ipcMain.removeAllListeners('wake-word-capture-renderer-ready');
+ipcMain.on('wake-word-capture-renderer-ready', (event) => {
+  if (
+    !wakeWordCaptureWindow ||
+    event.sender !== wakeWordCaptureWindow.webContents
+  ) {
+    return;
+  }
+  // getUserMedia can remain pending forever in a genuinely hidden renderer on
+  // macOS. Keep this 1 px, fully transparent window technically visible.
+  wakeWordCaptureWindow.showInactive();
+  wakeWordCaptureWindow.webContents.send('wake-word-settings-changed', {
+    enabled: wakeWordEnabled,
+    keywords: [...WAKE_WORDS],
+    capturePaused: wakeWordCapturePaused,
+    ...wakeWordStatus,
+  });
+  setImmediate(() => {
+    wakeWordCaptureWindow?.webContents.send('wake-word-capture-window-ready');
+  });
+  log.info('[Wake word] Microphone capture renderer ready');
+});
+
+ipcMain.removeAllListeners('wake-word-detection-ack');
+ipcMain.on(
+  'wake-word-detection-ack',
+  (event, value: { id?: unknown } | undefined) => {
+    if (!chatWindow || event.sender !== chatWindow.webContents) return;
+    const id = typeof value?.id === 'number' ? value.id : null;
+    if (!pendingWakeWordDetection || pendingWakeWordDetection.id !== id) return;
+    if (pendingWakeWordDetection.retryTimer) {
+      clearTimeout(pendingWakeWordDetection.retryTimer);
+    }
+    log.info(
+      `[Wake word] Chat acknowledged detection ${id} after ${pendingWakeWordDetection.attempts} attempt(s)`,
+    );
+    pendingWakeWordDetection = null;
+  },
+);
+
+ipcMain.removeAllListeners('wake-word-capture-status');
+ipcMain.on('wake-word-capture-status', (event, value: unknown) => {
+  if (
+    !wakeWordCaptureWindow ||
+    event.sender !== wakeWordCaptureWindow.webContents
+  ) {
+    return;
+  }
+  const status = value as { state?: unknown; detail?: unknown } | undefined;
+  const state = typeof status?.state === 'string' ? status.state : 'unknown';
+  if (state === wakeWordCaptureState && !status?.detail) return;
+  wakeWordCaptureState = state;
+  const detail = typeof status?.detail === 'string' ? `: ${status.detail}` : '';
+  log.info(`[Wake word] Microphone capture ${state}${detail}`);
+  chatWindow?.webContents.send('wake-word-capture-status', {
+    state,
+    detail: typeof status?.detail === 'string' ? status.detail : undefined,
+  });
+});
+
+ipcMain.removeAllListeners('wake-word-audio-frame');
+ipcMain.on('wake-word-audio-frame', (event, frame: unknown) => {
+  if (
+    !wakeWordEnabled ||
+    isCocoSleeping() ||
+    systemSuspended ||
+    wakeWordCapturePaused ||
+    !wakeWordCaptureWindow ||
+    event.sender !== wakeWordCaptureWindow.webContents
+  ) {
+    return;
+  }
+  if (frame instanceof Uint8Array) {
+    wakeWordService?.writeAudio(Buffer.from(frame));
+  } else if (frame instanceof ArrayBuffer) {
+    wakeWordService?.writeAudio(Buffer.from(new Uint8Array(frame)));
   }
 });
 
@@ -1724,8 +2277,12 @@ ipcMain.on(
 
     const current = notificationWindow.getBounds();
     const display = screen.getDisplayMatching(current);
-    const targetWidth = expanded ? NOTIF_EXPANDED_WIDTH : NOTIF_WIDTH;
-    const targetHeight = expanded ? NOTIF_EXPANDED_HEIGHT : NOTIF_HEIGHT;
+    const targetWidth = expanded
+      ? NOTIF_EXPANDED_WIDTH
+      : notificationCollapsedSize.width;
+    const targetHeight = expanded
+      ? NOTIF_EXPANDED_HEIGHT
+      : notificationCollapsedSize.height;
     const width = Math.min(targetWidth, display.workArea.width);
     const height = Math.min(targetHeight, display.workArea.height);
 
@@ -2080,9 +2637,9 @@ ipcMain.on(
   },
 );
 
-// Continue a revealed instant suggestion in Coco's own conversation. Include
-// both the ready-made suggestion and the observation that prompted it so the
-// tutor can discuss, refine, or explain the advice without losing context.
+// Open a revealed instant suggestion in Coco's own conversation. Delegation
+// prompts can pre-fill the composer; "Chat about it" attaches the suggestion
+// and its observation as context for the user's next message.
 ipcMain.removeAllListeners('chat-about-suggestion');
 ipcMain.on(
   'chat-about-suggestion',
@@ -2094,6 +2651,7 @@ ipcMain.on(
       rawObservation?: string;
       suggestion?: InstantSuggestion;
       surface?: 'bubble' | 'notification';
+      copyPromptToInput?: boolean;
     },
   ) => {
     if (payload?.surface === 'notification') notificationWindow?.destroy();
@@ -2103,20 +2661,28 @@ ipcMain.on(
     const rawObservation = payload.rawObservation?.trim() || '';
     const suggestionText =
       suggestion.kind === 'delegate' ? suggestion.prompt : suggestion.body;
-    const chatSeed = [
-      'I’d like to chat about this suggestion:',
-      `**${suggestion.title}**`,
-      suggestionText || suggestion.copyText,
-      rawObservation ? `Context that prompted it:\n${rawObservation}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-    const seed = {
-      phrase: suggestion.title,
-      label: payload.status?.replace(/_/g, ' ') || 'suggestion',
-      rawObservation: chatSeed,
-      deferUntilUserMessage: true,
-    };
+    const seed: ChatSeed = payload.copyPromptToInput
+      ? {
+          phrase: suggestion.title,
+          label: payload.status?.replace(/_/g, ' ') || 'suggestion',
+          rawObservation,
+          initialInput: suggestion.copyText || suggestionText || '',
+        }
+      : {
+          phrase: suggestion.title,
+          label: payload.status?.replace(/_/g, ' ') || 'suggestion',
+          rawObservation: [
+            'I’d like to chat about this suggestion:',
+            `**${suggestion.title}**`,
+            suggestionText || suggestion.copyText,
+            rawObservation
+              ? `Context that prompted it:\n${rawObservation}`
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+          deferUntilUserMessage: true,
+        };
 
     if (payload.observationId) {
       recordSupportEngagement(payload.observationId, {
@@ -2145,12 +2711,7 @@ ipcMain.on(
     if (isSessionActive && currentSessionId) {
       openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
     } else {
-      await createProactiveTutorSession(
-        suggestion.title,
-        120,
-        'proactive_suggestion',
-        seed,
-      );
+      openDraftChat(suggestion.title, seed);
     }
   },
 );
@@ -2158,22 +2719,23 @@ ipcMain.on(
 // Create a tutor session entirely against the LOCAL servers (no backend). A
 // "session" here is just a fresh conversation on the tutor server plus a
 // configured struggle-detection window on the sensing server. Shared by the
-// "Yes, start session" invite flow and the pre-session "Help me with this"
-// flow. Returns the new (locally generated) session id, or null on failure.
+// explicit "Yes, start session" flow and user-message session activation.
+// Returns the new (locally generated) session id, or null on failure.
 async function createProactiveTutorSession(
   problemStatement: string,
   struggleSeconds: number,
   startTrigger: SessionStartTrigger,
   seed?: ChatSeed,
+  options: { sessionId?: string; openChat?: boolean } = {},
 ): Promise<string | null> {
   // Read the user's onboarding profile to get their selected AI tools and mode.
-  const { aiTools, scenario, customObserverPrompt } = readProfile();
+  const { aiTools, scenario, customObserverPrompt, userName } = readProfile();
 
   const sensingPort = process.env.SENSING_PORT || '8080';
   const tutorPort = process.env.TUTOR_PORT || '8081';
   const sensing = `http://127.0.0.1:${sensingPort}`;
   const tutor = `http://127.0.0.1:${tutorPort}`;
-  const sessionId = randomUUID();
+  const sessionId = options.sessionId ?? randomUUID();
   const modelConfig = readModelConfiguration();
   const selectedTutor = modelConfig ? defaultTutor(modelConfig) : null;
   currentTutorModelId = selectedTutor?.id ?? null;
@@ -2182,57 +2744,48 @@ async function createProactiveTutorSession(
   // server is still starting up. Configuration below is best-effort.
   currentSessionId = sessionId;
   isSessionActive = true;
-  openChatForSession(sessionId, problemStatement, seed);
+  pendingTaskLabel = problemStatement;
+  if (options.openChat !== false) {
+    openChatForSession(sessionId, problemStatement, seed);
+  }
   log.info(`[ProactiveSession] Local tutor session started: ${sessionId}`);
   const startedAt = new Date();
-  recordSessionStarted(sessionId, currentUserId, startTrigger, startedAt);
-  gatewayClient?.startSession(sessionId, startTrigger, startedAt);
+  recordSessionStarted(
+    sessionId,
+    currentUserId,
+    startTrigger,
+    startedAt,
+    problemStatement,
+  );
+  gatewayClient?.startSession(
+    sessionId,
+    startTrigger,
+    startedAt,
+    problemStatement,
+  );
 
-  // Configure the tutor conversation (the chat only needs the tutor server).
-  try {
-    await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
-    if (selectedTutor) {
-      await axios.post(
-        `${tutor}/config/model`,
-        { model: selectedTutor.model },
-        { timeout: 8000 },
-      );
-    }
-    await axios.post(
-      `${tutor}/config/scenario`,
-      { scenario },
-      { timeout: 8000 },
-    );
-    await axios.post(
-      `${tutor}/context/problem_statement`,
-      { problem_statement: problemStatement },
-      { timeout: 8000 },
-    );
-    await axios.post(
-      `${tutor}/context/ai_tools`,
-      { ai_tools: aiTools },
-      { timeout: 8000 },
-    );
-    // Re-apply the persisted long-term memory so a freshly (re)started tutor
-    // process always has it, independent of its own on-disk load.
-    const savedMemory = readLocalMemory();
-    if (savedMemory) {
-      await axios.post(
-        `${tutor}/context/memory`,
-        { memory: savedMemory },
-        { timeout: 8000 },
-      );
-    }
-  } catch (err) {
-    log.warn(
-      `[ProactiveSession] Tutor context setup failed: ${(err as Error).message}`,
-    );
-  }
+  const sessionStillActive = () =>
+    isSessionActive && currentSessionId === sessionId;
+  const retryLocalPost = async (
+    label: string,
+    url: string,
+    body: unknown,
+    timeout: number,
+  ) =>
+    retryOperation(() => axios.post(url, body, { timeout }), {
+      shouldContinue: sessionStillActive,
+      onRetry: (error, nextDelayMs, failedAttempt) => {
+        log.warn(
+          `[ProactiveSession] ${label} attempt ${failedAttempt} failed; retrying in ${nextDelayMs}ms: ${(error as Error).message}`,
+        );
+      },
+    });
 
-  // Configure the sensing session (struggle-detection window + observer prompt).
-  // This is proactive-only — chat still works if the sensing server is down.
+  // Register sensing first. Its /session handler resets TutorSystem, so doing
+  // this after tutor context setup would erase the current problem statement.
   try {
-    await axios.post(
+    await retryLocalPost(
+      'Sensing session setup',
       `${sensing}/session`,
       {
         node_uuid: sessionId,
@@ -2243,12 +2796,63 @@ async function createProactiveTutorSession(
           custom_observer_prompt: customObserverPrompt,
         }),
       },
-      { timeout: 15000 },
+      15000,
     );
   } catch (err) {
-    log.warn(
-      `[ProactiveSession] Sensing session setup failed (proactive disabled): ${(err as Error).message}`,
+    if (!(err instanceof RetryCancelledError)) {
+      log.warn(
+        `[ProactiveSession] Sensing session setup failed after retries (proactive disabled): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // Configure TutorSystem after sensing registration so the final context
+  // always contains this session's task, tools, scenario, and memory.
+  try {
+    await retryLocalPost('Tutor reset', `${tutor}/context/reset`, {}, 8000);
+    if (selectedTutor) {
+      await retryLocalPost(
+        'Tutor model setup',
+        `${tutor}/config/model`,
+        { model: selectedTutor.model },
+        8000,
+      );
+    }
+    await retryLocalPost(
+      'Tutor scenario setup',
+      `${tutor}/config/scenario`,
+      { scenario },
+      8000,
     );
+    await retryLocalPost(
+      'Tutor problem statement setup',
+      `${tutor}/context/problem_statement`,
+      { problem_statement: problemStatement },
+      8000,
+    );
+    await retryLocalPost(
+      'Tutor AI tools setup',
+      `${tutor}/context/ai_tools`,
+      { ai_tools: aiTools },
+      8000,
+    );
+    // Re-apply the persisted long-term memory so a freshly (re)started tutor
+    // process always has it, independent of its own on-disk load.
+    const savedMemory = readLocalMemory();
+    if (savedMemory) {
+      await retryLocalPost(
+        'Tutor memory setup',
+        `${tutor}/context/memory`,
+        { memory: savedMemory },
+        8000,
+      );
+    }
+  } catch (err) {
+    if (!(err instanceof RetryCancelledError)) {
+      log.warn(
+        `[ProactiveSession] Tutor context setup failed after retries: ${(err as Error).message}`,
+      );
+    }
   }
 
   return sessionId;
@@ -2303,7 +2907,7 @@ ipcMain.handle(
 
     const tutorPort = process.env.TUTOR_PORT || '8081';
     const tutor = `http://127.0.0.1:${tutorPort}`;
-    const { aiTools, scenario } = readProfile();
+    const { aiTools, scenario, userName } = readProfile();
     try {
       await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
       const modelConfig = readModelConfiguration();
@@ -2332,6 +2936,11 @@ ipcMain.handle(
       await axios.post(
         `${tutor}/context/ai_tools`,
         { ai_tools: aiTools },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/user_name`,
+        { user_name: userName },
         { timeout: 8000 },
       );
       const savedMemory = readLocalMemory();
@@ -2487,6 +3096,7 @@ ipcMain.handle(
       isRetry,
       images,
       requestKind,
+      hotkeyImages,
     }: {
       requestId: string;
       userText: string;
@@ -2494,10 +3104,33 @@ ipcMain.handle(
       isRetry?: boolean;
       images?: string[];
       requestKind?: 'chat' | 'practice_suggestions';
+      hotkeyImages?: string[];
     },
   ) => {
     const tutorPort = process.env.TUTOR_PORT || '8081';
     const tutor = `http://127.0.0.1:${tutorPort}`;
+    const sessionStartText = (displayText ?? userText).trim();
+    if (
+      !isSessionActive &&
+      shouldStartSessionFromUserMessage(
+        sessionStartText,
+        requestKind ?? 'chat',
+      )
+    ) {
+      // Reuse the draft id already known by the renderer. Suppressing another
+      // session-init event prevents the first optimistic message from being
+      // cleared while this request is in flight.
+      await createProactiveTutorSession(
+        sessionStartText,
+        120,
+        'user_message',
+        undefined,
+        {
+          sessionId: currentSessionId ?? undefined,
+          openChat: false,
+        },
+      );
+    }
     const gatewaySessionId = currentSessionId;
     if (!isRetry && gatewaySessionId) {
       gatewayClient?.addMessage(
@@ -2509,14 +3142,22 @@ ipcMain.handle(
 
     // Persist any pasted images to temp files for the tutor's vision call.
     const imagePaths: string[] = [];
+    const hotkeyImageSet = new Set(hotkeyImages ?? []);
+    let hotkeyImageCount = 0;
     for (const dataUrl of images ?? []) {
       const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/.exec(dataUrl);
       if (!m) continue;
       const ext = m[1].split('/')[1]?.split('+')[0] || 'png';
-      const file = path.join(os.tmpdir(), `coco-paste-${randomUUID()}.${ext}`);
+      const isHotkeyCapture = hotkeyImageSet.has(dataUrl);
+      const sourceLabel = isHotkeyCapture ? 'hotkey' : 'paste';
+      const file = path.join(
+        os.tmpdir(),
+        `coco-${sourceLabel}-${randomUUID()}.${ext}`,
+      );
       try {
         fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
         imagePaths.push(file);
+        if (isHotkeyCapture) hotkeyImageCount += 1;
       } catch (err) {
         log.warn(
           `[Chat] Failed to write pasted image: ${(err as Error).message}`,
@@ -2524,6 +3165,15 @@ ipcMain.handle(
       }
     }
 
+    const contextualizedUserText = hotkeyImageCount > 0
+      ? [
+          '<hotkey_screenshot_context>',
+          `${hotkeyImageCount} attached image${hotkeyImageCount === 1 ? ' was' : 's were'} deliberately captured by the user with Coco's screenshot hotkey.`,
+          'Treat the attached hotkey capture as the primary visual state the user chose for this request. Do not call observe_screen merely to capture or inspect the same screen again. Only request a new live-screen observation if the user explicitly asks for an updated view after this capture.',
+          '</hotkey_screenshot_context>',
+          userText,
+        ].filter(Boolean).join('\n')
+      : userText;
     let streamedText = '';
     try {
       // A plain chat can be opened without creating a proactive session. Sync
@@ -2551,7 +3201,7 @@ ipcMain.handle(
               // Current-screen context is now retrieved only when the tutor calls
               // observe_screen; ordinary chat turns skip the observer entirely.
               observation: '',
-              user_text: userText,
+              user_text: contextualizedUserText,
               image_paths: imagePaths.length ? imagePaths : null,
             },
         (streamEvent: TutorStreamEvent) => {
@@ -2601,6 +3251,153 @@ ipcMain.handle(
         err instanceof TutorStreamTimeoutError
           ? 'The tutor took too long to respond. Please retry.'
           : 'The tutor could not generate a response. Please try again.';
+      ipcEvent.sender.send('chat-stream-event', {
+        requestId,
+        type: 'error',
+        error,
+      });
+      return { error };
+    }
+  },
+);
+
+ipcMain.removeAllListeners('open-image-preview');
+ipcMain.on('open-image-preview', (event, payload: unknown) => {
+  const imageDataUrl = (payload as { imageDataUrl?: unknown } | null)
+    ?.imageDataUrl;
+  if (
+    typeof imageDataUrl !== 'string' ||
+    !imageDataUrl.startsWith('data:image/')
+  ) {
+    log.warn('[ImagePreview] Ignored an invalid image preview request.');
+    return;
+  }
+  openImagePreviewWindow(
+    BrowserWindow.fromWebContents(event.sender),
+    imageDataUrl,
+  );
+});
+
+ipcMain.removeAllListeners('image-preview-ready');
+ipcMain.on('image-preview-ready', (event) => {
+  if (
+    !imagePreviewWindow ||
+    imagePreviewWindow.isDestroyed() ||
+    imagePreviewWindow.webContents.id !== event.sender.id ||
+    !imagePreviewDataUrl
+  ) {
+    return;
+  }
+  imagePreviewWindow.webContents.send('image-preview', {
+    imageDataUrl: imagePreviewDataUrl,
+  });
+  imagePreviewWindow.show();
+  imagePreviewWindow.focus();
+});
+
+ipcMain.removeAllListeners('close-image-preview');
+ipcMain.on('close-image-preview', (event) => {
+  if (
+    imagePreviewWindow &&
+    !imagePreviewWindow.isDestroyed() &&
+    imagePreviewWindow.webContents.id === event.sender.id
+  ) {
+    imagePreviewWindow.close();
+  }
+});
+
+ipcMain.removeHandler('send-audio-message');
+ipcMain.handle(
+  'send-audio-message',
+  async (
+    ipcEvent,
+    {
+      requestId,
+      audioData,
+    }: {
+      requestId: string;
+      audioData: string;
+    },
+  ) => {
+    if (!audioData || audioData.length > 16_000_000) {
+      return { error: 'The voice recording is empty or too large.' };
+    }
+    if (!isSessionActive) {
+      // A pre-session invite may already be visible from the last sensing tick.
+      // Voice input is itself an explicit session start, so remove that stale UI.
+      notificationWindow?.destroy();
+      await createProactiveTutorSession(
+        '[Voice message]',
+        120,
+        'user_message',
+        undefined,
+        {
+          // Reuse the draft already displayed by the wake-word/chat flow so
+          // activating the session does not clear the visible conversation.
+          sessionId: currentSessionId ?? undefined,
+          openChat: false,
+        },
+      );
+    }
+    const gatewaySessionId = currentSessionId;
+    if (gatewaySessionId) {
+      gatewayClient?.addMessage(
+        gatewaySessionId,
+        'user',
+        '[Voice message]',
+      );
+    }
+    const tutorPort = process.env.TUTOR_PORT || '8081';
+    const turnTiming = new TutorTurnTiming();
+    let streamedText = '';
+    try {
+      await consumeTutorStream(
+        `http://127.0.0.1:${tutorPort}/events/audio_prompt/stream`,
+        {
+          audio_data: audioData,
+          audio_format: 'wav',
+          session_id: currentSessionId,
+        },
+        (streamEvent: TutorStreamEvent) => {
+          if (streamEvent.type === 'text_delta') {
+            const delta = String(streamEvent.text ?? '');
+            turnTiming.recordTextDelta(delta);
+            streamedText += delta;
+          }
+          if (streamEvent.type === 'done' && gatewaySessionId) {
+            const metrics = streamEvent.llm_metrics as
+              | LLMCallMetrics
+              | undefined;
+            const model =
+              metrics?.model || process.env.TUTOR_MODEL?.trim() || undefined;
+            gatewayClient?.addMessage(
+              gatewaySessionId,
+              'coco',
+              String(streamEvent.guidance ?? streamedText),
+              turnTiming.complete(model),
+            );
+          }
+          ipcEvent.sender.send('chat-stream-event', {
+            requestId,
+            ...streamEvent,
+          });
+        },
+        undefined,
+        {
+          idleMs: 60_000,
+          hardMs: 5 * 60_000,
+        },
+      );
+      return { streamed: true };
+    } catch (err) {
+      log.error(
+        '[Chat] streaming audio prompt failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+      const error =
+        err instanceof TutorStreamTimeoutError
+          ? 'The tutor took too long to respond to the voice message. Please retry.'
+          : 'The tutor could not process the voice message. Please try again.';
       ipcEvent.sender.send('chat-stream-event', {
         requestId,
         type: 'error',
@@ -3225,12 +4022,19 @@ const startObserver = () => {
     // model IDs directly before startup instead of relying on load-time env
     // expansion.
     configureServiceModelArguments(serviceManager, tutorModel, observerModel);
+    const { userName, scenario } = readProfile();
+    // Pre-session Observer invitations use the selected scenario, so sensing
+    // must start with it instead of defaulting to everyday support. The Judge
+    // itself starts only after the user accepts and a session is configured.
+    serviceManager.configureServiceArg('sensing-server', 'scenario', scenario);
     const runtime = resolveModelRuntime();
     if (runtime) {
-      const { userName } = readProfile();
       serviceManager.configureServiceEnv(
         'tutor-server',
-        runtime.tutorEnv,
+        {
+          ...runtime.tutorEnv,
+          ...(userName && { COCO_USER_NAME: userName }),
+        },
         true,
       );
       serviceManager.configureServiceEnv(
@@ -3267,6 +4071,13 @@ const startObserver = () => {
       }
 
       const status = event.status;
+      const { scenario } = readProfile();
+      const instantSuggestionEligible = shouldOfferInstantSuggestion(
+        scenario,
+        isSessionActive,
+        event,
+      );
+      const surfaceObservation = shouldSurfaceObservation();
 
       // Tier-2 friction events from the struggle/pause path arrive without an
       // observation_id, but the precompute cache and the renderer bubble must
@@ -3277,8 +4088,16 @@ const startObserver = () => {
         event.observation_id = `synthetic-${Date.now()}-${syntheticObsSeq}`;
       }
 
-      // Always forward to avatar window for pet animation / observation bubble.
-      if (!hideAvatarMode && avatarWindow && !avatarWindow.isDestroyed()) {
+      // Match the monorepo's lightweight feedback: every observation status is
+      // forwarded to the avatar (including Stuck / AI could help). The separate
+      // instantSuggestionEligible gate below ensures only Judge-approved events
+      // generate a detailed proactive suggestion in AI Upskilling.
+      if (
+        surfaceObservation &&
+        !hideAvatarMode &&
+        avatarWindow &&
+        !avatarWindow.isDestroyed()
+      ) {
         avatarWindow.webContents.send('observation-update', event);
       }
 
@@ -3291,7 +4110,7 @@ const startObserver = () => {
           status: status as ObservationStatus,
           observation: cleanObservation(event.observation),
           observation_id: event.observation_id,
-          proactive_support: PRECOMPUTE_STATUSES.has(status)
+          proactive_support: instantSuggestionEligible
             ? { engaged: false }
             : undefined,
           llm_metrics: event.llm_metrics,
@@ -3301,10 +4120,10 @@ const startObserver = () => {
       const taskLabel = event.task_label;
 
       // ── Eagerly precompute an instant suggestion for Tier-2 bubbles ───
-      // Fire the moment the bubble appears so it's ready by click time. Done
-      // regardless of session state — the renderer reveals it instantly either
-      // way, falling back to the chat flow only on a cache miss.
-      if (status && PRECOMPUTE_STATUSES.has(status)) {
+      // AI Upskilling suggestions are generated only for Judge-approved
+      // interventions inside an active session. Other modes retain their
+      // existing pull-based observer suggestions.
+      if (instantSuggestionEligible) {
         const suggestionPromise = precomputeSuggestion(event);
         if (hideAvatarMode && event.observation) {
           const rawObservation = cleanObservation(event.observation);
@@ -3315,6 +4134,11 @@ const startObserver = () => {
             if (
               !value ||
               !hideAvatarMode ||
+              !shouldOfferInstantSuggestion(
+                readProfile().scenario,
+                isSessionActive,
+                event,
+              ) ||
               latestHiddenSuggestionObservationId !== event.observation_id
             ) {
               return;
@@ -3358,18 +4182,22 @@ const startObserver = () => {
       }
 
       // ── Pre-session: suggest starting a tutor session ─────────────────
-      // The sensing-side judge now owns the invite decision AND its timing
-      // (it only emits a task_suggested event when it decides to invite, at
-      // most once per its cooldown), so we no longer rate-limit here.
+      // The sensing-side Judge owns the invite decision. Keep the original
+      // five-minute UI cooldown so repeated Judge ticks cannot make the session
+      // invitation itself feel like a stream of disconnected suggestions.
       if (!isSessionActive && status === 'task_suggested' && taskLabel) {
-        pendingTaskLabel = taskLabel;
-        const message = `I see you're ${taskLabel}. Want me to guide you with AI tools?`;
-        showNotification({
-          message,
-          actionLabel: 'Yes, start session',
-          cancelLabel: 'Not now',
-          notifType: 'session-start-prompt',
-        });
+        const now = Date.now();
+        if (now - lastTaskSuggestionMs >= TASK_SUGGESTION_COOLDOWN_MS) {
+          lastTaskSuggestionMs = now;
+          pendingTaskLabel = taskLabel;
+          const message = `I see you're ${taskLabel}. Want me to guide you with AI tools?`;
+          showNotification({
+            message,
+            actionLabel: 'Yes, start session',
+            cancelLabel: 'Not now',
+            notifType: 'session-start-prompt',
+          });
+        }
       }
 
       // ── In-session: detect task completion ───────────────────────────
@@ -3390,8 +4218,11 @@ app
   .whenReady()
   .then(async () => {
     await configureLocalServicePorts();
+    initializeWakeWordService();
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
+      systemSuspended = true;
+      syncWakeWordService();
       observationSleepGuard.suspend();
       latestHiddenSuggestionObservationId = undefined;
       suggestionCache.clear();
@@ -3400,10 +4231,13 @@ app
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         avatarWindow.webContents.send('system-suspend');
       }
+      chatWindow?.webContents.send('system-suspend');
     });
 
     powerMonitor.on('resume', () => {
       log.info('[Power] System resumed; suppressing observations briefly.');
+      systemSuspended = false;
+      syncWakeWordService();
       observationSleepGuard.resume();
       latestHiddenSuggestionObservationId = undefined;
       suggestionCache.clear();
@@ -3458,6 +4292,9 @@ app
     }
 
     createWindow();
+    createWakeWordCaptureWindow();
+    // Keep chat state alive while its panel is closed.
+    createChatWindow();
 
     // Register global shortcut to toggle DevTools (Cmd/Ctrl+Shift+I)
     globalShortcut.register('CommandOrControl+Shift+I', () => {
@@ -3528,6 +4365,7 @@ app.on('before-quit', (event) => {
   isQuitting = true;
   log.info('App quitting: waiting up to 10s for services to stop...');
   stopObservationStream();
+  wakeWordService?.stop('disabled');
   const shutdownTimeoutMs = 10_000;
   serviceManager
     .shutdown(shutdownTimeoutMs)

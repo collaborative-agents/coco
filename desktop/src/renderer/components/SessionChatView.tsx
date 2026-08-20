@@ -5,6 +5,11 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import {
+  startVoiceRecorder,
+  type ActiveVoiceRecorder,
+  type VoiceRecorderStatus,
+} from '../voice-recorder';
+import {
   AI_TOOLS,
   parseAiTool,
   encodeCustomChatbot,
@@ -34,6 +39,13 @@ interface Guidance {
   text: string;
   examplePrompt?: string | null;
   vizCode?: string | null;
+}
+interface WakeWordSettingsInfo {
+  enabled: boolean;
+  keywords: string[];
+  status: 'disabled' | 'starting' | 'ready' | 'sleeping' | 'error';
+  detail?: string;
+  logPath?: string;
 }
 /** Scan for the first balanced {...} block, respecting strings and escapes. */
 function extractJsonObject(text: string): string | null {
@@ -142,6 +154,7 @@ interface ChatMessage {
   retryText?: string;
   retryImages?: string[];
   retryRequestKind?: 'chat' | 'practice_suggestions';
+  retryHotkeyImages?: string[];
 }
 
 function copyableMessageText(message: ChatMessage): string {
@@ -190,6 +203,11 @@ interface ServiceHealthView {
   tutor: ServiceHealth;
 }
 
+interface SleepingServiceHealthView {
+  checkedAt: number;
+  sleeping: true;
+}
+
 interface ConnectionTestStatus {
   state: 'testing' | 'success' | 'error';
   message: string;
@@ -199,6 +217,7 @@ const MODEL_PROVIDER_OPTIONS = [
   ['gemini', 'Google Gemini'],
   ['openai', 'OpenAI'],
   ['anthropic', 'Anthropic'],
+  ['tinker', 'Tinker'],
   ['tinfoil', 'Tinfoil'],
   ['hosted_vllm', 'OpenAI-compatible endpoint'],
   ['lm_studio', 'LM Studio'],
@@ -313,6 +332,7 @@ const S: Record<string, React.CSSProperties> = {
   pendingContextX: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 2px', fontFamily: FONT, fontSize: 14, lineHeight: 1 },
   pending: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   pendingThumbWrap: { position: 'relative' },
+  imagePreviewButton: { display: 'block', border: 'none', borderRadius: 8, padding: 0, background: 'transparent', cursor: 'zoom-in' },
   pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
   inputRow: { display: 'flex', gap: 8, alignItems: 'stretch' },
   composerActions: { display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 7, width: 94, flexShrink: 0 },
@@ -320,6 +340,29 @@ const S: Record<string, React.CSSProperties> = {
   finishTaskError: { marginBottom: 7, color: '#b91c1c', fontSize: 10.5, textAlign: 'right' },
   textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
   sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
+  micBtn: {
+    width: 38,
+    height: 38,
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: 'none',
+    background: '#fff',
+    color: '#374151',
+    borderRadius: '50%',
+    padding: 0,
+    cursor: 'pointer',
+    fontFamily: FONT,
+    boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.14), 0 1px 3px rgba(15, 23, 42, 0.12)',
+  },
+  micBtnActive: {
+    background: '#dc2626',
+    color: '#fff',
+    boxShadow: '0 0 0 4px #fff, 0 0 0 5px rgba(220, 38, 38, 0.2)',
+  },
+  voiceHint: { marginTop: 6, fontSize: 11, color: '#6b7280', fontFamily: FONT, textAlign: 'center' },
+  voiceError: { marginTop: 6, fontSize: 11, color: '#b91c1c', fontFamily: FONT, textAlign: 'center' },
   sendBtnDisabled: { opacity: 0.4, cursor: 'default' },
   hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
   hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
@@ -340,7 +383,6 @@ const S: Record<string, React.CSSProperties> = {
   toolObservation: { borderTop: `1px solid ${BORDER}`, marginTop: 5, paddingTop: 5 },
   feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
   feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
-  feedbackBtnLocked: { opacity: 0.25, cursor: 'default' },
   typing: { alignSelf: 'flex-start', color: '#9ca3af', fontSize: 12, fontStyle: 'italic', paddingLeft: 32 },
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   starterPanel: { margin: 'auto', width: '100%', maxWidth: 390, boxSizing: 'border-box', color: '#374151' },
@@ -571,6 +613,10 @@ export default function SessionChatView() {
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [voiceState, setVoiceState] = useState<
+    'idle' | 'requesting' | VoiceRecorderStatus
+  >('idle');
+  const [voiceError, setVoiceError] = useState('');
   const [startingNewSession, setStartingNewSession] = useState(false);
   const [finishingTask, setFinishingTask] = useState(false);
   const [finishTaskError, setFinishTaskError] = useState('');
@@ -608,6 +654,15 @@ export default function SessionChatView() {
   const [serviceHealth, setServiceHealth] = useState<ServiceHealthView | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthError, setHealthError] = useState('');
+  const [cocoSleeping, setCocoSleeping] = useState(false);
+  const [cocoSleepModeKnown, setCocoSleepModeKnown] = useState(false);
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  const [wakeWordStatus, setWakeWordStatus] = useState<
+    WakeWordSettingsInfo['status']
+  >('disabled');
+  const [wakeWordDetail, setWakeWordDetail] = useState('');
+  const [wakeWordCaptureError, setWakeWordCaptureError] = useState('');
+  const [wakeWordSaving, setWakeWordSaving] = useState(false);
   const [connectionTests, setConnectionTests] = useState<
     Record<string, ConnectionTestStatus>
   >({});
@@ -633,14 +688,24 @@ export default function SessionChatView() {
   const [memoryDraft, setMemoryDraft] = useState('');
   const [memoryLoaded, setMemoryLoaded] = useState('');
   const [memoryFlash, setMemoryFlash] = useState(false);
-  // One thumbs vote per tutor message, keyed by message id.
+  // Current thumbs vote per tutor message, keyed by message id. Users may
+  // replace it by choosing the opposite rating.
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
   const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const pendingHotkeyImagesRef = useRef<Set<string>>(new Set());
   const sessionIdRef = useRef<string | null>(null);
   const pendingContextRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const problemRef = useRef('');
+  const cocoSleepingRef = useRef(false);
+  const voiceRecorderRef = useRef<ActiveVoiceRecorder | null>(null);
+  const handleVoiceClickRef = useRef<(fromWakeWord?: boolean) => Promise<void>>(
+    async () => {},
+  );
+  const wakeDetectionInProgressRef = useRef(false);
+
+  useEffect(() => () => voiceRecorderRef.current?.cancel(), []);
 
   useEffect(() => {
     const applyZoomFactor = (value: unknown) => {
@@ -658,24 +723,48 @@ export default function SessionChatView() {
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
+  const applyCocoSleepMode = useCallback((sleeping: boolean) => {
+    cocoSleepingRef.current = sleeping;
+    setCocoSleeping(sleeping);
+    setCocoSleepModeKnown(true);
+    if (sleeping) {
+      setServiceHealth(null);
+      setHealthError('');
+      setHealthLoading(false);
+    }
+  }, []);
+
   const refreshServiceHealth = useCallback(async (forceModelTest = false) => {
+    if (cocoSleepingRef.current) return;
     setHealthLoading(true);
     setHealthError('');
     try {
       const result = await window.electron?.ipcRenderer.invoke(
         'get-service-health',
         { forceModelTest },
-      ) as ServiceHealthView | undefined;
-      if (!result?.sensing || !result?.tutor) {
+      ) as ServiceHealthView | SleepingServiceHealthView | undefined;
+      if (result && 'sleeping' in result && result.sleeping) {
+        applyCocoSleepMode(true);
+        return;
+      }
+      if (
+        !result ||
+        !('sensing' in result) ||
+        !('tutor' in result) ||
+        !result.sensing ||
+        !result.tutor
+      ) {
         throw new Error('No health response received.');
       }
-      setServiceHealth(result);
+      if (!cocoSleepingRef.current) setServiceHealth(result);
     } catch (error) {
-      setHealthError(error instanceof Error ? error.message : String(error));
+      if (!cocoSleepingRef.current) {
+        setHealthError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setHealthLoading(false);
+      if (!cocoSleepingRef.current) setHealthLoading(false);
     }
-  }, []);
+  }, [applyCocoSleepMode]);
 
   // Keep each active conversation on disk. A short debounce avoids a write for
   // every streaming token while still preserving completed turns promptly.
@@ -698,10 +787,12 @@ export default function SessionChatView() {
   // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
   // same pipeline as the bubble reactions.
   const rateMessage = (m: ChatMessage, dir: 'up' | 'down') => {
-    if (!m.id || ratings[m.id]) return;
+    if (!m.id || ratings[m.id] === dir) return;
+    const previousRating = ratings[m.id];
     setRatings((prev) => ({ ...prev, [m.id as string]: dir }));
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: dir === 'up' ? 'thumbs_up' : 'thumbs_down',
+      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
       surface: 'chat',
       message_id: m.id,
       session_id: sessionIdRef.current,
@@ -722,6 +813,12 @@ export default function SessionChatView() {
     } catch {
       // Leave the button unchanged if the OS clipboard rejects the write.
     }
+  };
+
+  const openImagePreview = (imageDataUrl: string) => {
+    window.electron?.ipcRenderer.sendMessage('open-image-preview', {
+      imageDataUrl,
+    });
   };
 
   const scrollToBottom = useCallback(() => {
@@ -808,6 +905,7 @@ export default function SessionChatView() {
       displayText?: string,
       isRetry = false,
       requestKind: 'chat' | 'practice_suggestions' = 'chat',
+      hotkeyImages: string[] = [],
     ) => {
       setSending(true);
       scrollToBottom();
@@ -818,6 +916,7 @@ export default function SessionChatView() {
         isRetry,
         images,
         requestKind,
+        hotkeyImages,
       });
       const r = res as {
         streamed?: boolean;
@@ -854,12 +953,64 @@ export default function SessionChatView() {
     [scrollToBottom],
   );
 
+  const submitAudioRequest = useCallback(
+    async (requestId: string, audioData: string) => {
+      setSending(true);
+      scrollToBottom();
+      const res = await window.electron?.ipcRenderer.invoke('send-audio-message', {
+        requestId,
+        audioData,
+      });
+      const result = res as {
+        streamed?: boolean;
+        error?: string;
+      } | undefined;
+      if (!result?.streamed && result?.error) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.requestId === requestId
+              ? {
+                  ...message,
+                  text: result.error ?? 'The audio tutor could not respond.',
+                  isError: true,
+                  isStreaming: false,
+                }
+              : message,
+          ),
+        );
+        setSending(false);
+      }
+      scrollToBottom();
+    },
+    [scrollToBottom],
+  );
+
+  const sendVoiceMessage = useCallback(
+    async (audioData: string) => {
+      const requestId = makeMessageId();
+      setMessages((current) => [
+        ...current,
+        { role: 'user', text: '🎤 Voice message' },
+        {
+          role: 'tutor',
+          text: '',
+          requestId,
+          isStreaming: true,
+          toolCalls: [],
+        },
+      ]);
+      await submitAudioRequest(requestId, audioData);
+    },
+    [submitAudioRequest],
+  );
+
   // Core send: append the user turn and an empty tutor turn immediately. The
   // latter is filled by chat-stream-event updates while the IPC request runs.
   const sendMessage = useCallback(
     async (
       text: string,
       images: string[],
+      hotkeyImages: string[] = [],
       requestKind: 'chat' | 'practice_suggestions' = 'chat',
     ) => {
       const trimmed = text.trim();
@@ -881,6 +1032,7 @@ export default function SessionChatView() {
           retryText: userText,
           retryImages: images,
           retryRequestKind: requestKind,
+          retryHotkeyImages: hotkeyImages,
         },
       ]);
       pendingContextRef.current = null;
@@ -892,6 +1044,7 @@ export default function SessionChatView() {
         trimmed,
         false,
         requestKind,
+        hotkeyImages,
       );
     },
     [submitTutorRequest],
@@ -903,6 +1056,7 @@ export default function SessionChatView() {
       const previousRequestId = message.requestId;
       const requestId = makeMessageId();
       const images = message.retryImages ?? [];
+      const hotkeyImages = message.retryHotkeyImages ?? [];
       setMessages((current) =>
         current.map((item) =>
           item.requestId === previousRequestId
@@ -924,6 +1078,7 @@ export default function SessionChatView() {
         undefined,
         true,
         message.retryRequestKind ?? 'chat',
+        hotkeyImages,
       );
     },
     [sending, startingNewSession, submitTutorRequest],
@@ -953,6 +1108,7 @@ export default function SessionChatView() {
         setRatings({});
         setInput('');
         setPendingImages([]);
+        pendingHotkeyImagesRef.current.clear();
         setSending(false);
         pendingContextRef.current = null;
         setPendingContextLabel(null);
@@ -1008,11 +1164,11 @@ export default function SessionChatView() {
         }
         setTutorModels(config.tutors.map((model: TutorModelOption) => ({
           ...model,
-          model: model.model.replace(/^hosted_vllm\//, ''),
+          model: model.model.replace(/^(?:hosted_vllm|tinker)\//, ''),
         })));
         setSensingModel({
           ...config.sensing,
-          model: String(config.sensing.model).replace(/^hosted_vllm\//, ''),
+          model: String(config.sensing.model).replace(/^(?:hosted_vllm|tinker)\//, ''),
         });
         setDefaultTutorModelId(config.defaultTutorId || '');
         setCurrentTutorModelId((current) => current || config.defaultTutorId || '');
@@ -1244,12 +1400,100 @@ export default function SessionChatView() {
   }, [showSettings]);
 
   useEffect(() => {
+    window.electron?.ipcRenderer
+      .invoke('get-coco-sleep-mode')
+      .then((result: { sleeping?: boolean } | undefined) => {
+        applyCocoSleepMode(result?.sleeping === true);
+      })
+      .catch(() => applyCocoSleepMode(false));
+    const cleanup = window.electron?.ipcRenderer.on(
+      'coco-sleep-mode-changed',
+      (...args: unknown[]) => {
+        const result = args[0] as { sleeping?: boolean } | undefined;
+        applyCocoSleepMode(result?.sleeping === true);
+      },
+    );
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, [applyCocoSleepMode]);
+
+  useEffect(() => {
+    if (!cocoSleepModeKnown || cocoSleeping) return undefined;
     void refreshServiceHealth();
     const interval = window.setInterval(() => {
       void refreshServiceHealth();
     }, 30000);
     return () => window.clearInterval(interval);
-  }, [refreshServiceHealth]);
+  }, [cocoSleepModeKnown, cocoSleeping, refreshServiceHealth]);
+
+  useEffect(() => {
+    const applySettings = (value: unknown) => {
+      const settings = value as Partial<WakeWordSettingsInfo> | undefined;
+      if (typeof settings?.enabled === 'boolean') {
+        setWakeWordEnabled(settings.enabled);
+      }
+      if (settings?.status) setWakeWordStatus(settings.status);
+      setWakeWordDetail(settings?.detail ?? '');
+    };
+    window.electron?.ipcRenderer
+      .invoke('get-wake-word-settings')
+      .then(applySettings)
+      .catch(() => {});
+    const removeSettingsListener = window.electron?.ipcRenderer.on(
+      'wake-word-settings-changed',
+      applySettings,
+    );
+    const removeStatusListener = window.electron?.ipcRenderer.on(
+      'wake-word-status',
+      (value: unknown) => {
+        const status = value as Partial<WakeWordSettingsInfo> | undefined;
+        if (status?.status) setWakeWordStatus(status.status);
+        setWakeWordDetail(status?.detail ?? '');
+      },
+    );
+    const removeDetectionListener = window.electron?.ipcRenderer.on(
+      'wake-word-detected',
+      (value: unknown) => {
+        const detection = value as { id?: unknown } | undefined;
+        if (typeof detection?.id === 'number') {
+          window.electron?.ipcRenderer.sendMessage(
+            'wake-word-detection-ack',
+            { id: detection.id },
+          );
+        }
+        if (wakeDetectionInProgressRef.current) return;
+        wakeDetectionInProgressRef.current = true;
+        handleVoiceClickRef.current(true).finally(() => {
+          wakeDetectionInProgressRef.current = false;
+        });
+      },
+    );
+    const removeCaptureStatusListener = window.electron?.ipcRenderer.on(
+      'wake-word-capture-status',
+      (value: unknown) => {
+        const capture = value as {
+          state?: unknown;
+          detail?: unknown;
+        } | undefined;
+        if (capture?.state === 'error') {
+          setWakeWordCaptureError(
+            typeof capture.detail === 'string'
+              ? capture.detail
+              : 'Microphone capture failed.',
+          );
+        } else if (capture?.state === 'active') {
+          setWakeWordCaptureError('');
+        }
+      },
+    );
+    return () => {
+      if (typeof removeSettingsListener === 'function') removeSettingsListener();
+      if (typeof removeStatusListener === 'function') removeStatusListener();
+      if (typeof removeDetectionListener === 'function') removeDetectionListener();
+      if (typeof removeCaptureStatusListener === 'function') {
+        removeCaptureStatusListener();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -1274,16 +1518,27 @@ export default function SessionChatView() {
   const memoryDirty = memoryDraft !== memoryLoaded;
 
   // Context from proactive support. Ordinary "Help me with this" requests are
-  // sent immediately; "Chat about it" only stages the context for the user's
-  // next message and therefore does not invoke the tutor yet.
+  // sent immediately; "Chat about it" stages context for the next message; and
+  // "Open Coco Chat" places a delegation prompt directly in the composer.
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('help-request', (data: any) => {
-      const { rawObservation, phrase, label, deferUntilUserMessage } = (data ?? {}) as {
+      const {
+        rawObservation,
+        phrase,
+        label,
+        deferUntilUserMessage,
+        initialInput,
+      } = (data ?? {}) as {
         rawObservation?: string;
         phrase?: string;
         label?: string;
         deferUntilUserMessage?: boolean;
+        initialInput?: string;
       };
+      if (typeof initialInput === 'string') {
+        setInput(initialInput);
+        return;
+      }
       const seed = (rawObservation || phrase || '').trim();
       if (seed && deferUntilUserMessage) {
         pendingContextRef.current = seed;
@@ -1300,7 +1555,10 @@ export default function SessionChatView() {
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('hotkey-capture', (data: any) => {
       const url = (data ?? {}).imageDataUrl as string | undefined;
-      if (url) setPendingImages((prev) => [...prev, url]);
+      if (url) {
+        pendingHotkeyImagesRef.current.add(url);
+        setPendingImages((prev) => [...prev, url]);
+      }
     });
     // Tell main the listener is live so it can flush any capture that arrived
     // while this window was still loading (e.g. the hot key just opened it).
@@ -1326,6 +1584,12 @@ export default function SessionChatView() {
   const handleSend = () => {
     if (sending || startingNewSession) return;
     const imgs = pendingImages;
+    const hotkeyImgs = imgs.filter((src) =>
+      pendingHotkeyImagesRef.current.has(src),
+    );
+    const clearSentHotkeyImages = () => {
+      hotkeyImgs.forEach((src) => pendingHotkeyImagesRef.current.delete(src));
+    };
     const text = input;
     setInput('');
     setPendingImages([]);
@@ -1353,7 +1617,8 @@ export default function SessionChatView() {
           setReviewing(null);
           setShowHistory(false);
           setSending(false);
-          sendMessage(text, imgs);
+          sendMessage(text, imgs, hotkeyImgs);
+          clearSentHotkeyImages();
         })
         .catch(() => {
           setInput(text);
@@ -1362,7 +1627,87 @@ export default function SessionChatView() {
         });
       return;
     }
-    sendMessage(text, imgs);
+    sendMessage(text, imgs, hotkeyImgs);
+    clearSentHotkeyImages();
+  };
+
+  const handleVoiceClick = async (fromWakeWord = false) => {
+    if (voiceRecorderRef.current) {
+      voiceRecorderRef.current.stop();
+      return;
+    }
+    if (fromWakeWord) {
+      setShowSettings(false);
+      setShowHistory(false);
+      setReviewing(null);
+    }
+    const unavailable =
+      sending ||
+      startingNewSession ||
+      (!fromWakeWord && reviewing) ||
+      voiceState === 'requesting';
+    if (unavailable) {
+      if (fromWakeWord) {
+        await window.electron?.ipcRenderer.invoke(
+          'set-wake-word-capture-paused',
+          { paused: false },
+        );
+      }
+      return;
+    }
+    await window.electron?.ipcRenderer.invoke(
+      'set-wake-word-capture-paused',
+      { paused: true },
+    );
+    setVoiceError('');
+    setVoiceState('requesting');
+    let audioData: string | null = null;
+    try {
+      const recorder = await startVoiceRecorder({
+        silenceMs: 2_500,
+        maxDurationMs: 30_000,
+        onStatus: setVoiceState,
+      });
+      voiceRecorderRef.current = recorder;
+      const recording = await recorder.done;
+      audioData = recording.wavBase64;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== 'Voice recording cancelled.') setVoiceError(message);
+    } finally {
+      voiceRecorderRef.current = null;
+      setVoiceState('idle');
+      await window.electron?.ipcRenderer.invoke(
+        'set-wake-word-capture-paused',
+        { paused: false },
+      );
+    }
+    if (audioData) await sendVoiceMessage(audioData);
+  };
+  handleVoiceClickRef.current = handleVoiceClick;
+
+  const updateWakeWordEnabled = async (enabled: boolean) => {
+    if (wakeWordSaving) return;
+    setWakeWordSaving(true);
+    setWakeWordCaptureError('');
+    try {
+      const result = (await window.electron?.ipcRenderer.invoke(
+        'set-wake-word-settings',
+        { enabled },
+      )) as ({ success?: boolean; error?: string } &
+        Partial<WakeWordSettingsInfo>) | undefined;
+      if (!result?.success) {
+        throw new Error(result?.error ?? 'Could not update voice activation.');
+      }
+      setWakeWordEnabled(enabled);
+      if (result.status) setWakeWordStatus(result.status);
+    } catch (error) {
+      setWakeWordCaptureError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setWakeWordSaving(false);
+    }
   };
 
   const handleNewSession = async () => {
@@ -1443,7 +1788,17 @@ export default function SessionChatView() {
   const canSend =
     !sending &&
     !startingNewSession &&
+    voiceState === 'idle' &&
     (input.trim().length > 0 || pendingImages.length > 0);
+  const voiceActive = voiceState === 'listening' || voiceState === 'speaking';
+  let voiceStatusText = '';
+  if (voiceState === 'requesting') {
+    voiceStatusText = 'Requesting microphone access…';
+  } else if (voiceState === 'speaking') {
+    voiceStatusText = 'Listening… Coco will send after you stop speaking.';
+  } else if (voiceState === 'listening') {
+    voiceStatusText = 'Listening… start speaking, or press stop to send.';
+  }
   const visibleMessages = reviewing?.messages ?? messages;
   const hasRunningTool = visibleMessages.some(
     (message) =>
@@ -1483,46 +1838,54 @@ export default function SessionChatView() {
   ].some((health) =>
     health.modelAssessment?.status === 'legacy_unassessed' ||
     health.modelAssessment?.status === 'not_configured'));
-  const chatHealthLabel = serviceUnavailable
-    ? 'Service issue'
-    : modelUnavailable
-      ? 'Model issue'
+  const chatHealthLabel = cocoSleeping
+    ? 'Sleeping'
+    : serviceUnavailable
+      ? 'Service issue'
+      : modelUnavailable
+        ? 'Model issue'
+        : modelConfigurationIssue
+          ? 'Configure models'
+          : serviceHealth
+            ? (modelsVerified ? 'Connected' : 'Services reachable')
+            : healthLoading
+              ? 'Checking health…'
+              : 'Health unknown';
+  const chatHealthColor = cocoSleeping
+    ? '#6b7280'
+    : serviceUnavailable || modelUnavailable
+      ? '#dc2626'
       : modelConfigurationIssue
-        ? 'Configure models'
-        : serviceHealth
-          ? (modelsVerified ? 'Connected' : 'Services reachable')
-          : healthLoading
-            ? 'Checking health…'
-            : 'Health unknown';
-  const chatHealthColor = serviceUnavailable || modelUnavailable
-    ? '#dc2626'
-    : modelConfigurationIssue
-      ? '#b45309'
-      : modelsVerified
-        ? '#16a34a'
-        : '#6b7280';
-  const chatHealthTitle = serviceUnavailable
-    ? [
-        sensingUnavailable ? 'Sensing server is not reachable.' : '',
-        tutorUnavailable ? 'Tutor agent is not reachable.' : '',
-        'Click to open Settings.',
-      ].filter(Boolean).join(' ')
-    : modelUnavailable
+        ? '#b45309'
+        : modelsVerified
+          ? '#16a34a'
+          : '#6b7280';
+  const chatHealthTitle = cocoSleeping
+    ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+    : serviceUnavailable
       ? [
-          serviceHealth?.sensing.modelAssessment?.status === 'failed'
-            ? `Sensing model: ${serviceHealth.sensing.modelAssessment.detail}`
-            : '',
-          serviceHealth?.tutor.modelAssessment?.status === 'failed'
-            ? `Tutor model: ${serviceHealth.tutor.modelAssessment.detail}`
-            : '',
+          sensingUnavailable ? 'Sensing server is not reachable.' : '',
+          tutorUnavailable ? 'Tutor agent is not reachable.' : '',
           'Click to open Settings.',
         ].filter(Boolean).join(' ')
-      : modelConfigurationIssue
-        ? 'A saved model configuration is required. Click to open Settings.'
-        : serviceHealth
-          ? 'Local services and configured models passed their connection tests.'
-          : 'Checking local service health.';
-  const hasChatHealthIssue = serviceUnavailable || modelUnavailable || modelConfigurationIssue;
+      : modelUnavailable
+        ? [
+            serviceHealth?.sensing.modelAssessment?.status === 'failed'
+              ? `Sensing model: ${serviceHealth.sensing.modelAssessment.detail}`
+              : '',
+            serviceHealth?.tutor.modelAssessment?.status === 'failed'
+              ? `Tutor model: ${serviceHealth.tutor.modelAssessment.detail}`
+              : '',
+            'Click to open Settings.',
+          ].filter(Boolean).join(' ')
+        : modelConfigurationIssue
+          ? 'A saved model configuration is required. Click to open Settings.'
+          : serviceHealth
+            ? 'Local services and configured models passed their connection tests.'
+            : 'Checking local service health.';
+  const hasChatHealthIssue =
+    !cocoSleeping &&
+    (serviceUnavailable || modelUnavailable || modelConfigurationIssue);
 
   return (
     <div style={S.root}>
@@ -1625,10 +1988,17 @@ export default function SessionChatView() {
         <div style={S.settings}>
           <div style={S.groupLabel}>Health</div>
           <div style={S.helpText}>
-            Checks Coco's local services and sends short real requests to the
-            configured models. The sensing test includes a small test image.
+            {cocoSleeping
+              ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+              : "Checks Coco's local services and sends short real requests to the configured models. The sensing test includes a small test image."}
           </div>
-          <div style={S.healthList}>
+          {cocoSleeping && (
+            <div role="status" style={S.healthDetail}>
+              Sleeping intentionally stops the sensing server and tutor agent.
+            </div>
+          )}
+          {!cocoSleeping && (
+            <div style={S.healthList}>
             {([
               ['sensing', 'Sensing server', serviceHealth?.sensing],
               ['tutor', 'Tutor agent', serviceHealth?.tutor],
@@ -1698,8 +2068,10 @@ export default function SessionChatView() {
                 </div>
               );
             })}
-          </div>
-          <div style={S.healthActions}>
+            </div>
+          )}
+          {!cocoSleeping && (
+            <div style={S.healthActions}>
             <button
               type="button"
               style={{ ...S.addBtn, ...(healthLoading ? S.sendBtnDisabled : {}) }}
@@ -1713,10 +2085,64 @@ export default function SessionChatView() {
                 Checked {new Date(serviceHealth.checkedAt).toLocaleTimeString()}
               </span>
             )}
-          </div>
-          {healthError && (
+            </div>
+          )}
+          {!cocoSleeping && healthError && (
             <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
               Health check failed: {healthError}
+            </div>
+          )}
+          <div style={S.sectionDivider} />
+
+          <div style={S.groupLabel}>Voice activation</div>
+          <label
+            style={{
+              ...S.healthRow,
+              alignItems: 'center',
+              cursor: wakeWordSaving ? 'default' : 'pointer',
+              marginBottom: 7,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={wakeWordEnabled}
+              disabled={wakeWordSaving}
+              onChange={(event) =>
+                updateWakeWordEnabled(event.target.checked)
+              }
+            />
+            <span>
+              <span style={S.healthName}>Listen for Coco</span>
+              <span style={{ ...S.healthDetail, display: 'block' }}>
+                Detects “Coco”, “Hi Coco”, and “Hey Coco”.
+              </span>
+            </span>
+          </label>
+          <div style={S.helpText}>
+            Audio is analyzed continuously by a small local model and discarded.
+            Coco pauses listening while asleep and while recording a voice message.
+          </div>
+          {wakeWordEnabled && (
+            <div
+              role="status"
+              style={{
+                ...S.healthDetail,
+                marginTop: 6,
+                color:
+                  wakeWordCaptureError || wakeWordStatus === 'error'
+                    ? '#b91c1c'
+                    : '#16a34a',
+              }}
+            >
+              {wakeWordCaptureError
+                ? `Microphone unavailable: ${wakeWordCaptureError}`
+                : wakeWordStatus === 'error'
+                  ? wakeWordDetail || 'The local wake-word model could not start.'
+                  : cocoSleeping || wakeWordStatus === 'sleeping'
+                    ? 'Paused while Coco is asleep.'
+                    : wakeWordStatus === 'starting'
+                      ? 'Starting the local detector…'
+                      : 'Listening locally.'}
             </div>
           )}
           <div style={S.sectionDivider} />
@@ -2241,6 +2667,7 @@ export default function SessionChatView() {
                   sendMessage(
                     PERSONALIZED_TASK_REQUEST,
                     [],
+                    [],
                     'practice_suggestions',
                   )
                 }
@@ -2283,7 +2710,16 @@ export default function SessionChatView() {
                     <div style={S.thumbRow}>
                       {m.images.map((src, j) => (
                         // eslint-disable-next-line react/no-array-index-key
-                        <img key={j} src={src} alt="pasted" style={S.thumb} />
+                        <button
+                          key={j}
+                          type="button"
+                          style={S.imagePreviewButton}
+                          aria-label={`Preview message attachment ${j + 1}`}
+                          title="Preview attachment"
+                          onClick={() => openImagePreview(src)}
+                        >
+                          <img src={src} alt={`Attachment ${j + 1}`} style={S.thumb} />
+                        </button>
                       ))}
                     </div>
                   )}
@@ -2370,14 +2806,12 @@ export default function SessionChatView() {
                             type="button"
                             aria-label={dir === 'up' ? 'Helpful' : 'Not helpful'}
                             title={dir === 'up' ? 'Helpful' : 'Not helpful'}
-                            disabled={!!ratings[m.id as string]}
+                            disabled={ratings[m.id as string] === dir}
                             style={{
                               ...S.feedbackBtn,
                               ...(ratings[m.id as string] === dir
                                 ? S.feedbackBtnRated
-                                : ratings[m.id as string]
-                                  ? S.feedbackBtnLocked
-                                  : {}),
+                                : {}),
                             }}
                             onClick={() => rateMessage(m, dir)}
                           >
@@ -2421,11 +2855,24 @@ export default function SessionChatView() {
             {pendingImages.map((src, i) => (
               // eslint-disable-next-line react/no-array-index-key
               <div key={i} style={S.pendingThumbWrap}>
-                <img src={src} alt="pending" style={S.thumb} />
+                <button
+                  type="button"
+                  style={S.imagePreviewButton}
+                  aria-label={`Preview attached image ${i + 1}`}
+                  title="Preview image"
+                  onClick={() => openImagePreview(src)}
+                >
+                  <img src={src} alt={`Attachment ${i + 1}`} style={S.thumb} />
+                </button>
                 <button
                   type="button"
                   style={S.pendingX}
-                  onClick={() => setPendingImages((prev) => prev.filter((_, j) => j !== i))}
+                  aria-label={`Remove attached image ${i + 1}`}
+                  title="Remove image"
+                  onClick={() => {
+                    pendingHotkeyImagesRef.current.delete(src);
+                    setPendingImages((prev) => prev.filter((_, j) => j !== i));
+                  }}
                 >
                   ×
                 </button>
@@ -2444,7 +2891,7 @@ export default function SessionChatView() {
               aria-label="Tutor model"
               title={selectedTutorTooltip}
               value={currentTutorModelId}
-              disabled={switchingModel || sending}
+              disabled={switchingModel || sending || voiceState !== 'idle'}
               onChange={(event) => switchTutorModel(event.target.value)}
             >
               {tutorModels.map((model) => (
@@ -2457,12 +2904,69 @@ export default function SessionChatView() {
           <textarea
             style={S.textarea}
             rows={2}
-            placeholder="Ask the tutor… (paste an image to attach)"
+            placeholder={
+              voiceState === 'idle'
+                ? 'Ask the tutor… (paste an image to attach)'
+                : 'Listening to your voice…'
+            }
             value={input}
+            disabled={voiceState !== 'idle'}
             onChange={(e) => setInput(e.target.value)}
             onPaste={onPaste}
             onKeyDown={onKeyDown}
           />
+          <button
+            type="button"
+            aria-label={
+              voiceActive ? 'Stop voice recording' : 'Start voice recording'
+            }
+            title={
+              voiceActive ? 'Stop and send voice message' : 'Talk to Coco'
+            }
+            style={{
+              ...S.micBtn,
+              ...(voiceActive ? S.micBtnActive : {}),
+              ...(sending || startingNewSession || reviewing || voiceState === 'requesting'
+                ? S.sendBtnDisabled
+                : {}),
+            }}
+            disabled={
+              sending ||
+              startingNewSession ||
+              Boolean(reviewing) ||
+              voiceState === 'requesting'
+            }
+            onClick={() => handleVoiceClick()}
+          >
+            {voiceActive ? (
+              <svg
+                aria-hidden="true"
+                width="13"
+                height="13"
+                viewBox="0 0 13 13"
+                fill="currentColor"
+              >
+                <rect x="2" y="2" width="9" height="9" rx="1.5" />
+              </svg>
+            ) : (
+              <svg
+                aria-hidden="true"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path d="M5.5 11.5v.5a6.5 6.5 0 0 0 13 0v-.5" />
+                <path d="M12 18.5V22" />
+                <path d="M9 22h6" />
+              </svg>
+            )}
+          </button>
           <div style={S.composerActions}>
             {profile.scenario === 'ai_upskilling' && !reviewing && (
               <button
@@ -2500,9 +3004,17 @@ export default function SessionChatView() {
             </button>
           </div>
         </div>
-        <div style={S.hotkeyHint}>
-          Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot
-        </div>
+        {voiceState !== 'idle' && (
+          <div style={S.voiceHint}>{voiceStatusText}</div>
+        )}
+        {voiceState === 'idle' && voiceError && (
+          <div style={S.voiceError}>{voiceError}</div>
+        )}
+        {voiceState === 'idle' && !voiceError && (
+          <div style={S.hotkeyHint}>
+            Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot
+          </div>
+        )}
       </div>
         </>
       )}

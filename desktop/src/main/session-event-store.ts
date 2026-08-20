@@ -15,6 +15,7 @@ export type SessionEvent =
       session_id: string;
       started_at: string;
       start_trigger: SessionStartTrigger;
+      start_message?: string;
       user_id?: string;
     }
   | {
@@ -46,12 +47,14 @@ export function recordSessionStarted(
   userId: string | null,
   startTrigger: SessionStartTrigger,
   now = new Date(),
+  startMessage?: string,
 ): void {
   appendSessionEvent({
     event: 'session_started',
     session_id: sessionId,
     started_at: now.toISOString(),
     start_trigger: startTrigger,
+    ...(startMessage?.trim() ? { start_message: startMessage.trim() } : {}),
     ...(userId ? { user_id: userId } : {}),
   });
 }

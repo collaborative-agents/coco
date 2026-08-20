@@ -38,6 +38,7 @@ describe('local session event storage', () => {
       'user-1',
       'proactive_suggestion',
       new Date('2026-08-05T10:00:00.000Z'),
+      'Use Claude to summarize this document.',
     );
 
     expect(events()).toEqual([
@@ -46,6 +47,7 @@ describe('local session event storage', () => {
         session_id: 'session-1',
         started_at: '2026-08-05T10:00:00.000Z',
         start_trigger: 'proactive_suggestion',
+        start_message: 'Use Claude to summarize this document.',
         user_id: 'user-1',
       },
     ]);

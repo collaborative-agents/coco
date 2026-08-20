@@ -33,8 +33,6 @@ const HOLD_MS = 20_000;
 const TUTOR_HOLD_MS = 30_000;
 // CSS transition for the bubble fade-out.
 const FADE_MS = 400;
-// After this much silence, the pet drifts to the slow "sleep" pack.
-const IDLE_TO_SLEEP_MS = 5 * 60_000;
 // Pulse ring is shown for one second per new event.
 const PULSE_MS = 1_000;
 
@@ -50,6 +48,45 @@ const WIN_BUBBLE_H = 320;   // bubble (label + wrapped text + action button)
 const WIN_SUGGESTION_H = 520;
 const WIN_HISTORY_W = 440;  // activity panel ~260 + 168 offset + slack
 const WIN_HISTORY_H = 540;  // strip + summary + timeline + counts + feed
+const WIN_ACTION_MENU_W = 200;
+const WIN_ACTION_MENU_H = 315;
+
+function PetMenuIcon({
+  name,
+}: {
+  name: 'sleep' | 'wake' | 'history' | 'settings';
+}) {
+  if (name === 'sleep') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path d="M20 15.2A8.6 8.6 0 0 1 8.8 4a8.7 8.7 0 1 0 11.2 11.2Z" />
+      </svg>
+    );
+  }
+  if (name === 'wake') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" />
+      </svg>
+    );
+  }
+  if (name === 'history') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path d="M4.5 8.5H1.8V5.8" />
+        <path d="M3 8a9 9 0 1 1-.2 7.5" />
+        <path d="M12 7.2V12l3.2 2" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M9.6 3.2h4.8l.6 2.2 1.5.9 2.2-.6 2.4 4.1-1.6 1.6v1.7l1.6 1.6-2.4 4.1-2.2-.6-1.5.9-.6 2.2H9.6L9 19.1l-1.5-.9-2.2.6-2.4-4.1 1.6-1.6v-1.7L2.9 9.8l2.4-4.1 2.2.6L9 5.4l.6-2.2Z" />
+      <circle cx="12" cy="12.2" r="3" />
+    </svg>
+  );
+}
 
 /**
  * Statuses that represent mid-friction observations (Tier 2).
@@ -119,6 +156,10 @@ function SupportControls({
   const support = record.proactive_support;
   if (!support) return null;
   const canView = support.suggestion != null || support.available === true;
+  const ratingLabels = {
+    up: 'Good suggestion',
+    down: 'Not helpful',
+  } as const;
   return (
     <div className="obs-support-controls">
       {canView && (
@@ -138,9 +179,13 @@ function SupportControls({
           className={`obs-support-rating${
             support.rating === rating ? ' is-rated' : ''
           }`}
-          aria-label={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
-          title={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
-          disabled={support.rating != null}
+          aria-label={ratingLabels[rating]}
+          title={
+            support.rating && support.rating !== rating
+              ? `Change rating to ${ratingLabels[rating].toLowerCase()}`
+              : ratingLabels[rating]
+          }
+          disabled={support.rating === rating}
           onClick={() => onRate(rating)}
         >
           {rating === 'up' ? '👍' : '👎'}
@@ -443,12 +488,14 @@ function PetView() {
   // on mount, then appended to live as observation events arrive.
   const [records, setRecords] = useState<ActivityRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [cocoSleeping, setCocoSleeping] = useState(false);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const petActionsRef = useRef<HTMLDivElement | null>(null);
 
   // Use refs so listener captures the latest cleanup targets without
   // re-subscribing every render.
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sleepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseKeyRef = useRef(0);
   // Hover-to-keep: while the pointer is over the bubble, the auto-hide is
@@ -475,10 +522,6 @@ function PetView() {
       fadeTimer.current = setTimeout(() => {
         setBubble(null);
         setMood('idle');
-        sleepTimer.current = setTimeout(
-          () => setMood('sleep'),
-          Math.max(IDLE_TO_SLEEP_MS - holdMs, 0),
-        );
       }, FADE_MS);
     }, holdMs);
   };
@@ -515,6 +558,60 @@ function PetView() {
   }, []);
 
   useEffect(() => {
+    window.electron?.ipcRenderer
+      .invoke('get-coco-sleep-mode')
+      .then((result) => {
+        const state = result as { sleeping?: boolean } | undefined;
+        setCocoSleeping(state?.sleeping === true);
+        return undefined;
+      })
+      .catch(() => undefined);
+    const cleanup = window.electron?.ipcRenderer.on(
+      'coco-sleep-mode-changed',
+      (result) => {
+        const state = result as { sleeping?: boolean } | undefined;
+        setCocoSleeping(state?.sleeping === true);
+      },
+    );
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
+  }, []);
+
+  const setCocoSleepMode = async (sleeping: boolean) => {
+    const result = (await window.electron?.ipcRenderer.invoke(
+      'set-coco-sleep-mode',
+      { sleeping },
+    )) as { success?: boolean; sleeping?: boolean } | undefined;
+    if (result?.success) {
+      setCocoSleeping(result.sleeping === true);
+      setBubble(null);
+      setMood(result.sleeping ? 'sleep' : 'idle');
+    }
+  };
+
+  useEffect(() => {
+    if (!actionsMenuOpen) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setActionsMenuOpen(false);
+    };
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!petActionsRef.current?.contains(event.target as Node)) {
+        setActionsMenuOpen(false);
+      }
+    };
+    const closeOnWindowBlur = () => setActionsMenuOpen(false);
+    document.addEventListener('keydown', closeOnEscape);
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    window.addEventListener('blur', closeOnWindowBlur);
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      window.removeEventListener('blur', closeOnWindowBlur);
+    };
+  }, [actionsMenuOpen]);
+
+  useEffect(() => {
     window.electron?.ipcRenderer.sendMessage('activity-history-visibility', {
       visible: showHistory,
     });
@@ -545,7 +642,6 @@ function PetView() {
       () => {
         if (hideTimer.current) clearTimeout(hideTimer.current);
         if (fadeTimer.current) clearTimeout(fadeTimer.current);
-        if (sleepTimer.current) clearTimeout(sleepTimer.current);
         if (pulseTimer.current) clearTimeout(pulseTimer.current);
         bubbleHoverRef.current = false;
         bubblePinnedRef.current = false;
@@ -581,7 +677,6 @@ function PetView() {
         // Clear any in-flight timers — we're starting a fresh visible window.
         if (hideTimer.current) clearTimeout(hideTimer.current);
         if (fadeTimer.current) clearTimeout(fadeTimer.current);
-        if (sleepTimer.current) clearTimeout(sleepTimer.current);
         if (pulseTimer.current) clearTimeout(pulseTimer.current);
         // A brand-new bubble takes over: reset hover + pinned state. (React won't
         // fire mouseleave if the previous bubble unmounted under the cursor, so
@@ -657,7 +752,6 @@ function PetView() {
       if (typeof cleanup === 'function') cleanup();
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
-      if (sleepTimer.current) clearTimeout(sleepTimer.current);
       if (pulseTimer.current) clearTimeout(pulseTimer.current);
     };
   }, []);
@@ -674,7 +768,6 @@ function PetView() {
         // Tier 3 replaces any in-flight observation, including Tier 2.
         if (hideTimer.current) clearTimeout(hideTimer.current);
         if (fadeTimer.current) clearTimeout(fadeTimer.current);
-        if (sleepTimer.current) clearTimeout(sleepTimer.current);
         if (pulseTimer.current) clearTimeout(pulseTimer.current);
         bubbleHoverRef.current = false; // fresh bubble — reset hover state
         bubblePinnedRef.current = false;
@@ -775,7 +868,6 @@ function PetView() {
       bubblePinnedRef.current = true;
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
-      if (sleepTimer.current) clearTimeout(sleepTimer.current);
       setBubble((b) =>
         b
           ? {
@@ -843,6 +935,24 @@ function PetView() {
     setMood('idle');
   };
 
+  const handleOpenCocoChat = () => {
+    if (!bubble?.suggestion) return;
+    const current = bubble;
+    window.electron?.ipcRenderer.sendMessage('chat-about-suggestion', {
+      observationId: current.observationId,
+      status: current.status,
+      rawObservation: current.rawObservation ?? '',
+      suggestion: current.suggestion,
+      surface: 'bubble',
+      copyPromptToInput: true,
+    });
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    bubblePinnedRef.current = false;
+    setBubble(null);
+    setMood('idle');
+  };
+
   // Tier 3: user wants to read the full tutor guidance — open main window.
   const handleViewConversation = () => {
     window.electron?.ipcRenderer.sendMessage('open-main-window');
@@ -886,7 +996,8 @@ function PetView() {
     record: ActivityRecord,
     rating: 'up' | 'down',
   ) => {
-    if (!record.observation_id || record.proactive_support?.rating) return;
+    const previousRating = record.proactive_support?.rating;
+    if (!record.observation_id || previousRating === rating) return;
     const ratedAt = Math.floor(Date.now() / 1000);
     setRecords((prev) =>
       prev.map((item) =>
@@ -905,6 +1016,7 @@ function PetView() {
     );
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
+      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
       surface: 'history',
       observation_id: record.observation_id,
       status: record.status,
@@ -921,6 +1033,7 @@ function PetView() {
   const bubbleVisible = bubble != null;
   const suggestionVisible = bubble?.suggestion != null;
   const historyVisible = showHistory;
+  const actionsMenuVisible = actionsMenuOpen;
 
   // Resize the avatar window to fit whatever is currently on stage. Runs on
   // mount (shrinks from any leftover default size to the base footprint) and
@@ -936,11 +1049,15 @@ function PetView() {
       width = Math.max(width, WIN_HISTORY_W);
       height = Math.max(height, WIN_HISTORY_H);
     }
+    if (actionsMenuVisible) {
+      width = Math.max(width, WIN_ACTION_MENU_W);
+      height = Math.max(height, WIN_ACTION_MENU_H);
+    }
     window.electron?.ipcRenderer.sendMessage('resize-avatar-window', {
       width,
       height,
     });
-  }, [bubbleVisible, suggestionVisible, historyVisible]);
+  }, [bubbleVisible, suggestionVisible, historyVisible, actionsMenuVisible]);
 
   return (
     <div className="pet-stage">
@@ -961,6 +1078,7 @@ function PetView() {
         onDismiss={handleDismiss}
         onViewConversation={handleViewConversation}
         onChatAboutSuggestion={handleChatAboutSuggestion}
+        onOpenCocoChat={handleOpenCocoChat}
         onMouseEnter={handleBubbleEnter}
         onMouseLeave={handleBubbleLeave}
       />
@@ -971,38 +1089,79 @@ function PetView() {
           aria-hidden
         />
       )}
-      <div
-        className="pet-container"
-        role="button"
-        tabIndex={0}
-        onClick={handleClick}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') handleClick(e);
-        }}
-        title="Open the chat"
-      >
-        <PetSprite mood={mood} />
+      <div ref={petActionsRef} className="pet-container">
+        <PetSprite mood={cocoSleeping ? 'sleep' : mood} />
         <button
           type="button"
           className="open-button"
           onClick={handleClick}
-          title="Open Main Window"
+          title="Open the chat"
+          aria-label="Open the chat"
         >
-          ▶
+          <span aria-hidden>Open Coco</span>
         </button>
 
-        {/* History pill — always visible */}
         <button
           type="button"
-          className={`history-btn ${showHistory ? 'is-active' : ''}`}
+          className={`pet-actions-trigger${actionsMenuOpen ? ' is-open' : ''}`}
           onClick={(e) => {
             e.stopPropagation();
-            setShowHistory((v) => !v);
+            setShowHistory(false);
+            setActionsMenuOpen((open) => !open);
           }}
-          title="See observation history"
+          title="More actions"
+          aria-label="More actions"
+          aria-haspopup="menu"
+          aria-expanded={actionsMenuOpen}
         >
-          ⏱ History
+          •••
         </button>
+
+        {actionsMenuVisible && (
+          <div
+            className="pet-actions-menu"
+            role="menu"
+            aria-label="Coco actions"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                event.stopPropagation();
+                setActionsMenuOpen(false);
+                setCocoSleepMode(!cocoSleeping).catch(() => undefined);
+              }}
+            >
+              <PetMenuIcon name={cocoSleeping ? 'wake' : 'sleep'} />
+              <span>{cocoSleeping ? 'Wake Coco' : 'Sleep'}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                event.stopPropagation();
+                setActionsMenuOpen(false);
+                setShowHistory(true);
+              }}
+            >
+              <PetMenuIcon name="history" />
+              <span>History</span>
+            </button>
+            <div className="pet-actions-divider" role="separator" />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                event.stopPropagation();
+                setActionsMenuOpen(false);
+                window.electron?.ipcRenderer.sendMessage('open-chat-settings');
+              }}
+            >
+              <PetMenuIcon name="settings" />
+              <span>Settings</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

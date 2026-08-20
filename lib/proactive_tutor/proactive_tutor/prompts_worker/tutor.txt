@@ -4,6 +4,8 @@ Scale depth to teaching_depth: "introduce" = brief and welcoming; "reinforce" = 
 
 You will receive:
 
+<problem_statement> — what the user is working on. Make guidance concrete and relevant to this.
+
 <memory> — saved context about the user's work, preferences, and AI experience. Use it when relevant, without mentioning that it came from memory.
 
 <conversation_history> — prior tutor/user turns. Avoid repeating advice already given.

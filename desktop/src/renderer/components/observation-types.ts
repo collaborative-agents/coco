@@ -82,6 +82,8 @@ export interface ObservationEvent {
   ts?: number;
   scenario?: string;
   applying_ai_output?: string;
+  /** Marks an interruption explicitly approved by the sensing-side Judge. */
+  intervention_source?: 'judge';
   /** Stable id of the observer call that produced this event (for feedback joins). */
   observation_id?: string;
   llm_metrics?: LLMCallMetrics;
@@ -149,7 +151,9 @@ export const AI_TOOLS: Record<string, AiToolDef> = {
   grok: { id: 'grok', label: 'Grok', category: 'chatbot', open: { via: 'website', url: 'https://grok.com/' } },
   qwen: { id: 'qwen', label: 'Qwen', category: 'chatbot', open: { via: 'website', url: 'https://chat.qwen.ai/' } },
   // Agents → open a terminal (CLI) or a desktop app
-  'claude-code': { id: 'claude-code', label: 'Claude Code', category: 'agent', open: { via: 'terminal' } },
+  // Claude Code is available through the Claude desktop app. Opening Terminal
+  // here was surprising and left users to launch the actual app themselves.
+  'claude-code': { id: 'claude-code', label: 'Claude Code', category: 'agent', open: { via: 'app', app: 'Claude' } },
   'gemini-cli': { id: 'gemini-cli', label: 'Gemini CLI', category: 'agent', open: { via: 'terminal' } },
   codex: { id: 'codex', label: 'Codex', category: 'agent', open: { via: 'terminal' } },
   opencode: { id: 'opencode', label: 'OpenCode', category: 'agent', open: { via: 'terminal' } },

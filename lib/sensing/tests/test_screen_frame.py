@@ -23,6 +23,34 @@ def test_save_frame_clamps_cursor_box_to_image(tmp_path, position):
         assert saved.size == (100, 80)
 
 
+def test_save_frame_preserves_native_resolution(tmp_path):
+    screen = Screen.__new__(Screen)
+    screen.screens_dir = str(tmp_path)
+
+    async def run_inline(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    screen._run_in_thread = run_inline
+    frame = SimpleNamespace(
+        width=3440,
+        height=1440,
+        rgb=bytes(3440 * 1440 * 3),
+    )
+
+    path, _ = asyncio.run(
+        screen._save_frame(
+            frame,
+            0,
+            0,
+            "resolution",
+            draw_box=False,
+        )
+    )
+
+    with Image.open(path) as saved:
+        assert saved.size == (3440, 1440)
+
+
 def test_mon_for_returns_none_outside_all_monitors():
     monitors = [
         {"left": 0, "top": 0, "width": 100, "height": 100},

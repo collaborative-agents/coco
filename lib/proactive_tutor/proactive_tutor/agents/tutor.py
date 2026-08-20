@@ -49,7 +49,7 @@ def _tool_system_prompt(
 - Use observe_screen only when the user's request requires current visual context, such as "what is on my screen?", "help me with this", or a reference to a visible UI without an attached image.
 - Do not inspect the screen for general questions or when the conversation already contains enough context.
 - focus is a concise description of what visual evidence is needed. The sensing observer receives it as its inspection task.
-- A user-attached image is already visible to you and normally makes observe_screen unnecessary.
+- IMPORTANT: when the current user message includes an attached screenshot, treat that image as the screen state the user deliberately chose to share. Use it as the primary visual context and do not call observe_screen merely to inspect the same content again. Only request a new live-screen observation if the user explicitly asks for an updated/current view after the attachment was captured.
 """
         if enable_screen_tool
         else ""
@@ -375,10 +375,26 @@ class TutorAgent:
         operation: str = "tutor",
         allow_tools: bool = True,
     ) -> tuple[LiteLLMMessage, LLMCallMetrics]:
+        prepared_messages = self._prepare_chat_messages(messages, image_paths)
+        has_audio = any(
+            isinstance(message.get("content"), list)
+            and any(
+                isinstance(block, dict) and block.get("type") == "input_audio"
+                for block in message["content"]
+            )
+            for message in prepared_messages
+        )
         response, metrics = chat_completion(
-            self._prepare_chat_messages(messages, image_paths),
+            prepared_messages,
             model=self.model,
+            # Some hosted models (including InferenceHub's Bedrock Claude)
+            # reject sampling parameters entirely. Defer to the provider's
+            # default instead of forcing chat_completion's legacy 1.0 value.
+            temperature=None,
             max_tokens=8192,
+            reasoning_effort=(
+                "none" if has_audio and self.model.startswith("tinker/") else None
+            ),
             operation=operation,
             on_chunk=on_chunk,
             tools=self._tool_definitions()

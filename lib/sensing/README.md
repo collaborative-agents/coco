@@ -80,7 +80,11 @@ The proactive assistant is built from three independent modules, each answering 
 | **Judge** (text-only LLM) | *Should we interrupt right now, unprompted?* | `progress_detector.py` (`ProgressDetector`) |
 | **Tutor** | *What should we say?* | `lib/proactive_tutor` |
 
-By default (`--enable_judge=False`), the judge does not run and the experience is pull-based: the observer streams observations to the UI, and the user decides when to ask for help. Pass `--enable_judge=True` to turn on the judge as a proactive push layer that fires invites or in-chat nudges when it decides to intervene.
+Before a tutoring session, the observer identifies a meaningful task and can
+offer to start a session, subject to a five-minute cooldown. During an active
+session, `--enable_judge=True` enables the Judge as a filtering layer: only a
+Judge-approved moment becomes a proactive suggestion. The Judge stops when the
+session ends.
 
 #### Observation cadence (`observer_interval_seconds`)
 

@@ -44,12 +44,18 @@ export type Channels =
   | 'session-init'
   | 'start-new-chat-session'
   | 'send-chat-message'
+  | 'send-audio-message'
   | 'chat-stream-event'
   | 'get-chat-conversations'
   | 'save-chat-conversation'
   | 'resume-chat-conversation'
   // Hot-key screen capture → preview thumbnail in the chat input bar
   | 'hotkey-capture'
+  // Full-display image preview shared by pending and sent chat attachments
+  | 'open-image-preview'
+  | 'image-preview'
+  | 'image-preview-ready'
+  | 'close-image-preview'
   // Renderer → main: chat's hot-key listener is mounted; flush buffered captures
   | 'hotkey-capture-ready'
   // Onboarding
@@ -93,12 +99,27 @@ export type Channels =
   | 'get-instant-suggestion'
   // Instant suggestion: act on a revealed suggestion (copy / open tool)
   | 'suggestion-action'
-  // Continue a revealed instant suggestion in Coco's chat
+  // Continue a suggestion in Coco's chat or pre-fill its composer
   | 'chat-about-suggestion'
   // Forwarded to webapp renderer to signal a help-request context
   | 'help-request'
   // Explicit user reaction (bubble engage/dismiss) → sensing /feedback
-  | 'training-feedback';
+  | 'training-feedback'
+  | 'get-coco-sleep-mode'
+  | 'set-coco-sleep-mode'
+  | 'coco-sleep-mode-changed'
+  | 'get-wake-word-settings'
+  | 'set-wake-word-settings'
+  | 'wake-word-settings-changed'
+  | 'wake-word-status'
+  | 'wake-word-audio-frame'
+  | 'wake-word-detected'
+  | 'wake-word-detection-ack'
+  | 'set-wake-word-capture-paused'
+  | 'wake-word-capture-paused-changed'
+  | 'wake-word-capture-status'
+  | 'wake-word-capture-renderer-ready'
+  | 'wake-word-capture-window-ready';
 
 const electronHandler = {
   ipcRenderer: {

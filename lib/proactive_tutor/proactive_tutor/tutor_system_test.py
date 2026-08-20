@@ -7,11 +7,12 @@ uv run python -m pytest proactive_tutor/tutor_system_test.py
 ```
 """
 
+import base64
 import json
 import os
 
 import pytest
-from proactive_tutor.tutor_system import TutorSystem, _RECAP_SYSTEM_PROMPT
+from proactive_tutor.tutor_system import _RECAP_SYSTEM_PROMPT, TutorSystem
 from py_utils.training_recorder import TrainingRecorder
 
 MODEL = "gemini/gemini-3-flash-preview"
@@ -69,6 +70,28 @@ def test_handle_problem_statement():
     assert ts.problem_statement == "Solve the equation: 2x + 5 = 13"
 
 
+def test_user_name_is_injected_into_tutor_context(monkeypatch):
+    monkeypatch.setenv("COCO_USER_NAME", "Ada & Lin")
+
+    everyday = TutorSystem(model_name=MODEL, scenario="everyday_support")
+    everyday_context = everyday._everyday_chat_messages()[0]["content"]
+    assert "<user_name>\nAda &amp; Lin\n</user_name>" in everyday_context
+
+    student = TutorSystem(model_name=MODEL, scenario="student_learning")
+    student.set_user_name("Grace")
+    assert "<user_name>\nGrace\n</user_name>" in student._build_context_prompt()
+
+    student.reset_session()
+    assert student.user_name == "Grace"
+
+    student.set_user_name("")
+    assert "<user_name>" not in student._build_context_prompt()
+
+    monkeypatch.delenv("COCO_USER_NAME", raising=False)
+    unnamed = TutorSystem(model_name=MODEL, scenario="everyday_support")
+    assert "<user_name>" not in unnamed._everyday_chat_messages()[0]["content"]
+
+
 def test_get_kargs():
     """get_kargs returns the expected context dict."""
     ts = _make_tutor_system()
@@ -82,6 +105,19 @@ def test_get_kargs():
     assert kargs["image_num"] == 3
     assert kargs["curriculum_state"] == ts.curriculum_state
     assert kargs["competency_counts"] == ts.competency_counts
+
+
+def test_ai_upskilling_context_keeps_current_task_and_memory():
+    ts = TutorSystem(model_name=MODEL, scenario="ai_upskilling")
+    ts.problem_statement = "Review the payroll spreadsheet"
+    ts.memory = "The user prefers concise instructions."
+
+    context = ts._build_context_prompt(user_text="What should I delegate?")
+
+    assert "<problem_statement>\nReview the payroll spreadsheet" in context
+    assert "<memory>\nThe user prefers concise instructions." in context
+    assert "<user_input" in context
+    assert "What should I delegate?" in context
 
 
 def test_practice_suggestions_use_a_separate_neutral_agent(monkeypatch) -> None:
@@ -420,6 +456,71 @@ def test_restore_conversation_populates_both_history_formats():
     assert len(ts.conversation_history) == 2
     assert "[User]: What should I do first?" in ts.conversation_history[0]
     assert "[Tutor]: Name the project owner." in ts.conversation_history[1]
+
+
+def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tmp_path):
+    ts = _make_tutor_system()
+    ts._chat_messages = [{"role": "user", "content": "Earlier typed context"}]
+    metrics = {
+        "call_id": "audio-call",
+        "operation": "tutor",
+        "model": "inkling",
+        "provider": "tinker",
+        "modality": "vlm",
+        "prompt_tokens": 4,
+        "completion_tokens": 2,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 4,
+        "output_tokens": 2,
+        "total_tokens": 6,
+        "duration_ms": 10,
+        "started_at": 1,
+        "ended_at": 1.01,
+        "success": True,
+        "error": None,
+        "tool_calls": [],
+    }
+    captured = {}
+    wav_header = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + bytes(36)
+    audio_data = base64.b64encode(wav_header).decode("ascii")
+
+    def fake_chat(messages, image_paths=None, on_event=None):
+        captured["messages"] = messages
+        captured["image_paths"] = image_paths
+        captured["on_event"] = on_event
+        return "Here is what I see.", metrics
+
+    monkeypatch.setattr(ts.tutor_agent, "chat_with_metrics", fake_chat)
+    ts._recorder = TrainingRecorder(str(tmp_path), retain_screenshots=False)
+    monkeypatch.setattr("proactive_tutor.tutor_system.time.time", lambda: 1234.5)
+
+    answer, returned_metrics = ts.handle_audio_prompt_with_metrics(
+        audio_data,
+        session_id="audio-session",
+    )
+
+    assert answer == "Here is what I see."
+    assert returned_metrics is metrics
+    assert captured["messages"][-2] == {
+        "role": "user",
+        "content": "Earlier typed context",
+    }
+    assert captured["messages"][-1]["content"][0]["type"] == "input_audio"
+    assert captured["messages"][-1]["content"][0]["input_audio"]["data"] == audio_data
+    assert ts._chat_messages[-2:] == [
+        {"role": "user", "content": "[Voice message]"},
+        {"role": "assistant", "content": "Here is what I see."},
+    ]
+    assert audio_data not in json.dumps(ts._chat_messages)
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "tutor_calls.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["trigger"] == "audio_prompt"
+    assert rows[0]["session_id"] == "audio-session"
+    assert rows[0]["ts"] == 1234.5
 
 
 if __name__ == "__main__":

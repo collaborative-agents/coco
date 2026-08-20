@@ -258,9 +258,11 @@ def test_tutor_executes_memory_mcp_and_synthesizes_answer(monkeypatch) -> None:
 
 def test_tutor_skips_tool_loop_when_disabled(monkeypatch) -> None:
     calls: list[list[dict]] = []
+    completion_kwargs: list[dict] = []
 
     def fake_completion(messages, **kwargs):
         calls.append([dict(message) for message in messages])
+        completion_kwargs.append(kwargs)
         return _text_response("final guidance"), _metrics("single-call")
 
     monkeypatch.setattr(tutor_module, "chat_completion", fake_completion)
@@ -280,6 +282,7 @@ def test_tutor_skips_tool_loop_when_disabled(monkeypatch) -> None:
 
     assert response == "final guidance"
     assert len(calls) == 1
+    assert completion_kwargs[0]["temperature"] is None
     assert calls[0][0]["content"] == (
         "base system\n\n<current_datetime>2026-07-23T12:34:56-07:00</current_datetime>"
     )
@@ -310,6 +313,40 @@ def test_chat_does_not_observe_screen_without_tool_call(monkeypatch) -> None:
 
     assert response == "A direct answer needs no screen context."
     assert metrics["tool_calls"] == []
+
+
+def test_attached_screenshot_prompt_discourages_duplicate_capture(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    captured: dict = {}
+    image_path = tmp_path / "hotkey.png"
+    image_path.write_bytes(b"screenshot")
+
+    def fake_chat(messages, **kwargs):
+        captured["messages"] = messages
+        captured["tools"] = kwargs.get("tools")
+        return _text_response("I will use the attached screenshot."), _metrics(
+            "attached-image"
+        )
+
+    monkeypatch.setattr(tutor_module, "chat_completion", fake_chat)
+    agent = TutorAgent("test-model", "base system")
+
+    response, _ = agent.chat_with_metrics(
+        [{"role": "user", "content": "Help with this UI."}],
+        image_paths=[str(image_path)],
+    )
+
+    assert response == "I will use the attached screenshot."
+    system_prompt = captured["messages"][0]["content"]
+    assert (
+        "treat that image as the screen state the user deliberately chose"
+        in system_prompt
+    )
+    assert "do not call observe_screen" in system_prompt
+    tool_names = {tool["function"]["name"] for tool in captured["tools"]}
+    assert "observe_screen" in tool_names
 
 
 def test_chat_memory_tool_loop_keeps_exchange_as_separate_messages(

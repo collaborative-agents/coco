@@ -153,4 +153,28 @@ describe('model configuration', () => {
       'hosted_vllm/thinkingmachines/inkling',
     );
   });
+
+  it('routes an Inkling tutor through Tinker with a tutor-scoped key', () => {
+    const config = validateModelConfiguration({
+      sensing,
+      tutors: [
+        {
+          id: 'voice',
+          label: 'Voice tutor',
+          provider: 'tinker',
+          model: 'thinkingmachines/Inkling-Small:peft:262144',
+        },
+      ],
+      defaultTutorId: 'voice',
+    });
+    const { sensingEnv, tutorEnv } = buildRoleModelEnvironments(config, {
+      'tutor:tinker': 'tinker-secret',
+    });
+
+    expect(config.tutors[0].model).toBe(
+      'tinker/thinkingmachines/Inkling-Small:peft:262144',
+    );
+    expect(tutorEnv.TINKER_API_KEY).toBe('tinker-secret');
+    expect(sensingEnv).not.toHaveProperty('TINKER_API_KEY');
+  });
 });

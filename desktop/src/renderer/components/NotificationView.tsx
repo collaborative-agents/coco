@@ -5,6 +5,10 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import type { InstantSuggestion } from './observation-types';
+import {
+  buildFrameworkOverview,
+  frameworkNavigationLabel,
+} from './framework-overview';
 
 type VizState = 'none' | 'success' | 'error';
 type NotifType =
@@ -42,13 +46,6 @@ function preferredSuggestionTool(suggestion: InstantSuggestion) {
     (suggestion.availableTools ?? []).find(
       (tool) => tool.id === suggestion.targetTool,
     ) ?? suggestion.availableTools?.[0]
-  );
-}
-
-function usesStageTaskRules(suggestion: InstantSuggestion): boolean {
-  const prompt = suggestion.prompt ?? '';
-  return ['Stage', 'Task', 'Rules'].every((label) =>
-    new RegExp(`(^|\\n)\\s*${label}\\s*:`, 'i').test(prompt),
   );
 }
 
@@ -199,6 +196,7 @@ export function NotificationBubble({
   suggestion,
   onSuggestionAction,
   onChatAboutSuggestion,
+  onOpenCocoChat,
   suggestionRating,
   onRateSuggestion,
   copyConfirmed,
@@ -208,6 +206,7 @@ export function NotificationBubble({
   showFrameworkIntro,
   frameworkPage = 0,
   onFrameworkPageChange,
+  rawObservation,
 }: {
   message: string;
   actionLabel?: string;
@@ -220,6 +219,7 @@ export function NotificationBubble({
   suggestion?: InstantSuggestion;
   onSuggestionAction?: (toolId: string | null) => void;
   onChatAboutSuggestion?: () => void;
+  onOpenCocoChat?: () => void;
   suggestionRating?: 'up' | 'down' | null;
   onRateSuggestion?: (rating: 'up' | 'down') => void;
   copyConfirmed?: boolean;
@@ -229,6 +229,7 @@ export function NotificationBubble({
   showFrameworkIntro?: boolean;
   frameworkPage?: 0 | 1;
   onFrameworkPageChange?: (page: 0 | 1) => void;
+  rawObservation?: string;
 }) {
   const isPrompt =
     notifType === 'session-start-prompt' || notifType === 'session-end-prompt';
@@ -241,9 +242,13 @@ export function NotificationBubble({
   const suggestedTool = suggestion
     ? preferredSuggestionTool(suggestion)
     : undefined;
-  const hasStageTaskRules = suggestion
-    ? usesStageTaskRules(suggestion)
-    : false;
+  const frameworkOverview = suggestion
+    ? buildFrameworkOverview(
+        suggestion,
+        suggestionToolLabel(suggestion),
+        rawObservation,
+      )
+    : null;
 
   // For default pause-event guidance, truncate to a short preview so the
   // card doesn't overflow with a multi-paragraph response.
@@ -302,34 +307,14 @@ export function NotificationBubble({
           <div className="toast-framework-overview">
             <div className="toast-framework-eyebrow">4D framework</div>
             <div className="toast-framework-heading">
-              Turn this task into a clear AI handoff
+              {frameworkOverview?.heading}
             </div>
-            <div className="toast-framework-concept">
-              <span className="toast-framework-term">Delegation</span>
-              <span>
-                Choose what AI should handle. This task can be handed off to{' '}
-                <strong>{suggestionToolLabel(suggestion)}</strong>.
-              </span>
-            </div>
-            <div className="toast-framework-concept">
-              <span className="toast-framework-term">Description</span>
-              <span>
-                {hasStageTaskRules ? (
-                  <>
-                    This prompt uses <strong>Stage</strong> for context,{' '}
-                    <strong>Task</strong> for the result you want, and{' '}
-                    <strong>Rules</strong> for important requirements. The next
-                    page shows all three parts.
-                  </>
-                ) : (
-                  <>
-                    Tell AI what you are working on, the result you want, and
-                    any important requirements. The next page gives you a
-                    prompt you can review and adapt.
-                  </>
-                )}
-              </span>
-            </div>
+            {frameworkOverview?.concepts.map((concept) => (
+              <div className="toast-framework-concept" key={concept.term}>
+                <span className="toast-framework-term">{concept.term}</span>
+                <span>{concept.explanation}</span>
+              </div>
+            ))}
           </div>
         ) : (
           <div className="toast-message toast-markdown">
@@ -369,13 +354,21 @@ export function NotificationBubble({
                   suggestionRating === rating ? ' is-rated' : ''
                 }`}
                 aria-label={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
-                disabled={suggestionRating != null}
+                disabled={suggestionRating === rating}
                 onClick={() => onRateSuggestion?.(rating)}
               >
                 {rating === 'up' ? '👍' : '👎'}
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            className="toast-action toast-coco-chat-action"
+            onClick={onOpenCocoChat}
+            autoFocus
+          >
+            Open Coco Chat
+          </button>
           <button
             type="button"
             className="toast-action"
@@ -416,7 +409,7 @@ export function NotificationBubble({
                     aria-label={
                       rating === 'up' ? 'Good suggestion' : 'Not helpful'
                     }
-                    disabled={suggestionRating != null}
+                    disabled={suggestionRating === rating}
                     onClick={() => onRateSuggestion?.(rating)}
                   >
                     {rating === 'up' ? '👍' : '👎'}
@@ -449,9 +442,7 @@ export function NotificationBubble({
           <button
             type="button"
             className="toast-framework-arrow"
-            aria-label={frameworkPage === 0
-              ? 'Show Description suggestion'
-              : 'Back to Delegation and Description overview'}
+            aria-label={frameworkNavigationLabel(suggestion, frameworkPage)}
             onClick={() => onFrameworkPageChange?.(frameworkPage === 0 ? 1 : 0)}
           >
             {frameworkPage === 0 ? '→' : '←'}
@@ -530,12 +521,13 @@ export default function NotificationView() {
 
   const rateInstantSuggestion = (rating: 'up' | 'down') => {
     if (
-      suggestionRating ||
+      suggestionRating === rating ||
       !payload.observationId ||
       !payload.suggestion
     ) {
       return;
     }
+    const previousRating = suggestionRating;
     setSuggestionRating(rating);
     const ratedAt = Math.floor(Date.now() / 1000);
     ipc?.sendMessage('activity-support-rated', {
@@ -545,6 +537,7 @@ export default function NotificationView() {
     });
     ipc?.sendMessage('training-feedback', {
       kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
+      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
       surface: 'notification',
       observation_id: payload.observationId,
       status: payload.status,
@@ -709,6 +702,20 @@ export default function NotificationView() {
     window.close();
   };
 
+  const handleOpenCocoChat = () => {
+    if (!payload.suggestion) return;
+    ipc?.sendMessage('chat-about-suggestion', {
+      observationId: payload.observationId,
+      status: payload.status,
+      rawObservation: payload.rawObservation,
+      suggestion: payload.suggestion,
+      surface: 'notification',
+      copyPromptToInput: true,
+    });
+    setVisible(false);
+    window.close();
+  };
+
   return (
     <div className="notification-root">
       <NotificationBubble
@@ -723,6 +730,7 @@ export default function NotificationView() {
         suggestion={payload.suggestion}
         onSuggestionAction={handleSuggestionAction}
         onChatAboutSuggestion={handleChatAboutSuggestion}
+        onOpenCocoChat={handleOpenCocoChat}
         suggestionRating={suggestionRating}
         onRateSuggestion={rateInstantSuggestion}
         copyConfirmed={copyConfirmed}
@@ -734,6 +742,7 @@ export default function NotificationView() {
         }
         frameworkPage={frameworkPage}
         onFrameworkPageChange={handleFrameworkPageChange}
+        rawObservation={payload.rawObservation}
       />
     </div>
   );

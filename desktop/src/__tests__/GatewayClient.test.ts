@@ -82,6 +82,7 @@ describe('CocoGatewayClient', () => {
       'session-1',
       'user_message',
       new Date('2026-08-05T10:00:00.000Z'),
+      'Please help me review this spreadsheet.',
     );
     await client.endSession('session-1', {
       endedAt: new Date('2026-08-05T10:15:00.000Z'),
@@ -97,6 +98,7 @@ describe('CocoGatewayClient', () => {
       user_id: 'user-1',
       started_at: '2026-08-05T10:00:00.000Z',
       start_trigger: 'user_message',
+      start_message: 'Please help me review this spreadsheet.',
     });
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toEqual({
       ended_at: '2026-08-05T10:15:00.000Z',
@@ -126,6 +128,7 @@ describe('CocoGatewayClient', () => {
         'session-1',
         'proactive_suggestion',
         new Date('2026-08-05T10:00:00.000Z'),
+        'Use Claude to summarize this document.',
       );
     } finally {
       if (previousTutorModel === undefined) delete process.env.TUTOR_MODEL;
@@ -140,6 +143,7 @@ describe('CocoGatewayClient', () => {
       user_id: 'user-1',
       started_at: '2026-08-05T10:00:00.000Z',
       start_trigger: 'proactive_suggestion',
+      start_message: 'Use Claude to summarize this document.',
       tutor_model: 'provider/tutor-model',
       observer_model: 'provider/observer-model',
     });

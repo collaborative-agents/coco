@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Build the sensing and tutor executables into one shared onedir bundle."""
+"""Build Coco's Python services into one shared onedir bundle."""
 
 import platform
 from pathlib import Path
@@ -13,6 +13,7 @@ TUTOR_ENTRY = (
     ROOT / "lib" / "proactive_tutor" / "proactive_tutor" / "packaged_entrypoint.py"
 )
 SENSING_ENTRY = ROOT / "lib" / "sensing" / "sensing" / "sensing_server.py"
+WAKE_WORD_ENTRY = ROOT / "lib" / "sensing" / "sensing" / "wake_word_worker.py"
 
 COMMON_HIDDEN_IMPORTS = [
     # uvicorn internals
@@ -61,6 +62,13 @@ SENSING_HIDDEN_IMPORTS = COMMON_HIDDEN_IMPORTS + [
     "mss",
 ]
 
+WAKE_WORD_HIDDEN_IMPORTS = [
+    "sensing",
+    "numpy",
+    "sherpa_onnx",
+    "sherpa_onnx.lib._sherpa_onnx",
+]
+
 if platform.system() == "Darwin":
     SENSING_HIDDEN_IMPORTS += [
         "Quartz",
@@ -96,6 +104,9 @@ tutor_datas += collect_data_files("litellm")
 sensing_datas = collect_data_files("sensing")
 sensing_datas += collect_data_files("litellm")
 
+wake_word_datas = collect_data_files("sensing")
+wake_word_datas += collect_data_files("sherpa_onnx")
+
 tutor = Analysis(
     [str(TUTOR_ENTRY)],
     pathex=[str(ROOT)],
@@ -124,8 +135,23 @@ sensing = Analysis(
     optimize=0,
 )
 
+wake_word = Analysis(
+    [str(WAKE_WORD_ENTRY)],
+    pathex=[str(ROOT)],
+    binaries=collect_dynamic_libs("sherpa_onnx"),
+    datas=wake_word_datas,
+    hiddenimports=WAKE_WORD_HIDDEN_IMPORTS,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["pandas"],
+    noarchive=False,
+    optimize=0,
+)
+
 tutor_pyz = PYZ(tutor.pure)
 sensing_pyz = PYZ(sensing.pure)
+wake_word_pyz = PYZ(wake_word.pure)
 
 tutor_exe = EXE(
     tutor_pyz,
@@ -163,16 +189,37 @@ sensing_exe = EXE(
     entitlements_file=None,
 )
 
+wake_word_exe = EXE(
+    wake_word_pyz,
+    wake_word.scripts,
+    [],
+    exclude_binaries=True,
+    name="wake-word-worker",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
 # A single COLLECT gives both executables one shared _internal directory. Files
 # with the same destination (Python, LiteLLM, Pillow, NumPy, and so on) are
 # collected only once.
 bundle = COLLECT(
     tutor_exe,
     sensing_exe,
+    wake_word_exe,
     tutor.binaries,
     tutor.datas,
     sensing.binaries,
     sensing.datas,
+    wake_word.binaries,
+    wake_word.datas,
     strip=False,
     upx=True,
     upx_exclude=[],

@@ -17,6 +17,7 @@ def test_connection_uses_tiny_multimodal_request(monkeypatch) -> None:
 
     assert model_connection_test.test_connection("gemini/test-model", True) == "OK"
     assert captured["max_tokens"] == 8
+    assert captured["temperature"] is None
     content = captured["messages"][0]["content"]
     assert content[0] == {"type": "text", "text": "Reply only OK."}
     assert content[1]["type"] == "image_url"

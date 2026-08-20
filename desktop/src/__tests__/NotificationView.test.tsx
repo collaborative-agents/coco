@@ -282,7 +282,30 @@ describe('instant suggestion actions', () => {
     expect(onChat).toHaveBeenCalledTimes(1);
   });
 
-  it('offers to continue a delegated suggestion in chat', () => {
+  it('keeps the opposite rating available for a correction', () => {
+    const onRate = jest.fn();
+    render(
+      <NotificationBubble
+        message="Try a smaller example"
+        actionLabel="Copy"
+        notifType="instant-suggestion"
+        suggestion={contentSuggestion}
+        suggestionRating="up"
+        onRateSuggestion={onRate}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Good suggestion' }),
+    ).toBeDisabled();
+    const bad = screen.getByRole('button', { name: 'Not helpful' });
+    expect(bad).toBeEnabled();
+    fireEvent.click(bad);
+    expect(onRate).toHaveBeenCalledWith('down');
+  });
+
+  it('offers Coco Chat as the default delegation destination', () => {
+    const onOpenCocoChat = jest.fn();
     const onChat = jest.fn();
     render(
       <NotificationBubble
@@ -299,6 +322,7 @@ describe('instant suggestion actions', () => {
             { id: 'claude-code', label: 'Claude Code', category: 'agent' },
           ],
         }}
+        onOpenCocoChat={onOpenCocoChat}
         onChatAboutSuggestion={onChat}
       />,
     );
@@ -311,6 +335,10 @@ describe('instant suggestion actions', () => {
     expect(
       screen.queryByRole('button', { name: 'Open Claude Cowork' }),
     ).not.toBeInTheDocument();
+    const coco = screen.getByRole('button', { name: 'Open Coco Chat' });
+    expect(coco).toHaveClass('toast-coco-chat-action');
+    fireEvent.click(coco);
+    expect(onOpenCocoChat).toHaveBeenCalledTimes(1);
   });
 
   it('shows the 4D overview before an AI-upskilling suggestion', () => {
@@ -321,9 +349,11 @@ describe('instant suggestion actions', () => {
         notifType="proactive-suggestion"
         suggestion={{
           kind: 'delegate',
-          title: 'Ask an AI tool',
-          prompt: 'Explain this error.',
-          copyText: 'Explain this error.',
+          title: 'Description: diagnose the failed build',
+          prompt:
+            'Stage: A GitHub Actions packaging job failed on an M-chip Mac.\nTask: Diagnose the console error and identify the likely cause.\nRules: Use the visible error evidence and do not suggest deleting user data.',
+          copyText:
+            'Stage: A GitHub Actions packaging job failed on an M-chip Mac.\nTask: Diagnose the console error and identify the likely cause.\nRules: Use the visible error evidence and do not suggest deleting user data.',
           targetTool: 'chatgpt',
           availableTools: [
             { id: 'chatgpt', label: 'ChatGPT', category: 'chatbot' },
@@ -337,12 +367,49 @@ describe('instant suggestion actions', () => {
 
     expect(screen.getByText('Delegation')).toBeInTheDocument();
     expect(screen.getByText('Description')).toBeInTheDocument();
-    expect(screen.getByText(/the result you want/)).toBeInTheDocument();
-    expect(screen.queryByText('Explain this error.')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Diagnose the console error and identify the likely cause/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /GitHub Actions packaging job failed.*visible error evidence/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/^Stage: A GitHub Actions packaging job failed/),
+    ).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole('button', { name: 'Show Description suggestion' }),
     );
     expect(onPageChange).toHaveBeenCalledWith(1);
+  });
+
+  it('grounds a Discernment overview in the current suggestion', () => {
+    render(
+      <NotificationBubble
+        message="Check the generated command"
+        notifType="proactive-suggestion"
+        suggestion={{
+          kind: 'content',
+          title: 'Discernment: verify before running',
+          body: 'Before running the generated Git command, verify the target repository and branch, then check that it will not overwrite unrelated work.',
+          copyText:
+            'Before running the generated Git command, verify the target repository and branch, then check that it will not overwrite unrelated work.',
+        }}
+        showFrameworkIntro
+      />,
+    );
+
+    expect(screen.getByText('Discernment')).toBeInTheDocument();
+    expect(screen.queryByText('Delegation')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/verify the target repository and branch/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Show coaching suggestion' }),
+    ).toBeInTheDocument();
   });
 
   it('uses a left arrow to return from the Description suggestion', () => {
@@ -464,7 +531,7 @@ describe('interactive notification locking', () => {
       { open: true },
     );
     expect(
-      screen.getByRole('button', { name: 'Show Description suggestion' }),
+      screen.getByRole('button', { name: 'Show coaching suggestion' }),
     ).toBeInTheDocument();
   });
 });

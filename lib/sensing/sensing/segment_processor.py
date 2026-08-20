@@ -27,6 +27,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 
 import httpx
@@ -404,7 +405,7 @@ class SnapshotBuffer:
 
 
 class HotKeyBuffer:
-    """Session-persistent buffer of user-flagged screenshots (Cmd+Shift+H captures).
+    """Session-persistent buffer of user-flagged screenshots (hotkey captures).
 
     Unlike ``SnapshotBuffer`` (rolling, auto-managed), captures here are kept
     for the entire session and are never deleted by the sensing pipeline — they
@@ -588,6 +589,11 @@ class AiTutoringProcessor(SegmentProcessor):
         self._observer_model = observer_model
         self._scenario = scenario
         self._memory_engine = memory_engine
+        self._user_name = (
+            getattr(memory_engine, "user_name", None)
+            or os.environ.get("COCO_USER_NAME")
+            or ""
+        ).strip()
         self._memory_session_id: str | None = None
         # Per-session observer prompt (can be updated via set_scenario).
         self._observer_prompt: str = _load_observer_prompt(scenario)
@@ -746,6 +752,7 @@ class AiTutoringProcessor(SegmentProcessor):
         observation_id: str | None = None,
         llm_metrics: dict | None = None,
         image_paths: list[str] | None = None,
+        intervention_source: str | None = None,
     ) -> None:
         if not self._obs_subscribers:
             return
@@ -767,11 +774,20 @@ class AiTutoringProcessor(SegmentProcessor):
         # without needing to parse the raw JSON itself.
         task_label = _extract_task_label(observation)
 
-        # NOTE: the pre-session "task_suggested" invite is no longer decided here.
-        # All proactive fires — invites (no active session) and in-chat nudges
-        # (active session) — are now owned by the ProgressDetector judge, which
-        # calls ``broadcast_invite`` when it decides to invite. This keeps a
-        # single decision path and one set of timing/cooldown knobs.
+        # Match the monorepo session flow: before a tutoring session exists,
+        # the observer identifies a meaningful task and emits the invitation.
+        # The Judge is reserved for filtering interventions *inside* an active
+        # session. Keep a sensing-side cooldown in addition to the desktop UI's
+        # cooldown so reconnecting SSE clients cannot cause invitation spam.
+        if (
+            not self._session_active
+            and status not in ("observing",)
+            and task_label is not None
+        ):
+            now = time.time()
+            if now - self._last_suggestion_ts >= _TASK_SUGGESTION_COOLDOWN_S:
+                self._last_suggestion_ts = now
+                status = "task_suggested"
 
         applying_ai_output = _extract_applying_ai_output(observation)
 
@@ -792,45 +808,14 @@ class AiTutoringProcessor(SegmentProcessor):
             event["task_label"] = task_label
         if applying_ai_output is not None:
             event["applying_ai_output"] = applying_ai_output
+        if intervention_source:
+            event["intervention_source"] = intervention_source
 
         for q in self._obs_subscribers:
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
                 # Drop the oldest event to make room for the newest.
-                try:
-                    q.get_nowait()
-                    q.put_nowait(event)
-                except (asyncio.QueueEmpty, asyncio.QueueFull):
-                    pass
-
-    def broadcast_invite(
-        self,
-        observation: str,
-        task_label: str,
-        image_paths: list[str] | None = None,
-    ) -> None:
-        """Emit a pre-session invite as a ``task_suggested`` observation event.
-
-        Called by the ProgressDetector when the judge decides to proactively
-        speak up while no session is active. The Electron UI listens for
-        ``status == "task_suggested"`` and shows the "start a session?" bubble.
-        Firing/timing is owned by the judge, so there is no rate-limit here.
-        """
-        event = {
-            "type": "invite",
-            "observation": observation,
-            "status": "task_suggested",
-            "ts": time.time(),
-            "scenario": self._scenario,
-            "task_label": task_label,
-        }
-        if image_paths:
-            event["image_paths"] = image_paths
-        for q in self._obs_subscribers:
-            try:
-                q.put_nowait(event)
-            except asyncio.QueueFull:
                 try:
                     q.get_nowait()
                     q.put_nowait(event)
@@ -1072,7 +1057,9 @@ class AiTutoringProcessor(SegmentProcessor):
     ) -> tuple[str, str, LLMCallMetrics]:
         from datetime import datetime as _dt
 
-        text = await self._build_context_prompt()
+        user_name_block = self._user_name_context_block()
+        text = f"{user_name_block}\n\n" if user_name_block else ""
+        text += await self._build_context_prompt()
         # In-context memory: recent observations + how the user reacted, so the
         # observer doesn't re-raise a suggestion the user just dismissed.
         recent_block = self._recent_observations_block(n=3)
@@ -1099,9 +1086,11 @@ class AiTutoringProcessor(SegmentProcessor):
             )
             text_prompt += (
                 f'\n<screenshots type="hotkey">\n'
-                f"The user explicitly flagged {len(hk_paths)} screenshot(s) using "
-                f"the hot-key shortcut (Cmd+Shift+H). These represent the specific "
-                f"UI state the user wants guidance on. Images appear after the "
+                f"IMPORTANT IMAGE PROVENANCE: the user explicitly captured "
+                f"{len(hk_paths)} screenshot(s) using the hot-key shortcut "
+                f"(Cmd+Shift+Space). These are deliberate user-selected captures, "
+                f"not periodic background screenshots. Treat them as the primary "
+                f"visual reference for the user's request. They appear after the "
                 f"current-state snapshots in the order listed below.\n"
                 f"{hk_lines}\n"
                 f"</screenshots>"
@@ -1200,6 +1189,12 @@ class AiTutoringProcessor(SegmentProcessor):
             image_paths=suggestion_image_paths,
         )
         return obs, text, metrics
+
+    def _user_name_context_block(self) -> str:
+        """Build the observer prompt block containing the preferred user name."""
+        if not self._user_name:
+            return ""
+        return f"<user_name>\n{escape(self._user_name)}\n</user_name>"
 
     @staticmethod
     def _cleanup_consumed_screenshots(image_paths: list[str]) -> None:
@@ -1314,13 +1309,23 @@ class AiTutoringProcessor(SegmentProcessor):
             conv, problem, memory = [], "", ""
 
         conv_block = "\n".join(conv) if conv else "(no conversation history yet)"
-        # Student-tutoring scenarios carry a real problem the user is solving; the
-        # worker/everyday product scenarios instead carry long-term personalized
-        # memory (empty until a personalization/self-evolvement layer fills it).
+        # Preserve the monorepo's current-task anchor for AI Upskilling. Memory
+        # can personalize the observer, but must not replace the active session's
+        # problem statement.
         if self._scenario in ("student_learning", "cs224n"):
-            ctx_block = f"<problem_statement>\n{problem}\n</problem_statement>"
+            context_blocks = [
+                f"<problem_statement>\n{problem}\n</problem_statement>"
+            ]
+        elif self._scenario == "ai_upskilling":
+            context_blocks = [
+                f"<problem_statement>\n{problem}\n</problem_statement>",
+                f"<memory>\n{memory or '(no memory yet)'}\n</memory>",
+            ]
         else:
-            ctx_block = f"<memory>\n{memory or '(no memory yet)'}\n</memory>"
+            context_blocks = [
+                f"<memory>\n{memory or '(no memory yet)'}\n</memory>"
+            ]
+        ctx_block = "\n\n".join(context_blocks)
         return (
             f"{ctx_block}\n\n"
             f"<conversation_history>\n{conv_block}\n</conversation_history>\n\n"

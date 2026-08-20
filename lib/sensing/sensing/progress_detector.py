@@ -441,34 +441,20 @@ class ProgressDetector:
             f"(elapsed={elapsed:.0f}s, consecutive_struggle={self._consecutive_struggle})"
         )
 
-        # 3. Gather context. All proactive fires go through this one judge:
-        #    when a session is active the fire becomes an in-chat nudge; when
-        #    none is active it becomes an invite to start one. So pre-session we
-        #    do NOT require a problem statement — the judge decides whether the
-        #    current activity is worth proactively offering help for.
-        session_active = getattr(self._ai_processor, "_session_active", False)
-        if session_active:
-            (
-                problem_statement,
-                conversation_history,
-                curriculum_state,
-                competency_counts,
-            ) = await self._get_context()
-            if not problem_statement:
-                logger.info(
-                    "ProgressDetector: skipping tick — no problem statement available from tutor /context"
-                )
-                return
-        else:
-            # Pre-session (invite mode): no problem statement / conversation yet.
-            problem_statement = (
-                "(No active session yet. The user has not opted into help. Decide "
-                "whether the current activity is a clearly valuable moment to "
-                "proactively offer assistance — if so, set should_intervene=true and "
-                "this will invite the user to start a session. Hold a higher bar than "
-                "for an ongoing session, since an unsolicited invite is more costly.)"
+        # 3. Match the monorepo flow: the Judge only runs for an active tutor
+        # session, where a problem statement and conversation context exist.
+        # Pre-session invitations are emitted by the observer instead.
+        (
+            problem_statement,
+            conversation_history,
+            curriculum_state,
+            competency_counts,
+        ) = await self._get_context()
+        if not problem_statement:
+            logger.info(
+                "ProgressDetector: skipping tick — no problem statement available from tutor /context"
             )
-            conversation_history, curriculum_state, competency_counts = [], {}, {}
+            return
 
         # 4. Pull the rolling observer-output buffer from the AI processor.
         recent_obs = self._ai_processor.recent_observations(
@@ -507,14 +493,6 @@ class ProgressDetector:
             e.get("observation_id") for e in recent_obs if e.get("observation_id")
         ]
 
-        # For an invite (no active session) we need a task label for the
-        # "start a session?" prompt — pull it from the fresh observation.
-        task_label: str | None = None
-        if not session_active and fresh_obs:
-            from sensing.segment_processor import _extract_task_label  # avoid cycle
-
-            task_label = _extract_task_label(fresh_obs)
-
         # 6. Build prompt and ask the judge.
         user_text = self._build_judge_user_prompt(
             problem_statement=problem_statement,
@@ -537,7 +515,7 @@ class ProgressDetector:
             judge_input=user_text,
             fresh_observation_id=fresh_observation_id,
             history_observation_ids=history_observation_ids,
-            phase="nudge" if session_active else "invite",
+            phase="nudge",
         )
         await self._apply_judgment(
             now,
@@ -545,9 +523,6 @@ class ProgressDetector:
             image_path="",
             timestamp=None,
             decision_id=decision_id,
-            session_active=session_active,
-            task_label=task_label,
-            fresh_obs=fresh_obs,
         )
 
     # ------------------------------------------------------------------
@@ -692,9 +667,6 @@ class ProgressDetector:
         image_path: str,
         timestamp: str | None,
         decision_id: str | None = None,
-        session_active: bool = True,
-        task_label: str | None = None,
-        fresh_obs: str = "",
     ) -> None:
         # The judge reasons over an observation-history window, so it is
         # already temporally aware — a single should_intervene=True verdict
@@ -717,20 +689,11 @@ class ProgressDetector:
             )
             return
 
-        if session_active:
-            logger.info(
-                f"ProgressDetector: firing nudge "
-                f"(trigger_type={judgment.trigger_type}) — {judgment.evidence}"
-            )
-            await self._fire(judgment, image_path, timestamp, decision_id=decision_id)
-        else:
-            logger.info(
-                f"ProgressDetector: firing invite "
-                f"(trigger_type={judgment.trigger_type}) — {judgment.evidence}"
-            )
-            await self._fire_invite(
-                judgment, task_label, fresh_obs, decision_id=decision_id
-            )
+        logger.info(
+            f"ProgressDetector: firing nudge "
+            f"(trigger_type={judgment.trigger_type}) — {judgment.evidence}"
+        )
+        await self._fire(judgment, image_path, timestamp, decision_id=decision_id)
         self._last_fire_ts = now
         self._consecutive_struggle = 0
 
@@ -775,6 +738,7 @@ class ProgressDetector:
             obs,
             llm_metrics=metrics,
             image_paths=suggestion_image_paths,
+            intervention_source="judge",
         )
 
         payload = {
@@ -803,51 +767,6 @@ class ProgressDetector:
                 struggle_category=judgment.struggle_category,
                 observation=obs,
                 phase="nudge",
-            )
-
-    async def _fire_invite(
-        self,
-        judgment: ProgressJudgment,
-        task_label: str | None,
-        fresh_obs: str,
-        decision_id: str | None = None,
-    ) -> None:
-        """Surface a pre-session INVITE: prompt the user to start a session.
-
-        Unlike ``_fire`` (which goes through the tutor to produce in-chat
-        guidance), an invite has no session/tutor context yet — it emits a
-        ``task_suggested`` observation event that the Electron UI turns into a
-        "want me to help?" bubble. Accepting it starts a session through the
-        normal flow, so conversation history / memory are managed as usual.
-        """
-        ai = self._ai_processor
-        obs = fresh_obs or judgment.evidence
-        label = task_label
-        if not label:
-            from sensing.segment_processor import _extract_task_label  # avoid cycle
-
-            label = _extract_task_label(obs) or "working on something"
-
-        ai.broadcast_invite(
-            observation=obs,
-            task_label=label,
-            image_paths=getattr(ai, "_last_observation_image_paths", []),
-        )
-        logger.info(
-            f"ProgressDetector: fired INVITE — task_label={label!r} "
-            f"evidence={judgment.evidence!r}"
-        )
-
-        recorder = getattr(ai, "_recorder", None)
-        if recorder is not None and decision_id is not None:
-            recorder.log_episode(
-                decision_id=decision_id,
-                ts=time.time(),
-                trigger_reason=judgment.trigger_type,
-                evidence=judgment.evidence,
-                struggle_category=judgment.struggle_category,
-                observation=obs,
-                phase="invite",
             )
 
     # ------------------------------------------------------------------

@@ -241,6 +241,58 @@ describe('deferred suggestion context', () => {
     });
   });
 
+  it('shows sleep state without checking intentionally stopped services', async () => {
+    const listeners = new Map<string, (...args: any[]) => void>();
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-coco-sleep-mode') return { sleeping: true };
+      if (channel === 'get-service-health') {
+        const service = {
+          connected: true,
+          status: 'healthy',
+          modelAssessment: { status: 'verified', detail: 'Connected.' },
+        };
+        return { checkedAt: Date.now(), sensing: service, tutor: service };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (...args: any[]) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+
+    expect(
+      await screen.findByRole('status', { name: 'Sleeping' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Settings'));
+    expect(
+      screen.getByText(
+        'Sleeping intentionally stops the sensing server and tutor agent.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      invoke.mock.calls.filter(([channel]) => channel === 'get-service-health'),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      listeners.get('coco-sleep-mode-changed')?.({ sleeping: false });
+    });
+    await waitFor(() => {
+      expect(
+        invoke.mock.calls.filter(
+          ([channel]) => channel === 'get-service-health',
+        ),
+      ).toHaveLength(1);
+    });
+  });
+
   it('shows missing model configuration in the chat header', async () => {
     const invoke = jest.fn(async (channel: string) => {
       if (channel === 'get-service-health') {
@@ -626,6 +678,40 @@ describe('deferred suggestion context', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('places an Open Coco Chat delegation prompt in the chat input', () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const invoke = jest.fn(async () => null);
+
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+
+    act(() => {
+      listeners.get('help-request')?.({
+        phrase: 'Ask an AI tool',
+        rawObservation: 'The user encountered an error.',
+        initialInput: 'Explain this error and suggest a fix.',
+      });
+    });
+
+    expect(screen.getByPlaceholderText(/Ask the tutor/)).toHaveValue(
+      'Explain this error and suggest a fix.',
+    );
+    expect(invoke).not.toHaveBeenCalledWith(
+      'send-chat-message',
+      expect.anything(),
+    );
+  });
+
   it('renders streamed text and tool-call lifecycle events in one reply', async () => {
     const listeners = new Map<string, (data: any) => void>();
     let requestId = '';
@@ -819,7 +905,6 @@ describe('deferred suggestion context', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: /Suggest tasks for me/ }),
     );
-
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith(
         'send-chat-message',
@@ -858,5 +943,90 @@ describe('deferred suggestion context', () => {
     expect(
       screen.queryByRole('button', { name: '✓ Finish' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('opens desktop previews for pending and sent image attachments', async () => {
+    const listeners = new Map<string, (data: any) => void>();
+    const sendMessage = jest.fn();
+    const healthyService = {
+      connected: true,
+      status: 'healthy',
+      modelAssessment: { status: 'verified', detail: 'Connected.' },
+    };
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-model-configuration') {
+        return {
+          sensing: {
+            id: 'sensing',
+            label: 'Sensing',
+            provider: 'gemini',
+            model: 'gemini/vision',
+          },
+          tutors: [
+            {
+              id: 'primary',
+              label: 'Primary',
+              provider: 'anthropic',
+              model: 'anthropic/tutor',
+            },
+          ],
+          defaultTutorId: 'primary',
+        };
+      }
+      if (channel === 'get-service-health') {
+        return {
+          checkedAt: Date.now(),
+          sensing: healthyService,
+          tutor: healthyService,
+        };
+      }
+      if (channel === 'send-chat-message') {
+        return { guidance: 'I can see the attachment.' };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: any) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage,
+        invoke,
+      },
+    };
+    render(<SessionChatView />);
+    await screen.findByRole('combobox', { name: 'Tutor model' });
+
+    const imageDataUrl = 'data:image/png;base64,cHJldmlldw==';
+    act(() => {
+      listeners.get('hotkey-capture')?.({ imageDataUrl });
+    });
+    sendMessage.mockClear();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Preview attached image 1' }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith('open-image-preview', {
+      imageDataUrl,
+    });
+    sendMessage.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'send-chat-message',
+        expect.objectContaining({
+          images: [imageDataUrl],
+          hotkeyImages: [imageDataUrl],
+        }),
+      );
+    });
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Preview message attachment 1' }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith('open-image-preview', {
+      imageDataUrl,
+    });
   });
 });

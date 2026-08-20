@@ -4,6 +4,10 @@ import {
   ObservationStatus,
   STATUS_LABEL,
 } from './observation-types';
+import {
+  buildFrameworkOverview,
+  frameworkNavigationLabel,
+} from './framework-overview';
 
 export interface BubbleState {
   status: ObservationStatus;
@@ -75,19 +79,13 @@ function preferredSuggestionTool(suggestion: InstantSuggestion) {
   );
 }
 
-function usesStageTaskRules(suggestion: InstantSuggestion): boolean {
-  const prompt = suggestion.prompt ?? '';
-  return ['Stage', 'Task', 'Rules'].every((label) =>
-    new RegExp(`(^|\\n)\\s*${label}\\s*:`, 'i').test(prompt),
-  );
-}
-
 export default function ObservationBubble({
   bubble,
   onHelpMe,
   onDismiss,
   onViewConversation,
   onChatAboutSuggestion,
+  onOpenCocoChat,
   onMouseEnter,
   onMouseLeave,
 }: {
@@ -96,6 +94,7 @@ export default function ObservationBubble({
   onDismiss?: () => void;
   onViewConversation?: () => void;
   onChatAboutSuggestion?: () => void;
+  onOpenCocoChat?: () => void;
   /** Hovering pauses the auto-hide so the user can read / copy the bubble. */
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -106,7 +105,8 @@ export default function ObservationBubble({
   // Transient confirmation shown after Copy / Approve.
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // One rating per revealed suggestion; locks the thumbs after the first click.
+  // Current rating for the revealed suggestion. The opposite thumb remains
+  // available so an accidental rating can be corrected.
   const [rated, setRated] = useState<'up' | 'down' | null>(null);
   const [suggestionPage, setSuggestionPage] = useState<0 | 1>(0);
   // When the suggestion was revealed — lets latency_s capture time-to-rate.
@@ -152,9 +152,13 @@ export default function ObservationBubble({
   const suggestedTool = suggestion
     ? preferredSuggestionTool(suggestion)
     : undefined;
-  const hasStageTaskRules = suggestion
-    ? usesStageTaskRules(suggestion)
-    : false;
+  const frameworkOverview = suggestion
+    ? buildFrameworkOverview(
+        suggestion,
+        suggestionToolLabel(suggestion),
+        bubble.rawObservation,
+      )
+    : null;
   const label = isTier3 ? 'AI Tutor' : (STATUS_LABEL[status] ?? STATUS_LABEL.observing);
 
   // Copy the prompt/content and, when a tool is chosen, launch it. `toolId` null
@@ -173,10 +177,12 @@ export default function ObservationBubble({
   // Rate the revealed suggestion. Logged into feedback.jsonl via the sensing
   // server so it joins observations by observation_id.
   const rate = (dir: 'up' | 'down') => {
-    if (rated || !suggestion) return;
+    if (rated === dir || !suggestion) return;
+    const previousRating = rated;
     setRated(dir);
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: dir === 'up' ? 'thumbs_up' : 'thumbs_down',
+      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
       surface: 'bubble',
       observation_id: bubble?.observationId ?? null,
       status,
@@ -188,7 +194,7 @@ export default function ObservationBubble({
       rating: dir,
       ratedAt: Math.floor(Date.now() / 1000),
     });
-    showToast('Thanks for the feedback');
+    showToast(previousRating ? 'Feedback updated' : 'Thanks for the feedback');
   };
 
   return (
@@ -236,34 +242,14 @@ export default function ObservationBubble({
       {isFrameworkOverview && suggestion ? (
         <div className="bubble-framework-overview">
           <div className="bubble-framework-heading">
-            Turn this task into a clear AI handoff
+            {frameworkOverview?.heading}
           </div>
-          <div className="bubble-framework-concept">
-            <span className="bubble-framework-term">Delegation</span>
-            <span>
-              Choose what AI should handle. This task can be handed off to{' '}
-              <strong>{suggestionToolLabel(suggestion)}</strong>.
-            </span>
-          </div>
-          <div className="bubble-framework-concept">
-            <span className="bubble-framework-term">Description</span>
-            <span>
-              {hasStageTaskRules ? (
-                <>
-                  This prompt uses <strong>Stage</strong> for context,{' '}
-                  <strong>Task</strong> for the result you want, and{' '}
-                  <strong>Rules</strong> for important requirements. The next
-                  page shows all three parts.
-                </>
-              ) : (
-                <>
-                  Tell AI what you are working on, the result you want, and any
-                  important requirements. The next page gives you a prompt you
-                  can review and adapt.
-                </>
-              )}
-            </span>
-          </div>
+          {frameworkOverview?.concepts.map((concept) => (
+            <div className="bubble-framework-concept" key={concept.term}>
+              <span className="bubble-framework-term">{concept.term}</span>
+              <span>{concept.explanation}</span>
+            </div>
+          ))}
         </div>
       ) : suggestion ? (
         <div className="observation-bubble-text observation-suggestion-body">
@@ -324,6 +310,14 @@ export default function ObservationBubble({
         <div className="bubble-tool-actions">
           <button
             type="button"
+            className="bubble-action-btn bubble-coco-chat-action"
+            onClick={onOpenCocoChat}
+            autoFocus
+          >
+            Open Coco Chat
+          </button>
+          <button
+            type="button"
             className="bubble-action-btn"
             onClick={() => act(null)}
           >
@@ -348,7 +342,7 @@ export default function ObservationBubble({
         </div>
       )}
 
-      {/* Rate the suggested prompt/content — one vote, then it locks. */}
+      {/* Rate the suggested prompt/content; the opposite choice stays editable. */}
       {suggestion && !isFrameworkOverview && (
         <div className="bubble-feedback-row">
           <button
@@ -356,7 +350,7 @@ export default function ObservationBubble({
             className={`bubble-feedback-btn${rated === 'up' ? ' is-rated' : ''}`}
             aria-label="Good suggestion"
             title="Good suggestion"
-            disabled={rated !== null}
+            disabled={rated === 'up'}
             onClick={() => rate('up')}
           >
             👍
@@ -366,7 +360,7 @@ export default function ObservationBubble({
             className={`bubble-feedback-btn${rated === 'down' ? ' is-rated' : ''}`}
             aria-label="Not helpful"
             title="Not helpful"
-            disabled={rated !== null}
+            disabled={rated === 'down'}
             onClick={() => rate('down')}
           >
             👎
@@ -383,9 +377,7 @@ export default function ObservationBubble({
           <button
             type="button"
             className="bubble-framework-arrow"
-            aria-label={suggestionPage === 0
-              ? 'Show Description suggestion'
-              : 'Back to Delegation and Description overview'}
+            aria-label={frameworkNavigationLabel(suggestion, suggestionPage)}
             onClick={() => setSuggestionPage(suggestionPage === 0 ? 1 : 0)}
           >
             {suggestionPage === 0 ? '→' : '←'}

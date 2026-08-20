@@ -212,10 +212,9 @@ screen: Screen | None = None
 progress_detector: ProgressDetector | None = None
 hotkey_buffer: HotKeyBuffer | None = None
 _progress_log_path: str = "logs/progress_judgments.jsonl"
-# When False (default) the product runs observer-only: ambient observation
-# bubbles are shown directly from the observer's status, and the judge
-# (ProgressDetector) never runs. Set --enable_judge=True to turn the judge on
-# as an opt-in baseline for comparison.
+# When enabled, ProgressDetector filters proactive interventions during active
+# tutoring sessions. Pre-session invitations remain observer-owned regardless
+# of this flag, matching the monorepo session workflow.
 _judge_enabled: bool = False
 # Always-on, time-driven observation tick (decoupled from action accumulation).
 observer_ticker_task: asyncio.Task | None = None
@@ -388,7 +387,7 @@ def _encode_image_data_url(image_path: str) -> str | None:
 async def trigger_hotkey_capture():
     """Manually trigger a hot-key capture (frontend fallback).
 
-    Normally the Cmd+Shift+H global listener fires this automatically.
+    Normally the Cmd+Shift+Space global listener fires this automatically.
     This endpoint lets the UI trigger a capture when the browser window
     is in focus and the OS-level shortcut is unavailable.
     """
@@ -551,10 +550,11 @@ async def configure_session(request: SessionConfigRequest):
 async def end_session():
     """Signal that the current tutor session has ended.
 
-    Marks the AiTutoringProcessor as idle so the proactive judge reverts to
-    invite mode (offering to start a new session) instead of in-chat nudges.
-    The detector keeps running — it is now continuous, not session-scoped.
+    Marks the AiTutoringProcessor as idle so it resumes emitting observer-owned
+    ``task_suggested`` invitations. The Judge is session-scoped and stops here,
+    matching the monorepo tutoring flow.
     """
+    global progress_detector
     ai_proc = _get_ai_processor()
     if ai_proc is not None:
         ai_proc.set_session_active(False)
@@ -565,24 +565,20 @@ async def end_session():
         _active_session_id = None
         _active_session_scenario = None
 
-    # Revert the still-running detector to pre-session (invite) mode.
-    await _start_progress_detector(None)
+    if progress_detector is not None:
+        try:
+            await progress_detector.stop()
+        except Exception:
+            pass
+        progress_detector = None
+        logger.info("ProgressDetector stopped after session end")
 
     total = await streamer.get_total_stored_actions() if streamer else 0
     return StatusResponse(status="ok", total_actions=total)
 
 
-async def _start_progress_detector(request: SessionConfigRequest | None = None) -> None:
-    """Ensure the proactive judge (ProgressDetector) is running and configured.
-
-    The detector runs **continuously** and owns every proactive fire:
-    - ``request is None`` (pre-session): it evaluates whether to INVITE the user
-      to start a session.
-    - ``request`` provided (a session is starting): it switches to in-chat nudges
-      and is reconfigured in place (interval/scenario) and its timing reset.
-
-    A session that explicitly disables progress detection stops it.
-    """
+async def _start_progress_detector(request: SessionConfigRequest) -> None:
+    """Start the session-scoped Judge used to filter proactive interventions."""
     global progress_detector
     if streamer is None or screen is None:
         return
@@ -602,7 +598,7 @@ async def _start_progress_detector(request: SessionConfigRequest | None = None) 
         return
 
     # A session can explicitly disable proactive detection entirely.
-    if request is not None and not request.progress_detection_enabled:
+    if not request.progress_detection_enabled:
         if progress_detector is not None:
             try:
                 await progress_detector.stop()
@@ -617,27 +613,26 @@ async def _start_progress_detector(request: SessionConfigRequest | None = None) 
         logger.warning("No AiTutoringProcessor — progress detector cannot start")
         return
 
-    scenario = request.scenario if request is not None else "everyday_support"
-    mode = "session" if request is not None else "pre-session"
+    scenario = request.scenario
 
     if progress_detector is None:
-        # First start (typically pre-session, at server startup).
-        cfg = ProgressDetectorConfig(enabled=True)
-        if request is not None:
-            cfg.check_interval_seconds = (
+        cfg = ProgressDetectorConfig(
+            enabled=True,
+            check_interval_seconds=(
                 request.progress_check_interval_seconds
                 or request.struggle_detection_seconds
+            ),
+        )
+        if request.progress_k_threshold is not None:
+            cfg.k_threshold = request.progress_k_threshold
+        if request.progress_post_fire_cooldown_seconds is not None:
+            cfg.post_fire_cooldown_seconds = (
+                request.progress_post_fire_cooldown_seconds
             )
-            if request.progress_k_threshold is not None:
-                cfg.k_threshold = request.progress_k_threshold
-            if request.progress_post_fire_cooldown_seconds is not None:
-                cfg.post_fire_cooldown_seconds = (
-                    request.progress_post_fire_cooldown_seconds
-                )
-            if request.progress_session_start_grace_seconds is not None:
-                cfg.session_start_grace_seconds = (
-                    request.progress_session_start_grace_seconds
-                )
+        if request.progress_session_start_grace_seconds is not None:
+            cfg.session_start_grace_seconds = (
+                request.progress_session_start_grace_seconds
+            )
         progress_detector = ProgressDetector(
             ai_processor=ai_proc,
             screen=screen,
@@ -647,24 +642,23 @@ async def _start_progress_detector(request: SessionConfigRequest | None = None) 
             scenario=scenario,
         )
         await progress_detector.start()
-        logger.info(f"ProgressDetector started ({mode} mode)")
+        logger.info("ProgressDetector started for active session")
         return
 
-    # Already running — reconfigure in place for the new phase.
-    if request is not None:
-        progress_detector.update_config(
-            check_interval_seconds=(
-                request.progress_check_interval_seconds
-                or request.struggle_detection_seconds
-            ),
-            k_threshold=request.progress_k_threshold,
-            post_fire_cooldown_seconds=request.progress_post_fire_cooldown_seconds,
-            session_start_grace_seconds=request.progress_session_start_grace_seconds,
-        )
+    # Duplicate/reconfigured session registration updates the existing Judge.
+    progress_detector.update_config(
+        check_interval_seconds=(
+            request.progress_check_interval_seconds
+            or request.struggle_detection_seconds
+        ),
+        k_threshold=request.progress_k_threshold,
+        post_fire_cooldown_seconds=request.progress_post_fire_cooldown_seconds,
+        session_start_grace_seconds=request.progress_session_start_grace_seconds,
+    )
     progress_detector.set_scenario(scenario)
     progress_detector.reset_cooldown()
     progress_detector.reset_timing()
-    logger.info(f"ProgressDetector reconfigured ({mode} mode)")
+    logger.info("ProgressDetector reconfigured for active session")
 
 
 def _get_ai_processor() -> AiTutoringProcessor | None:
@@ -726,6 +720,7 @@ class FeedbackRequest(BaseModel):
     """
 
     kind: str
+    previous_kind: str | None = None
     surface: str = "bubble"
     observation_id: str | None = None
     message_id: str | None = None
@@ -761,6 +756,12 @@ async def record_feedback(req: FeedbackRequest):
         status=req.status,
         latency_s=req.latency_s,
         text=req.text,
+        extra=(
+            {"replaces_kind": req.previous_kind}
+            if req.previous_kind in {"thumbs_up", "thumbs_down"}
+            and req.previous_kind != req.kind
+            else None
+        ),
     )
     logger.info(
         f"Feedback logged: kind={req.kind} surface={req.surface} "
@@ -861,6 +862,7 @@ async def main_async(
     ai_tutoring: bool,
     tutor_url: str,
     observer_model: str,
+    scenario: str = "everyday_support",
     enable_judge: bool = False,
     observer_interval_seconds: float = 15.0,
 ):
@@ -926,6 +928,7 @@ async def main_async(
             tutor_url=tutor_url,
             ai_tutor_output_log=ai_tutor_output_log,
             observer_model=observer_model,
+            scenario=scenario,
             memory_engine=memory_engine,
             # node_uuid and redis_url are configured later via POST /session
         )
@@ -990,9 +993,6 @@ async def main_async(
         async with GUM("test", screen, data_directory=session_dir):
             # Run streamer and FastAPI server concurrently
             print("inside GUM")
-            # Start the proactive judge in pre-session (invite) mode. It runs
-            # continuously; POST /session reconfigures it for in-chat nudges.
-            await _start_progress_detector(None)
             # Always-on, time-driven observation tick (covers scrolling / short
             # tasks that the action-accumulation path misses).
             if ai_tutoring and observer_interval_seconds > 0:
@@ -1040,6 +1040,7 @@ def main(
     ai_tutoring: bool = True,
     tutor_url: str = "http://localhost:8081",
     observer_model: str = "",
+    scenario: str = "everyday_support",
     enable_judge: bool = False,
     observer_interval_seconds: float = 15.0,
 ):
@@ -1056,6 +1057,7 @@ def main(
             ai_tutoring=ai_tutoring,
             tutor_url=tutor_url,
             observer_model=observer_model,
+            scenario=scenario,
             enable_judge=enable_judge,
             observer_interval_seconds=observer_interval_seconds,
         )
