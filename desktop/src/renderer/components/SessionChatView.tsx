@@ -328,6 +328,7 @@ const S: Record<string, React.CSSProperties> = {
   pendingThumbWrap: { position: 'relative' },
   imagePreviewButton: { display: 'block', border: 'none', borderRadius: 8, padding: 0, background: 'transparent', cursor: 'zoom-in' },
   pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
+  pendingAnnotate: { position: 'absolute', left: 3, bottom: 3, height: 21, border: '1px solid rgba(255,255,255,0.72)', borderRadius: 6, padding: '0 6px', background: 'rgba(32,74,121,0.94)', color: '#fff', cursor: 'pointer', fontFamily: FONT, fontSize: 10, fontWeight: 700, lineHeight: '19px', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' },
   inputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
   textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
   sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
@@ -790,6 +791,13 @@ export default function SessionChatView() {
   const openImagePreview = (imageDataUrl: string) => {
     window.electron?.ipcRenderer.sendMessage('open-image-preview', {
       imageDataUrl,
+    });
+  };
+
+  const openImageAnnotator = (imageDataUrl: string) => {
+    window.electron?.ipcRenderer.sendMessage('open-image-preview', {
+      imageDataUrl,
+      editable: true,
     });
   };
 
@@ -1498,6 +1506,31 @@ export default function SessionChatView() {
     // Tell main the listener is live so it can flush any capture that arrived
     // while this window was still loading (e.g. the hot key just opened it).
     window.electron?.ipcRenderer.sendMessage('hotkey-capture-ready');
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  // The full-screen annotator sends back a flattened PNG. Replace the original
+  // pending capture while retaining its hot-key provenance for the tutor.
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on(
+      'image-annotation-saved',
+      (data: any) => {
+        const original = (data ?? {}).originalImageDataUrl as string | undefined;
+        const annotated = (data ?? {}).imageDataUrl as string | undefined;
+        if (
+          !original ||
+          !annotated?.startsWith('data:image/') ||
+          !pendingHotkeyImagesRef.current.has(original)
+        ) {
+          return;
+        }
+        pendingHotkeyImagesRef.current.delete(original);
+        pendingHotkeyImagesRef.current.add(annotated);
+        setPendingImages((current) =>
+          current.map((image) => (image === original ? annotated : image)),
+        );
+      },
+    );
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
@@ -2722,6 +2755,17 @@ export default function SessionChatView() {
                 >
                   <img src={src} alt={`Attachment ${i + 1}`} style={S.thumb} />
                 </button>
+                {pendingHotkeyImagesRef.current.has(src) && (
+                  <button
+                    type="button"
+                    style={S.pendingAnnotate}
+                    aria-label={`Annotate hotkey screenshot ${i + 1}`}
+                    title="Annotate screenshot"
+                    onClick={() => openImageAnnotator(src)}
+                  >
+                    ✎ Edit
+                  </button>
+                )}
                 <button
                   type="button"
                   style={S.pendingX}

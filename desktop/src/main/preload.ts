@@ -48,6 +48,8 @@ export type Channels =
   | 'image-preview'
   | 'image-preview-ready'
   | 'close-image-preview'
+  | 'save-image-annotation'
+  | 'image-annotation-saved'
   // Renderer → main: chat's hot-key listener is mounted; flush buffered captures
   | 'hotkey-capture-ready'
   // Onboarding
