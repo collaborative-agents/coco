@@ -3340,13 +3340,7 @@ ipcMain.handle(
       );
     }
     const gatewaySessionId = currentSessionId;
-    if (gatewaySessionId) {
-      gatewayClient?.addMessage(
-        gatewaySessionId,
-        'user',
-        '[Voice message]',
-      );
-    }
+    let storedTranscription = false;
     const tutorPort = process.env.TUTOR_PORT || '8081';
     const turnTiming = new TutorTurnTiming();
     let streamedText = '';
@@ -3359,6 +3353,21 @@ ipcMain.handle(
           session_id: currentSessionId,
         },
         (streamEvent: TutorStreamEvent) => {
+          if (
+            streamEvent.type === 'transcription' &&
+            gatewaySessionId &&
+            !storedTranscription
+          ) {
+            const transcription = String(streamEvent.text ?? '').trim();
+            if (transcription) {
+              storedTranscription = true;
+              gatewayClient?.addMessage(
+                gatewaySessionId,
+                'user',
+                transcription,
+              );
+            }
+          }
           if (streamEvent.type === 'text_delta') {
             const delta = String(streamEvent.text ?? '');
             turnTiming.recordTextDelta(delta);

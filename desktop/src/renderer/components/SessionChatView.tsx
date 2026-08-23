@@ -843,8 +843,22 @@ export default function SessionChatView() {
         tool_calls?: TutorToolCall[];
       };
       if (!event.requestId) return;
-      setMessages((current) =>
-        current.map((message) => {
+      setMessages((current) => {
+        if (event.type === 'transcription') {
+          const tutorIndex = current.findIndex(
+            (message) => message.requestId === event.requestId,
+          );
+          const userIndex = tutorIndex - 1;
+          if (userIndex >= 0 && current[userIndex]?.role === 'user') {
+            return current.map((message, index) =>
+              index === userIndex
+                ? { ...message, text: event.text?.trim() || message.text }
+                : message,
+            );
+          }
+          return current;
+        }
+        return current.map((message) => {
           if (message.requestId !== event.requestId) return message;
           if (event.type === 'text_delta') {
             return { ...message, text: message.text + (event.text ?? '') };
@@ -889,8 +903,8 @@ export default function SessionChatView() {
             };
           }
           return message;
-        }),
-      );
+        });
+      });
       if (event.type === 'done' || event.type === 'error') setSending(false);
       scrollToBottom();
     });

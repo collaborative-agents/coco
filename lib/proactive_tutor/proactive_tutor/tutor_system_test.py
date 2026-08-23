@@ -10,6 +10,7 @@ uv run python -m pytest proactive_tutor/tutor_system_test.py
 import base64
 import json
 import os
+import threading
 
 import pytest
 from proactive_tutor.tutor_system import _RECAP_SYSTEM_PROMPT, TutorSystem
@@ -482,21 +483,37 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
         "tool_calls": [],
     }
     captured = {}
+    events = []
+    transcription_started = threading.Event()
+    release_transcription = threading.Event()
     wav_header = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + bytes(36)
     audio_data = base64.b64encode(wav_header).decode("ascii")
 
     def fake_chat(messages, image_paths=None, on_event=None):
+        assert transcription_started.wait(timeout=1)
         captured["messages"] = messages
         captured["image_paths"] = image_paths
         captured["on_event"] = on_event
+        release_transcription.set()
         return "Here is what I see.", metrics
 
+    def fake_transcribe(audio, audio_format="wav"):
+        transcription_started.set()
+        assert release_transcription.wait(timeout=1)
+        captured["transcription_audio"] = audio
+        captured["transcription_format"] = audio_format
+        return "Please explain this spreadsheet.", metrics
+
     monkeypatch.setattr(ts.tutor_agent, "chat_with_metrics", fake_chat)
+    monkeypatch.setattr(
+        ts.tutor_agent, "transcribe_audio_with_metrics", fake_transcribe
+    )
     ts._recorder = TrainingRecorder(str(tmp_path), retain_screenshots=False)
     monkeypatch.setattr("proactive_tutor.tutor_system.time.time", lambda: 1234.5)
 
     answer, returned_metrics = ts.handle_audio_prompt_with_metrics(
         audio_data,
+        on_event=events.append,
         session_id="audio-session",
     )
 
@@ -506,10 +523,16 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
         "role": "user",
         "content": "Earlier typed context",
     }
+    assert captured["transcription_audio"] == audio_data
+    assert captured["transcription_format"] == "wav"
     assert captured["messages"][-1]["content"][0]["type"] == "input_audio"
     assert captured["messages"][-1]["content"][0]["input_audio"]["data"] == audio_data
+    assert events[0] == {
+        "type": "transcription",
+        "text": "Please explain this spreadsheet.",
+    }
     assert ts._chat_messages[-2:] == [
-        {"role": "user", "content": "[Voice message]"},
+        {"role": "user", "content": "Please explain this spreadsheet."},
         {"role": "assistant", "content": "Here is what I see."},
     ]
     assert audio_data not in json.dumps(ts._chat_messages)
@@ -521,6 +544,7 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
     assert rows[0]["trigger"] == "audio_prompt"
     assert rows[0]["session_id"] == "audio-session"
     assert rows[0]["ts"] == 1234.5
+    assert rows[0]["tutor_input"] == "Please explain this spreadsheet."
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ export interface TutorStreamEvent {
   type:
     | 'tool_call_started'
     | 'tool_call_completed'
+    | 'transcription'
     | 'text_delta'
     | 'done'
     | 'error';

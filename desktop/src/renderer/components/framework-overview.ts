@@ -41,6 +41,12 @@ function compactSentence(text: string, maxChars = 160): string {
   return `${normalized.slice(0, end).replace(/[.,;:]$/, '')}…`;
 }
 
+function completeSentence(text: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return normalized;
+  return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+}
+
 function parseStageTaskRules(prompt?: string): StageTaskRules | null {
   if (!prompt) return null;
   const match = prompt.match(
@@ -110,7 +116,10 @@ export function buildFrameworkOverview(
     concepts: [
       {
         term: competency,
-        explanation: compactSentence(
+        // This is the actual situation-grounded coaching explanation, not a
+        // preview. Keep the complete text so the first 4D page never ends in
+        // an unexplained ellipsis; the notification body scrolls if needed.
+        explanation: completeSentence(
           suggestion.body || observation || suggestion.copyText,
         ),
       },

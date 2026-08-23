@@ -387,6 +387,8 @@ describe('instant suggestion actions', () => {
   });
 
   it('grounds a Discernment overview in the current suggestion', () => {
+    const explanation =
+      'Before running the generated Git command, verify the target repository and branch, then check that it will not overwrite unrelated work. Also review the remote destination and confirm the final commit before sharing the result with your team.';
     render(
       <NotificationBubble
         message="Check the generated command"
@@ -394,9 +396,8 @@ describe('instant suggestion actions', () => {
         suggestion={{
           kind: 'content',
           title: 'Discernment: verify before running',
-          body: 'Before running the generated Git command, verify the target repository and branch, then check that it will not overwrite unrelated work.',
-          copyText:
-            'Before running the generated Git command, verify the target repository and branch, then check that it will not overwrite unrelated work.',
+          body: explanation,
+          copyText: explanation,
         }}
         showFrameworkIntro
       />,
@@ -407,6 +408,10 @@ describe('instant suggestion actions', () => {
     expect(
       screen.getByText(/verify the target repository and branch/),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/confirm the final commit before sharing the result/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(explanation)).not.toHaveTextContent(/…$/);
     expect(
       screen.getByRole('button', { name: 'Show coaching suggestion' }),
     ).toBeInTheDocument();

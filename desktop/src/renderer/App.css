@@ -248,6 +248,8 @@ body,
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
   color: #4b5563;
   font-size: 12px;
   line-height: 1.4;
@@ -1579,6 +1581,9 @@ body,
   display: flex;
   flex-direction: column;
   gap: 7px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   color: #1f2937;
 }
 

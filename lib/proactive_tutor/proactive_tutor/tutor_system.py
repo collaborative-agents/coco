@@ -3,6 +3,7 @@ import os
 import re
 import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -846,27 +847,59 @@ class TutorSystem:
             ],
         }
         messages = self._everyday_chat_messages(audio_message)
-        guidance, metrics = self.tutor_agent.chat_with_metrics(
-            messages,
-            on_event=on_event,
-        )
 
-        # Raw audio is intentionally not retained. Keep a compact turn marker so
-        # the answer remains part of the same typed/voice conversation.
-        voice_marker = "[Voice message]"
+        # Start transcription in the background while the normal audio tutor
+        # response begins immediately. This keeps time-to-first-token close to
+        # the original one-call voice flow while still retaining searchable text.
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="coco-audio-transcription"
+        ) as executor:
+            transcription_future = executor.submit(
+                self.tutor_agent.transcribe_audio_with_metrics,
+                audio_data,
+                "wav",
+            )
+
+            def publish_transcription(future: Future) -> None:
+                if on_event is None:
+                    return
+                try:
+                    text, _metrics = future.result()
+                except Exception as exc:
+                    logger.warning("[AUDIO_PROMPT] Transcription failed: %s", exc)
+                    return
+                if text.strip():
+                    on_event({"type": "transcription", "text": text.strip()})
+
+            transcription_future.add_done_callback(publish_transcription)
+            guidance, metrics = self.tutor_agent.chat_with_metrics(
+                messages,
+                on_event=on_event,
+            )
+            try:
+                transcription, _transcription_metrics = transcription_future.result()
+                transcription = transcription.strip()
+            except Exception as exc:
+                logger.warning("[AUDIO_PROMPT] Transcription failed: %s", exc)
+                transcription = ""
+
+        stored_user_text = transcription or "[Voice message]"
+
+        # Retain only the transcript. The raw base64 audio exists only for the
+        # provider request and is redacted by the Router before usage logging.
         self._chat_messages.extend(
             [
-                {"role": "user", "content": voice_marker},
+                {"role": "user", "content": stored_user_text},
                 {"role": "assistant", "content": guidance},
             ]
         )
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.conversation_history.extend(
-            [f"[{ts}] [User]: {voice_marker}", f"[{ts}] [Tutor]: {guidance}"]
+            [f"[{ts}] [User]: {stored_user_text}", f"[{ts}] [Tutor]: {guidance}"]
         )
         self._log_tutor_call(
             "audio_prompt",
-            voice_marker,
+            stored_user_text,
             guidance,
             None,
             llm_metrics=metrics,
