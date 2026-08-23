@@ -230,6 +230,11 @@ let avatarWindow: BrowserWindow | null = null;
 let chatWindow: BrowserWindow | null = null;
 let imagePreviewWindow: BrowserWindow | null = null;
 let imagePreviewDataUrl: string | null = null;
+let imagePreviewEditable = false;
+let imagePreviewSourceWindow: BrowserWindow | null = null;
+let imagePreviewAnnotationResult: 'replace' | 'attach' = 'replace';
+let imagePreviewFullScreenOverlay = false;
+let hotkeyCaptureInProgress = false;
 let wakeWordCaptureWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
@@ -333,10 +338,10 @@ const setWakeWordCapturePaused = (paused: boolean): void => {
   }
 };
 
-// Hot-key screen captures (Cmd/Ctrl+Shift+Space) waiting to be shown as preview
-// thumbnails in the chat input bar. When the hot key opens a fresh chat window,
-// the capture can arrive before the renderer has mounted its IPC listener, so we
-// buffer here and flush once the renderer announces it is ready.
+// Completed hot-key screen captures waiting to be shown as preview thumbnails
+// in the chat input bar. The direct annotation overlay can finish before a fresh
+// chat renderer has mounted its IPC listener, so buffer here and flush once the
+// renderer announces it is ready.
 let pendingHotkeyCaptures: string[] = [];
 let hotkeyRendererReady = false;
 
@@ -701,26 +706,89 @@ const showChatPanel = () => {
   }
 };
 
+const clearImagePreviewState = (target: BrowserWindow) => {
+  if (imagePreviewWindow !== target) return;
+  imagePreviewWindow = null;
+  imagePreviewDataUrl = null;
+  imagePreviewEditable = false;
+  imagePreviewSourceWindow = null;
+  imagePreviewAnnotationResult = 'replace';
+  imagePreviewFullScreenOverlay = false;
+};
+
+const dismissImagePreviewWindow = (target: BrowserWindow) => {
+  clearImagePreviewState(target);
+  if (!target.isDestroyed()) target.destroy();
+};
+
+const captureDisplayAtCursor = async (): Promise<string> => {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const pixelSize = {
+    width: Math.max(1, Math.round(display.size.width * display.scaleFactor)),
+    height: Math.max(1, Math.round(display.size.height * display.scaleFactor)),
+  };
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: pixelSize,
+  });
+  const source =
+    sources.find((candidate) => candidate.display_id === String(display.id)) ??
+    (sources.length === 1 ? sources[0] : undefined);
+  if (!source || source.thumbnail.isEmpty()) {
+    throw new Error(`No capture source found for display ${display.id}`);
+  }
+
+  const capturedSize = source.thumbnail.getSize();
+  log.info(
+    `[ImagePreview] Captured display ${display.id} at ` +
+      `${capturedSize.width}x${capturedSize.height} ` +
+      `(requested ${pixelSize.width}x${pixelSize.height}).`,
+  );
+  return source.thumbnail.toDataURL();
+};
+
 const openImagePreviewWindow = (
   sourceWindow: BrowserWindow | null,
   imageDataUrl: string,
+  editable = false,
+  annotationResult: 'replace' | 'attach' = 'replace',
+  displayAtCursor = false,
+  fullScreenOverlay = false,
 ) => {
   imagePreviewDataUrl = imageDataUrl;
-  const display = sourceWindow
-    ? screen.getDisplayMatching(sourceWindow.getBounds())
-    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  imagePreviewEditable = editable;
+  imagePreviewSourceWindow = sourceWindow;
+  imagePreviewAnnotationResult = annotationResult;
+  imagePreviewFullScreenOverlay = fullScreenOverlay;
+  const display =
+    sourceWindow && !displayAtCursor
+      ? screen.getDisplayMatching(sourceWindow.getBounds())
+      : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
 
   if (imagePreviewWindow && !imagePreviewWindow.isDestroyed()) {
+    if (
+      process.platform === 'darwin' &&
+      imagePreviewWindow.isSimpleFullScreen()
+    ) {
+      imagePreviewWindow.setSimpleFullScreen(false);
+    }
     imagePreviewWindow.setBounds(display.bounds);
+    if (process.platform === 'darwin') {
+      imagePreviewWindow.setSimpleFullScreen(true);
+    }
     if (!imagePreviewWindow.webContents.isLoadingMainFrame()) {
-      imagePreviewWindow.webContents.send('image-preview', { imageDataUrl });
+      imagePreviewWindow.webContents.send('image-preview', {
+        imageDataUrl,
+        editable,
+        fullScreenOverlay,
+      });
       imagePreviewWindow.show();
       imagePreviewWindow.focus();
     }
     return;
   }
 
-  imagePreviewWindow = new BrowserWindow({
+  const previewWindow = new BrowserWindow({
     show: false,
     ...display.bounds,
     frame: false,
@@ -730,19 +798,57 @@ const openImagePreviewWindow = (
     resizable: false,
     minimizable: false,
     maximizable: false,
-    fullscreenable: false,
+    fullscreenable: true,
     skipTaskbar: true,
     hasShadow: false,
     webPreferences: { preload: preloadPath() },
   });
-  imagePreviewWindow.setAlwaysOnTop(true, 'floating');
-  imagePreviewWindow.loadURL(
-    `${resolveHtmlPath('index.html')}?view=image-preview`,
+  imagePreviewWindow = previewWindow;
+  previewWindow.setAlwaysOnTop(
+    true,
+    process.platform === 'darwin' ? 'screen-saver' : 'floating',
   );
-  imagePreviewWindow.on('closed', () => {
-    imagePreviewWindow = null;
-    imagePreviewDataUrl = null;
+  if (process.platform === 'darwin') {
+    // A bounded frameless window is constrained below macOS's live menu bar,
+    // which leaves the captured menu bar visible underneath it. Simple
+    // fullscreen covers the menu bar and Dock without creating a new Space.
+    previewWindow.setSimpleFullScreen(true);
+  }
+  previewWindow.loadURL(`${resolveHtmlPath('index.html')}?view=image-preview`);
+  previewWindow.on('closed', () => {
+    // A rapid cancel → hotkey sequence can create the next preview before the
+    // old window emits `closed`. Never let the old callback clear the new one.
+    clearImagePreviewState(previewWindow);
   });
+};
+
+const beginHotkeyCapture = async (): Promise<void> => {
+  if (hotkeyCaptureInProgress) {
+    log.info('[ImagePreview] Capture already in progress; ignoring repeat.');
+    return;
+  }
+  if (imagePreviewWindow && !imagePreviewWindow.isDestroyed()) {
+    imagePreviewWindow.show();
+    imagePreviewWindow.focus();
+    return;
+  }
+
+  hotkeyCaptureInProgress = true;
+  const startedAt = Date.now();
+  try {
+    const dataUrl = await captureDisplayAtCursor();
+    createChatWindow();
+    openImagePreviewWindow(chatWindow, dataUrl, true, 'attach', true, true);
+    log.info(
+      `[ImagePreview] Annotation overlay opened in ${Date.now() - startedAt}ms.`,
+    );
+  } catch (error) {
+    log.error(
+      `[ImagePreview] Direct screenshot capture failed: ${(error as Error).message}`,
+    );
+  } finally {
+    hotkeyCaptureInProgress = false;
+  }
 };
 
 const deliverPendingWakeWordDetection = (): void => {
@@ -1702,7 +1808,7 @@ ipcMain.on('model-configuration-complete', () => {
 
 // The chat renderer announces (on mount) that its hot-key-capture listener is
 // live. Flush any captures that arrived before it was ready — this handshake is
-// what lets the hot key open the chat AND attach the screenshot reliably.
+// what lets a saved annotation open the chat and attach reliably.
 ipcMain.removeAllListeners('hotkey-capture-ready');
 ipcMain.on('hotkey-capture-ready', () => {
   hotkeyRendererReady = true;
@@ -2892,8 +2998,11 @@ ipcMain.handle(
 
 ipcMain.removeAllListeners('open-image-preview');
 ipcMain.on('open-image-preview', (event, payload: unknown) => {
-  const imageDataUrl = (payload as { imageDataUrl?: unknown } | null)
-    ?.imageDataUrl;
+  const preview = (payload ?? {}) as {
+    imageDataUrl?: unknown;
+    editable?: unknown;
+  };
+  const { imageDataUrl } = preview;
   if (
     typeof imageDataUrl !== 'string' ||
     !imageDataUrl.startsWith('data:image/')
@@ -2904,6 +3013,7 @@ ipcMain.on('open-image-preview', (event, payload: unknown) => {
   openImagePreviewWindow(
     BrowserWindow.fromWebContents(event.sender),
     imageDataUrl,
+    preview.editable === true,
   );
 });
 
@@ -2919,7 +3029,15 @@ ipcMain.on('image-preview-ready', (event) => {
   }
   imagePreviewWindow.webContents.send('image-preview', {
     imageDataUrl: imagePreviewDataUrl,
+    editable: imagePreviewEditable,
+    fullScreenOverlay: imagePreviewFullScreenOverlay,
   });
+  if (
+    process.platform === 'darwin' &&
+    !imagePreviewWindow.isSimpleFullScreen()
+  ) {
+    imagePreviewWindow.setSimpleFullScreen(true);
+  }
   imagePreviewWindow.show();
   imagePreviewWindow.focus();
 });
@@ -2931,8 +3049,43 @@ ipcMain.on('close-image-preview', (event) => {
     !imagePreviewWindow.isDestroyed() &&
     imagePreviewWindow.webContents.id === event.sender.id
   ) {
-    imagePreviewWindow.close();
+    dismissImagePreviewWindow(imagePreviewWindow);
   }
+});
+
+ipcMain.removeAllListeners('save-image-annotation');
+ipcMain.on('save-image-annotation', (event, payload: unknown) => {
+  const annotatedImageDataUrl = (
+    payload as { imageDataUrl?: unknown } | null
+  )?.imageDataUrl;
+  if (
+    !imagePreviewEditable ||
+    !imagePreviewDataUrl ||
+    !imagePreviewWindow ||
+    imagePreviewWindow.isDestroyed() ||
+    imagePreviewWindow.webContents.id !== event.sender.id ||
+    typeof annotatedImageDataUrl !== 'string' ||
+    !annotatedImageDataUrl.startsWith('data:image/png;base64,') ||
+    annotatedImageDataUrl.length > 50_000_000
+  ) {
+    log.warn('[ImagePreview] Ignored an invalid annotation result.');
+    return;
+  }
+
+  if (imagePreviewAnnotationResult === 'attach') {
+    pendingHotkeyCaptures.push(annotatedImageDataUrl);
+    showChatPanel();
+    flushHotkeyCaptures();
+  } else if (
+    imagePreviewSourceWindow &&
+    !imagePreviewSourceWindow.isDestroyed()
+  ) {
+    imagePreviewSourceWindow.webContents.send('image-annotation-saved', {
+      originalImageDataUrl: imagePreviewDataUrl,
+      imageDataUrl: annotatedImageDataUrl,
+    });
+  }
+  dismissImagePreviewWindow(imagePreviewWindow);
 });
 
 ipcMain.removeHandler('send-audio-message');
@@ -3797,40 +3950,8 @@ app
     // Register global shortcut for screenshot capture (Cmd+Shift+Space).
     // Works system-wide even when Electron is not the focused app.
     globalShortcut.register('CommandOrControl+Shift+Space', () => {
-      // Open the chat panel immediately so the preview has somewhere to land
-      // (and the keypress feels responsive). If it was closed, this creates a
-      // fresh renderer whose readiness handshake drives the flush below.
-      showChatPanel();
-
-      const sensingPort = process.env.SENSING_PORT || '8080';
-      const req = require('http').request(
-        {
-          hostname: '127.0.0.1',
-          port: sensingPort,
-          path: '/hotkey/capture',
-          method: 'POST',
-        },
-        (res: import('http').IncomingMessage) => {
-          // Read the capture response and buffer its image, then flush to the
-          // chat input bar. flushHotkeyCaptures() no-ops until the renderer is
-          // ready, so a just-opened window still gets the capture once mounted.
-          const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
-          res.on('end', () => {
-            try {
-              const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-              const dataUrl = body?.image_data_url;
-              if (!dataUrl) return;
-              pendingHotkeyCaptures.push(dataUrl);
-              flushHotkeyCaptures();
-            } catch {
-              // Ignore malformed responses — capture still lands server-side.
-            }
-          });
-        },
-      );
-      req.on('error', () => {}); // silent if sensing server is not running
-      req.end();
+      log.info('[ImagePreview] Screenshot hotkey triggered.');
+      void beginHotkeyCapture();
     });
 
     // Cmd/Ctrl+Shift+H — toggle the observation history panel on the avatar.

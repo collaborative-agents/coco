@@ -42,6 +42,53 @@ class Update(BaseModel):
 
 if _IS_MACOS:
 
+    def _save_native_display_at_point(x: float, y: float, path: str) -> bool:
+        """Save the macOS display under ``(x, y)`` as a native-pixel PNG.
+
+        ``mss`` follows the logical display size on Retina screens (for example
+        1728×1117 for a 3456×2234 panel). ``CGDisplayCreateImage`` returns the
+        display's backing pixels, so a hot-key capture remains sharp when shown
+        edge-to-edge in the annotation overlay.
+        """
+        try:
+            err, display_ids, count = Quartz.CGGetActiveDisplayList(  # type: ignore
+                16, None, None
+            )
+            if err != Quartz.kCGErrorSuccess:  # type: ignore
+                return False
+
+            display_id = None
+            for candidate in display_ids[:count]:
+                bounds = Quartz.CGDisplayBounds(candidate)  # type: ignore
+                if (
+                    bounds.origin.x <= x < bounds.origin.x + bounds.size.width
+                    and bounds.origin.y <= y < bounds.origin.y + bounds.size.height
+                ):
+                    display_id = candidate
+                    break
+            if display_id is None:
+                return False
+
+            cg_image = Quartz.CGDisplayCreateImage(display_id)  # type: ignore
+            if cg_image is None:
+                return False
+            encoded_path = os.fsencode(path)
+            file_url = Quartz.CFURLCreateFromFileSystemRepresentation(  # type: ignore
+                None, encoded_path, len(encoded_path), False
+            )
+            destination = Quartz.CGImageDestinationCreateWithURL(  # type: ignore
+                file_url, "public.png", 1, None
+            )
+            if destination is None:
+                return False
+            Quartz.CGImageDestinationAddImage(destination, cg_image, None)  # type: ignore
+            return bool(Quartz.CGImageDestinationFinalize(destination))  # type: ignore
+        except Exception as exc:  # native capture is best-effort; mss is fallback
+            logging.getLogger("Screen").warning(
+                "Native-resolution hot-key capture failed: %s", exc
+            )
+            return False
+
     def _get_global_bounds() -> tuple[float, float, float, float]:
         """Return a bounding box enclosing **all** physical displays.
 
@@ -118,6 +165,10 @@ if _IS_MACOS:
         )
 
 else:
+
+    def _save_native_display_at_point(x: float, y: float, path: str) -> bool:
+        """Native display capture is only available on macOS."""
+        return False
 
     def _is_app_visible(names: Iterable[str]) -> bool:  # type: ignore[misc]
         """Non-macOS stub: window visibility detection not available."""
@@ -414,11 +465,13 @@ class Screen(Observer):
         box_width: int = 10,
         draw_box: bool = True,
         target_dir: str | None = None,
+        lossless: bool = False,
     ) -> tuple[str, str]:
         # print(f"[SAVE FRAME] saving frame for tag: {tag}")
         ts = f"{time.time():.5f}"
         save_dir = target_dir if target_dir is not None else self.screens_dir
-        path = os.path.join(save_dir, f"{ts}_{tag}.jpg")
+        extension = "png" if lossless else "jpg"
+        path = os.path.join(save_dir, f"{ts}_{tag}.{extension}")
         image = Image.frombytes("RGB", (frame.width, frame.height), frame.rgb)
 
         # Draw the cursor box at original coordinates before any resize
@@ -435,14 +488,18 @@ class Screen(Observer):
             draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
             del draw
 
-        # Save with lower quality to reduce memory usage
-        await self._run_in_thread(
-            image.save,
-            path,
-            "JPEG",
-            quality=70,
-            optimize=True,
-        )
+        if lossless:
+            await self._run_in_thread(image.save, path, "PNG", optimize=True)
+        else:
+            # Background sensing frames favor lower bandwidth. Deliberate
+            # hot-key captures use lossless PNG via ``lossless=True`` above.
+            await self._run_in_thread(
+                image.save,
+                path,
+                "JPEG",
+                quality=70,
+                optimize=True,
+            )
 
         # Explicitly delete image object to free memory
         del image
@@ -549,6 +606,23 @@ class Screen(Observer):
         # Get cursor position synchronously — mouse.Controller().position is fast.
         x, y = mouse.Controller().position
 
+        # Retina-aware, fresh capture. Unlike the rolling mss buffer, Quartz
+        # returns the physical backing pixels instead of macOS logical points.
+        if _IS_MACOS:
+            ts = f"{time.time():.5f}"
+            native_path = os.path.join(self._hotkey_dir, f"{ts}_hotkey.png")
+            if await self._run_in_thread(
+                _save_native_display_at_point, x, y, native_path
+            ):
+                print(
+                    f"[HOTKEY CAPTURE] saved native display to: {native_path} at {ts}"
+                )
+                if self._on_hotkey_callback:
+                    asyncio.create_task(
+                        self._on_hotkey_callback(image_path=native_path, timestamp=ts)
+                    )
+                return native_path, ts
+
         async with self._frame_lock:
             if self._mons:
                 idx = self._mon_for(x, y, self._mons)
@@ -568,6 +642,7 @@ class Screen(Observer):
                 "hotkey",
                 draw_box=False,
                 target_dir=self._hotkey_dir,
+                lossless=True,
             )
 
         print(f"[HOTKEY CAPTURE] saved to: {path} at {ts}")
