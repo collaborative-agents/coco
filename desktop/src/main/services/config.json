@@ -34,7 +34,9 @@
         "--ai_tutoring=True",
         "--tutor_url=http://localhost:8081",
         "--observer_model=${OBSERVER_MODEL}",
-        "--observer_interval_seconds=60"
+        "--check_interval=15",
+        "--mse_threshold=8000",
+        "--observer_interval_seconds=3600"
       ],
       "cwd": "${PROJECT_ROOT}",
       "shell": true,

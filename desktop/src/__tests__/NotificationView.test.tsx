@@ -15,8 +15,16 @@
  */
 
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { NotificationBubble } from '../renderer/components/NotificationView';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
+import NotificationView, {
+  NotificationBubble,
+} from '../renderer/components/NotificationView';
 import type { InstantSuggestion } from '../renderer/components/observation-types';
 
 // ---------------------------------------------------------------------------
@@ -324,6 +332,60 @@ describe('instant suggestion actions', () => {
     expect(coco).toHaveClass('toast-coco-chat-action');
     fireEvent.click(coco);
     expect(onOpenCocoChat).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('revealed notification lifecycle', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    delete (window as any).electron;
+  });
+
+  it('tells the main process to suspend replacements after reveal', async () => {
+    const closeSpy = jest.spyOn(window, 'close').mockImplementation(() => {});
+    const listeners = new Map<string, (data: unknown) => void>();
+    const sendMessage = jest.fn();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage,
+        invoke: jest.fn(),
+      },
+    };
+
+    render(<NotificationView />);
+    act(() => {
+      listeners.get('notification')?.({
+        message: 'Draft the reply',
+        actionLabel: 'Reveal full suggestion',
+        notifType: 'proactive-suggestion',
+        observationId: 'obs-reveal-1',
+        suggestion: {
+          kind: 'content',
+          title: 'Draft the reply',
+          body: 'Here is the complete reply.',
+          copyText: 'Here is the complete reply.',
+        },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reveal full suggestion →' }),
+    );
+
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith('notification-revealed-state', {
+        revealed: true,
+      });
+    });
+    expect(screen.getByText('Here is the complete reply.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy →' }));
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Copied ✓ →' })).toBeDisabled();
   });
 });
 

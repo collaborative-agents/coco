@@ -207,6 +207,8 @@ export function NotificationBubble({
     notifType === 'proactive-suggestion' && suggestion != null;
   const isRevealedSuggestion =
     notifType === 'instant-suggestion' && suggestion != null;
+  const contentCopyConfirmed =
+    isRevealedSuggestion && suggestion.kind === 'content' && copyConfirmed;
 
   // For default pause-event guidance, truncate to a short preview so the
   // card doesn't overflow with a multi-paragraph response.
@@ -363,8 +365,13 @@ export function NotificationBubble({
                 Chat about it
               </button>
             )}
-            <button type="button" className="toast-action" onClick={onAction}>
-              {actionLabel} →
+            <button
+              type="button"
+              className="toast-action"
+              onClick={onAction}
+              disabled={contentCopyConfirmed}
+            >
+              {contentCopyConfirmed ? 'Copied ✓' : actionLabel} →
             </button>
           </div>
         )
@@ -503,6 +510,7 @@ export default function NotificationView() {
           status: payload.status,
           text: payload.rawObservation ?? null,
         });
+        ipc?.sendMessage('notification-revealed-state', { revealed: true });
         return;
       }
       // Preserve the existing chat route as a cache-miss/error fallback.
@@ -519,8 +527,7 @@ export default function NotificationView() {
         copyText: payload.suggestion?.copyText,
       });
       rateInstantSuggestion('up');
-      setVisible(false);
-      window.close();
+      setCopyConfirmed(true);
       return;
     }
     // Default: open the main window (existing tutor guidance behaviour).
@@ -575,11 +582,8 @@ export default function NotificationView() {
     });
     if (toolId === null) {
       rateInstantSuggestion('up');
-      setCopyConfirmed(true);
-      return;
     }
-    setVisible(false);
-    window.close();
+    setCopyConfirmed(true);
   };
 
   const handleChatAboutSuggestion = () => {
@@ -591,8 +595,6 @@ export default function NotificationView() {
       suggestion: payload.suggestion,
       surface: 'notification',
     });
-    setVisible(false);
-    window.close();
   };
 
   const handleOpenCocoChat = () => {
@@ -605,8 +607,6 @@ export default function NotificationView() {
       surface: 'notification',
       copyPromptToInput: true,
     });
-    setVisible(false);
-    window.close();
   };
 
   return (

@@ -87,6 +87,10 @@ export interface ObservationEvent {
   rationale?: string;
   /** Observer's explicit personalized intervention decision. */
   need_support?: 'yes' | 'no';
+  /** Sensing-owned global eligibility for presenting proactive support. */
+  proactive_allowed?: boolean;
+  /** Seconds remaining in sensing's shown-to-shown proactive cooldown. */
+  proactive_cooldown_remaining_s?: number;
   /** Stable id of the observer call that produced this event (for feedback joins). */
   observation_id?: string;
   llm_metrics?: LLMCallMetrics;
@@ -406,6 +410,8 @@ export interface ActivityRecord {
   observation: string;
   /** Stable join key for updating this record when the user reacts later. */
   observation_id?: string;
+  /** Eligibility decision attached by sensing when this event was emitted. */
+  proactive_allowed?: boolean;
   /** Present when this observation offered actionable proactive support. */
   proactive_support?: {
     engaged: boolean;

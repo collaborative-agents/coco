@@ -33,6 +33,10 @@ export interface ObservationEvent {
   rationale?: string;
   /** Explicit personalized support decision from the everyday observer. */
   need_support?: 'yes' | 'no';
+  /** Sensing-owned global eligibility for presenting proactive support. */
+  proactive_allowed?: boolean;
+  /** Seconds remaining in sensing's shown-to-shown proactive cooldown. */
+  proactive_cooldown_remaining_s?: number;
   /** Relevance-ranked memory retrieved by sensing for an instant suggestion. */
   retrieved_context?: {
     query: string;

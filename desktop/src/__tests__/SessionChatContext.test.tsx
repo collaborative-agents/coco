@@ -274,7 +274,7 @@ describe('deferred suggestion context', () => {
     fireEvent.click(screen.getByTitle('Settings'));
     expect(
       screen.getByText(
-        'Sleeping intentionally stops the sensing server and tutor agent.',
+        /Sleeping intentionally stops screen observation while the tutor stays available/,
       ),
     ).toBeInTheDocument();
     expect(

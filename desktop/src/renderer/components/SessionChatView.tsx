@@ -2151,7 +2151,7 @@ export default function SessionChatView() {
           ? '#16a34a'
           : '#6b7280';
   const chatHealthTitle = cocoSleeping
-    ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+    ? 'Screen observation is asleep. Text chat remains available.'
     : serviceUnavailable
       ? [
           sensingUnavailable ? 'Sensing server is not reachable.' : '',
@@ -2302,12 +2302,13 @@ export default function SessionChatView() {
           <div style={S.groupLabel}>Health</div>
           <div style={S.helpText}>
             {cocoSleeping
-              ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+              ? 'Screen observation is asleep. Text chat remains available, and health checks resume when Coco wakes.'
               : "Checks Coco's local services and sends short real requests to the configured models. The sensing test includes a small test image."}
           </div>
           {cocoSleeping && (
             <div role="status" style={S.healthDetail}>
-              Sleeping intentionally stops the sensing server and tutor agent.
+              Sleeping intentionally stops screen observation while the tutor
+              stays available for chat and personalization runs in the background.
             </div>
           )}
           {!cocoSleeping && (

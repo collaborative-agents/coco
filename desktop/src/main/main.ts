@@ -47,6 +47,7 @@ import {
 } from './services/tutor-stream';
 import type { TutorStreamEvent } from './services/tutor-stream';
 import { PersonalizationScheduler } from './services/personalization-scheduler';
+import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { DailyMemoryDraftService } from './services/daily-memory-drafts';
 import {
   WakeWordService,
@@ -238,6 +239,8 @@ let hotkeyCaptureInProgress = false;
 let wakeWordCaptureWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
+let revealedSuggestionOpen = false;
+let proactiveNotificationOpen = false;
 let latestHiddenSuggestionObservationId: string | undefined;
 let onboardingWindow: BrowserWindow | null = null;
 let sessionSetupWindow: BrowserWindow | null = null;
@@ -247,6 +250,8 @@ let avatarRendererReady = false;
 let pendingOpenHistory = false;
 const observationSleepGuard = new ObservationSleepGuard();
 let personalizationScheduler: PersonalizationScheduler | null = null;
+let eveningPersonalizationScheduler: EveningPersonalizationScheduler | null =
+  null;
 let dailyMemoryDraftService: DailyMemoryDraftService | null = null;
 let previewCocoSleepMode = false;
 
@@ -694,6 +699,23 @@ const showChatPanel = () => {
   chatWindow.setAlwaysOnTop(true, 'floating');
   chatWindow.show();
   chatWindow.focus();
+
+  // Chat is already the user's active support surface. Cancel suggestions that
+  // have not been revealed yet and prevent an in-flight hidden-avatar request
+  // from surfacing after the chat opens. A suggestion the user explicitly
+  // revealed remains pinned until they close it themselves.
+  latestHiddenSuggestionObservationId = undefined;
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send('suppress-unrevealed-proactive-suggestion');
+  }
+  if (
+    proactiveNotificationOpen &&
+    !revealedSuggestionOpen &&
+    notificationWindow &&
+    !notificationWindow.isDestroyed()
+  ) {
+    notificationWindow.destroy();
+  }
   // The avatar stays visible alongside the chat panel — never hide it, so the
   // pet is always available and closing the chat can't leave a blank screen.
   if (
@@ -705,6 +727,10 @@ const showChatPanel = () => {
     avatarWindow.show();
   }
 };
+
+const isChatPanelOpen = (): boolean =>
+  chatWindow !== null && !chatWindow.isDestroyed() &&
+  chatWindow.isVisible();
 
 const clearImagePreviewState = (target: BrowserWindow) => {
   if (imagePreviewWindow !== target) return;
@@ -1216,7 +1242,7 @@ type NotifType =
   | 'session-start-prompt'
   | 'session-end-prompt';
 
-const showNotification = (payload: {
+type NotificationPayload = {
   message: string;
   actionLabel: string;
   vizState?: VizState;
@@ -1226,19 +1252,53 @@ const showNotification = (payload: {
   status?: string;
   rawObservation?: string;
   suggestion?: InstantSuggestion;
-}) => {
+  /** Preserve important lifecycle messages until the current card is closed. */
+  deferIfBusy?: boolean;
+};
+
+let deferredNotificationPayload: NotificationPayload | null = null;
+
+const hasOpenRevealedSuggestion = (): boolean =>
+  revealedSuggestionOpen &&
+  notificationWindow !== null &&
+  !notificationWindow.isDestroyed();
+
+const showNotification = (payload: NotificationPayload): boolean => {
   if (payload.notifType !== 'proactive-suggestion') {
     latestHiddenSuggestionObservationId = undefined;
+  }
+  if (payload.notifType === 'proactive-suggestion' && isChatPanelOpen()) {
+    latestHiddenSuggestionObservationId = undefined;
+    log.info(
+      '[Notification] Suppressed proactive suggestion while Coco chat is open.',
+    );
+    return false;
+  }
+  if (hasOpenRevealedSuggestion()) {
+    if (payload.notifType === 'proactive-suggestion') {
+      log.info(
+        '[Notification] Suppressed proactive suggestion while a revealed suggestion is open.',
+      );
+    } else {
+      deferredNotificationPayload = payload;
+      log.info(
+        '[Notification] Deferred notification until the revealed suggestion is closed.',
+      );
+    }
+    return false;
   }
   if (
     notificationHovered &&
     notificationWindow &&
     !notificationWindow.isDestroyed()
   ) {
+    if (payload.deferIfBusy) deferredNotificationPayload = payload;
     log.info(
-      '[Notification] Keeping hovered notification; dropping replacement.',
+      `[Notification] Keeping hovered notification; ${
+        payload.deferIfBusy ? 'deferring' : 'dropping'
+      } replacement.`,
     );
-    return;
+    return false;
   }
   // Destroy any existing notification before showing a new one (dedup guard).
   notificationHovered = false;
@@ -1268,6 +1328,7 @@ const showNotification = (payload: {
   });
 
   const url = `${resolveHtmlPath('index.html')}?view=notification`;
+  proactiveNotificationOpen = payload.notifType === 'proactive-suggestion';
   notificationWindow.loadURL(url);
 
   notificationWindow.on('ready-to-show', () => {
@@ -1281,7 +1342,16 @@ const showNotification = (payload: {
   notificationWindow.on('closed', () => {
     notificationWindow = null;
     notificationHovered = false;
+    revealedSuggestionOpen = false;
+    proactiveNotificationOpen = false;
+    const deferredPayload = deferredNotificationPayload;
+    deferredNotificationPayload = null;
+    if (deferredPayload && !isQuitting && !systemSuspended) {
+      setImmediate(() => showNotification(deferredPayload));
+    }
   });
+
+  return true;
 };
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
@@ -1325,8 +1395,8 @@ ipcMain.handle(
     _event,
     { forceModelTest = false }: { forceModelTest?: boolean } = {},
   ) => {
-    // Sleep mode intentionally stops the sensing and tutor services. Do not
-    // probe them or report their expected absence as a health failure.
+    // Sleep mode intentionally stops sensing. Avoid reporting the observer's
+    // expected absence as a health failure; text chat remains available.
     if (isCocoSleeping()) {
       return { checkedAt: Date.now(), sleeping: true };
     }
@@ -1950,11 +2020,10 @@ async function setCocoSleepMode(sleeping: boolean) {
     // Make sleep authoritative before stopping services so a concurrent
     // health request cannot misclassify their intentional shutdown.
     personalizationScheduler.setSleepMode(true);
-    if (isSessionActive) endCurrentSession();
-    await Promise.all([
-      serviceManager.stopService('sensing-server'),
-      serviceManager.stopService('tutor-server'),
-    ]);
+    // Sleep pauses observation but deliberately keeps the tutor alive. This
+    // lets the user continue chatting while Coco-PE uses the quiet period.
+    await serviceManager.stopService('sensing-server');
+    serviceManager.startService('tutor-server');
   } else if (personalizationScheduler) {
     personalizationScheduler.setSleepMode(false);
     serviceManager.startAll();
@@ -1971,6 +2040,62 @@ async function setCocoSleepMode(sleeping: boolean) {
   }
   if (tray && !tray.isDestroyed()) createTray();
   return { success: true, sleeping };
+}
+
+async function requestDailyMemoryReview(attempt = 0): Promise<string> {
+  const tutorPort = process.env.TUTOR_PORT || '8081';
+  try {
+    const response = await axios.post(
+      `http://127.0.0.1:${tutorPort}/review/daily`,
+      {},
+      { timeout: 2 * 60_000 },
+    );
+    return String(
+      (response.data as { guidance?: unknown } | undefined)?.guidance ?? '',
+    ).trim();
+  } catch (error) {
+    // At launch, the evening check can race the tutor subprocess becoming
+    // healthy. Give it a short readiness window before using fallback copy.
+    if (attempt >= 20) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return requestDailyMemoryReview(attempt + 1);
+  }
+}
+
+async function runEveningPersonalizationTransition(): Promise<boolean> {
+  if (systemSuspended || !personalizationScheduler) return false;
+
+  let review = '';
+  serviceManager.startService('tutor-server');
+  personalizationScheduler.beginInteractiveInference();
+  try {
+    review = await requestDailyMemoryReview();
+  } catch (error) {
+    log.warn(
+      `[Evening] Could not generate memory review: ${(error as Error).message}`,
+    );
+  } finally {
+    personalizationScheduler.endInteractiveInference();
+  }
+
+  const result = await setCocoSleepMode(true);
+  if (!result.success) return false;
+
+  const message = [
+    review ||
+      "I don't have enough activity in memory to summarize today, but it's still a good time to pause.",
+    '**Take a break when you can.** Coco is now asleep and running today’s personalization update.',
+    'You can still chat with Coco. If you want Coco to observe your screen again, wake Coco up.',
+  ].join('\n\n');
+  const payload: NotificationPayload = {
+    message,
+    actionLabel: 'Chat with Coco',
+    deferIfBusy: true,
+  };
+  const shown = showNotification(payload);
+  const queued = deferredNotificationPayload === payload;
+  log.info('[Evening] Coco entered sleep mode for personalization.');
+  return shown || queued;
 }
 
 ipcMain.removeHandler('set-coco-sleep-mode');
@@ -2136,6 +2261,24 @@ ipcMain.on(
   'notification-hover-state',
   (_event, { hovered }: { hovered?: boolean }) => {
     notificationHovered = hovered === true;
+  },
+);
+
+ipcMain.removeAllListeners('notification-revealed-state');
+ipcMain.on(
+  'notification-revealed-state',
+  (event, { revealed }: { revealed?: boolean }) => {
+    if (
+      !notificationWindow ||
+      notificationWindow.isDestroyed() ||
+      event.sender !== notificationWindow.webContents
+    ) {
+      return;
+    }
+    revealedSuggestionOpen = revealed === true;
+    log.info(
+      `[Notification] Revealed suggestion ${revealedSuggestionOpen ? 'pinned' : 'unpinned'}.`,
+    );
   },
 );
 
@@ -2560,8 +2703,6 @@ ipcMain.on(
       copyPromptToInput?: boolean;
     },
   ) => {
-    if (payload?.surface === 'notification') notificationWindow?.destroy();
-
     const suggestion = payload?.suggestion;
     if (!suggestion) return;
     const rawObservation = payload.rawObservation?.trim() || '';
@@ -3576,6 +3717,7 @@ app.on('second-instance', () => {
 app.on('will-quit', () => {
   // Unregister all shortcuts
   globalShortcut.unregisterAll();
+  eveningPersonalizationScheduler?.stop();
 });
 
 // Warning shown when neither first-launch configuration nor legacy developer
@@ -3730,6 +3872,12 @@ const startObserver = () => {
       },
     });
     personalizationScheduler.start();
+    eveningPersonalizationScheduler?.stop();
+    eveningPersonalizationScheduler = new EveningPersonalizationScheduler({
+      statePath: path.join(stateRoot, 'evening-review.json'),
+      onEvening: runEveningPersonalizationTransition,
+    });
+    eveningPersonalizationScheduler.start();
   } catch (e) {
     console.warn('Failed to start services:', e);
   }
@@ -3755,6 +3903,24 @@ const startObserver = () => {
       }
 
       const status = event.status;
+      const isProactiveSuggestionEvent =
+        typeof status === 'string' && PRECOMPUTE_STATUSES.has(status);
+      const suppressProactiveSuggestionForChat =
+        isProactiveSuggestionEvent && isChatPanelOpen();
+      const suppressProactiveSuggestionForCooldown =
+        isProactiveSuggestionEvent && event.proactive_allowed === false;
+
+      if (suppressProactiveSuggestionForChat) {
+        log.info(
+          '[Notification] Suppressed proactive suggestion while Coco chat is open.',
+        );
+      }
+      if (suppressProactiveSuggestionForCooldown) {
+        log.info(
+          `[Notification] Sensing suppressed proactive suggestion during 60s cooldown ` +
+            `(${Math.ceil(event.proactive_cooldown_remaining_s ?? 0)}s remaining).`,
+        );
+      }
 
       // Tier-2 friction events from the struggle/pause path arrive without an
       // observation_id, but the precompute cache and the renderer bubble must
@@ -3765,8 +3931,15 @@ const startObserver = () => {
         event.observation_id = `synthetic-${Date.now()}-${syntheticObsSeq}`;
       }
 
-      // Always forward to avatar window for pet animation / observation bubble.
-      if (!hideAvatarMode && avatarWindow && !avatarWindow.isDestroyed()) {
+      // Forward ordinary observations as usual. Forward proactive events only
+      // when chat is not already serving as the active support surface.
+      if (
+        !suppressProactiveSuggestionForChat &&
+        !suppressProactiveSuggestionForCooldown &&
+        !hideAvatarMode &&
+        avatarWindow &&
+        !avatarWindow.isDestroyed()
+      ) {
         avatarWindow.webContents.send('observation-update', event);
       }
 
@@ -3780,6 +3953,7 @@ const startObserver = () => {
           need_support: event.need_support,
           observation: cleanObservation(event.observation),
           observation_id: event.observation_id,
+          proactive_allowed: event.proactive_allowed,
           proactive_support: PRECOMPUTE_STATUSES.has(status)
             ? { engaged: false }
             : undefined,
@@ -3791,58 +3965,72 @@ const startObserver = () => {
 
       // ── Eagerly precompute an instant suggestion for Tier-2 bubbles ───
       // Fire the moment the bubble appears so it's ready by click time. Done
-      // regardless of session state — the renderer reveals it instantly either
-      // way, falling back to the chat flow only on a cache miss.
+      // regardless of session state, except while visible chat already provides
+      // support. The renderer falls back to chat only on a cache miss.
       if (status && PRECOMPUTE_STATUSES.has(status)) {
-        const suggestionPromise = precomputeSuggestion(event);
-        if (hideAvatarMode && event.observation) {
-          const rawObservation = cleanObservation(event.observation);
-          latestHiddenSuggestionObservationId = event.observation_id;
-          void suggestionPromise?.then((value) => {
-            // Hidden-avatar notifications preview the generated suggestion,
-            // rather than the observer diagnosis that led to it.
-            if (
-              !value ||
-              !hideAvatarMode ||
-              latestHiddenSuggestionObservationId !== event.observation_id
-            ) {
-              return;
-            }
-            const suggestion: InstantSuggestion =
-              value.kind === 'delegate'
-                ? {
-                    ...value,
-                    availableTools: buildAvailableTools(value.targetTool),
-                  }
-                : value;
-            showNotification({
-              message: suggestion.title,
-              actionLabel: 'Reveal full suggestion',
-              notifType: 'proactive-suggestion',
-              observationId: event.observation_id,
-              status,
-              rawObservation,
-              suggestion,
-            });
-            const sensingPort = process.env.SENSING_PORT || '8080';
-            axios
-              .post(
-              `http://127.0.0.1:${sensingPort}/feedback`,
-              {
-                kind: 'shown',
-                surface: 'notification',
-                observation_id: event.observation_id ?? null,
+        const suggestionIsAlreadyRevealed = hasOpenRevealedSuggestion();
+        if (suppressProactiveSuggestionForChat) {
+          // The observation is still persisted above for history and training;
+          // only proactive generation and presentation are suppressed.
+        } else if (suppressProactiveSuggestionForCooldown) {
+          // Sensing owns the global policy. The observation is still persisted
+          // above, but no tutor request or presentation is started for it.
+        } else if (suggestionIsAlreadyRevealed) {
+          log.info(
+            '[Notification] Suspended proactive suggestions while a revealed suggestion is open.',
+          );
+        } else {
+          const suggestionPromise = precomputeSuggestion(event);
+          if (hideAvatarMode && event.observation) {
+            const rawObservation = cleanObservation(event.observation);
+            latestHiddenSuggestionObservationId = event.observation_id;
+            void suggestionPromise?.then((value) => {
+              // Hidden-avatar notifications preview the generated suggestion,
+              // rather than the observer diagnosis that led to it.
+              if (
+                !value ||
+                !hideAvatarMode ||
+                latestHiddenSuggestionObservationId !== event.observation_id
+              ) {
+                return;
+              }
+              const suggestion: InstantSuggestion =
+                value.kind === 'delegate'
+                  ? {
+                      ...value,
+                      availableTools: buildAvailableTools(value.targetTool),
+                    }
+                  : value;
+              const shown = showNotification({
+                message: suggestion.title,
+                actionLabel: 'Reveal full suggestion',
+                notifType: 'proactive-suggestion',
+                observationId: event.observation_id,
                 status,
-              },
-              { timeout: 3000 },
-            )
-              .catch((err) => {
-                log.warn(
-                  `[Feedback] failed to post: ${(err as Error).message}`,
-                );
-              })
-              .finally(() => personalizationScheduler?.noteFeedback());
-          });
+                rawObservation,
+                suggestion,
+              });
+              if (!shown) return;
+              const sensingPort = process.env.SENSING_PORT || '8080';
+              axios
+                .post(
+                  `http://127.0.0.1:${sensingPort}/feedback`,
+                  {
+                    kind: 'shown',
+                    surface: 'notification',
+                    observation_id: event.observation_id ?? null,
+                    status,
+                  },
+                  { timeout: 3000 },
+                )
+                .catch((err) => {
+                  log.warn(
+                    `[Feedback] failed to post: ${(err as Error).message}`,
+                  );
+                })
+                .finally(() => personalizationScheduler?.noteFeedback());
+            });
+          }
         }
       }
 
@@ -3890,6 +4078,8 @@ app
       latestHiddenSuggestionObservationId = undefined;
       suggestionCache.clear();
       notificationHovered = false;
+      revealedSuggestionOpen = false;
+      deferredNotificationPayload = null;
       notificationWindow?.destroy();
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         avatarWindow.webContents.send('system-suspend');
@@ -3905,6 +4095,8 @@ app
       latestHiddenSuggestionObservationId = undefined;
       suggestionCache.clear();
       notificationHovered = false;
+      revealedSuggestionOpen = false;
+      deferredNotificationPayload = null;
       notificationWindow?.destroy();
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         // Send this again in case the renderer was frozen before handling the
@@ -3912,6 +4104,7 @@ app
         avatarWindow.webContents.send('system-suspend');
         avatarWindow.webContents.send('daily-memory-draft-refresh');
       }
+      eveningPersonalizationScheduler?.checkNow().catch(() => undefined);
     });
 
     // Ensure default workspace directory exists

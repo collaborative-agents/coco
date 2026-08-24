@@ -529,6 +529,7 @@ function PetView() {
   const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseKeyRef = useRef(0);
+  const bubbleRef = useRef<BubbleState | null>(null);
   // Hover-to-keep: while the pointer is over the bubble, the auto-hide is
   // paused so the user can read / copy the suggested prompt. holdMsRef carries
   // the duration to restart with once the pointer leaves.
@@ -537,6 +538,10 @@ function PetView() {
   // Once the user reveals a suggestion ("Help me with this"), the bubble is
   // pinned: it never auto-hides and can only be closed with the × button.
   const bubblePinnedRef = useRef(false);
+
+  useEffect(() => {
+    bubbleRef.current = bubble;
+  }, [bubble]);
 
   // Arm the bubble's auto-hide after `holdMs`. Skipped while the pointer is
   // over the bubble (handleBubbleLeave re-arms it on exit) so a suggestion the
@@ -742,6 +747,23 @@ function PetView() {
       },
     );
 
+    const cleanupChatSuppression = window.electron?.ipcRenderer.on(
+      'suppress-unrevealed-proactive-suggestion',
+      () => {
+        const activeBubble = bubbleRef.current;
+        if (!activeBubble?.showHelpButton || activeBubble.suggestion) return;
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        if (fadeTimer.current) clearTimeout(fadeTimer.current);
+        if (pulseTimer.current) clearTimeout(pulseTimer.current);
+        bubbleHoverRef.current = false;
+        bubblePinnedRef.current = false;
+        bubbleRef.current = null;
+        setBubble(null);
+        setPulse(null);
+        setMood('idle');
+      },
+    );
+
     const cleanup = window.electron?.ipcRenderer.on(
       'observation-update',
       (data: any) => {
@@ -838,6 +860,8 @@ function PetView() {
 
     return () => {
       if (typeof cleanupSuspend === 'function') cleanupSuspend();
+      if (typeof cleanupChatSuppression === 'function')
+        cleanupChatSuppression();
       if (typeof cleanup === 'function') cleanup();
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
