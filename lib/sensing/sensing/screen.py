@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 import mss
-from PIL import Image, ImageDraw
+from PIL import Image
 from pydantic import BaseModel, Field
 from pynput import keyboard, mouse  # still synchronous
 from sensing.activity import SensingActivityMonitor
@@ -458,12 +458,7 @@ class Screen(Observer):
     async def _save_frame(
         self,
         frame,
-        x,
-        y,
         tag: str,
-        box_color: str = "red",
-        box_width: int = 10,
-        draw_box: bool = True,
         target_dir: str | None = None,
         lossless: bool = False,
     ) -> tuple[str, str]:
@@ -473,20 +468,6 @@ class Screen(Observer):
         extension = "png" if lossless else "jpg"
         path = os.path.join(save_dir, f"{ts}_{tag}.{extension}")
         image = Image.frombytes("RGB", (frame.width, frame.height), frame.rgb)
-
-        # Draw the cursor box at original coordinates before any resize
-        if draw_box:
-            draw = ImageDraw.Draw(image)
-            # Clamp both ends of each axis. Input callbacks can briefly report a
-            # cursor outside every display (for example while display geometry is
-            # changing), and Pillow rejects rectangles whose second coordinate is
-            # less than the first.
-            x1 = min(max(0, x - 30), frame.width - 1)
-            x2 = min(max(0, x + 30), frame.width - 1)
-            y1 = min(max(0, y - 20), frame.height - 1)
-            y2 = min(max(0, y + 20), frame.height - 1)
-            draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
-            del draw
 
         if lossless:
             await self._run_in_thread(image.save, path, "PNG", optimize=True)
@@ -589,7 +570,7 @@ class Screen(Observer):
                 )
                 return "", ""
 
-            path, ts = await self._save_frame(bf, 0, 0, "inspect", draw_box=False)
+            path, ts = await self._save_frame(bf, "inspect")
             print(f"[INSPECT] saved current frame to: {path} at {ts}")
             return path, ts
 
@@ -637,10 +618,7 @@ class Screen(Observer):
 
             path, ts = await self._save_frame(
                 frame,
-                0,
-                0,
                 "hotkey",
-                draw_box=False,
                 target_dir=self._hotkey_dir,
                 lossless=True,
             )
@@ -765,12 +743,8 @@ class Screen(Observer):
                 else:
                     step = f"{ev['type']}({ev['position'][0]:.1f}, {ev['position'][1]:.1f})"
 
-                bef_path, _ = await self._save_frame(
-                    ev["before"], ev["position"][0], ev["position"][1], f"{step}_before"
-                )
-                aft_path, _ = await self._save_frame(
-                    aft, ev["position"][0], ev["position"][1], f"{step}_after"
-                )
+                bef_path, _ = await self._save_frame(ev["before"], f"{step}_before")
+                aft_path, _ = await self._save_frame(aft, f"{step}_after")
                 await self._process_and_emit(bef_path, aft_path, ev["type"], ev)
 
                 log.info(f"{ev['type']} captured on monitor {ev['mon']}")
@@ -793,9 +767,6 @@ class Screen(Observer):
                 if idx is None:
                     return
 
-                mon = mons[idx - self._MON_START]
-                x = x - mon["left"]
-                y = y - mon["top"]
                 log.info(f"Key {typ}: {str(key)} on monitor {idx}")
 
                 step = f"key_{typ}({str(key)})"
@@ -816,7 +787,7 @@ class Screen(Observer):
                         self._key_activity_start = current_time
                         self._key_screenshots = []
                         screenshot_path, _ = await self._save_frame(
-                            self._frames[idx], x, y, f"{step}_first"
+                            self._frames[idx], f"{step}_first"
                         )
                         self._key_screenshots.append(screenshot_path)
                         log.info(
@@ -825,7 +796,7 @@ class Screen(Observer):
                     else:
                         # Continue existing session - save intermediate screenshot
                         screenshot_path, _ = await self._save_frame(
-                            self._frames[idx], x, y, f"{step}_intermediate"
+                            self._frames[idx], f"{step}_intermediate"
                         )
                         self._key_screenshots.append(screenshot_path)
                         log.info(

@@ -3,10 +3,15 @@ import os
 from collections.abc import Callable
 from typing import cast
 
-import numpy as np
-from PIL import Image
 from py_utils.logging import init_logger
-from sensing.segment_processor import AiTutoringProcessor, SegmentProcessor
+from sensing.segment_processor import (
+    DEFAULT_MSE_THRESHOLD,
+    MAX_MSE,
+    AiTutoringProcessor,
+    SegmentProcessor,
+    meaningful_action_snapshots,
+    rgb_mse,
+)
 from sensing.utils import (
     compose_key_input,
     get_key_input,
@@ -200,34 +205,16 @@ def measure_time_from_states(states: list[dict]) -> list[dict]:
 
 
 # Segmentation
-MAX_DIFF = 100000.0
+MAX_DIFF = MAX_MSE
 
 
 def calc_diff_scores(action_nodes: list[dict]) -> list[float]:
-    def mse(image_before: str | None, image_after: str | None) -> float:
-        """Calculate the mean squared error between two images."""
-        # print(f"Calculating MSE between {image_before} and {image_after}")
-        if not image_before or not image_after:
-            return MAX_DIFF
-        try:
-            with Image.open(image_before) as before:
-                image1 = np.array(before.convert("RGB"))
-            with Image.open(image_after) as after:
-                image2 = np.array(after.convert("RGB"))
-        except (OSError, ValueError):
-            return MAX_DIFF
-        if image1.shape != image2.shape:
-            return MAX_DIFF
-        err = np.sum((image1.astype("float") - image2.astype("float")) ** 2)
-        err /= float(image1.shape[0] * image1.shape[1])
-        return err
-
     diff_scores = []
     for i, action_node in enumerate(action_nodes):
         if i == 0:
             continue
         else:
-            diff_score = mse(
+            diff_score = rgb_mse(
                 image_before=action_nodes[i - 1]["state_str"]["after"],
                 image_after=action_node["state_str"]["before"],
             )
@@ -237,7 +224,7 @@ def calc_diff_scores(action_nodes: list[dict]) -> list[float]:
 
 def get_consistent_ranges(
     scores: list[float],
-    threshold: float = 8000.0,
+    threshold: float = DEFAULT_MSE_THRESHOLD,
     min_steps: int = 5,
 ) -> list[tuple[int, int]]:
     """
@@ -263,7 +250,9 @@ def get_consistent_ranges(
 
 
 def get_intervals_per_step(
-    diff_scores: list[float], threshold: float = 8000.0, verbose: bool = False
+    diff_scores: list[float],
+    threshold: float = DEFAULT_MSE_THRESHOLD,
+    verbose: bool = False,
 ) -> list[tuple[int, int]]:
     """Segment the trajectory at actions with above-threshold state differences."""
     intervals = []
@@ -281,7 +270,7 @@ def get_intervals_per_step(
 def get_intervals(
     ranges: list[tuple[int, int]],
     diff_scores: list[float],
-    threshold: float = 8000.0,
+    threshold: float = DEFAULT_MSE_THRESHOLD,
     min_steps: int = 5,
 ) -> list[tuple[int, int]]:
     intervals = []
@@ -329,7 +318,7 @@ def get_intervals(
 
 def trigger_segmentation(
     action_nodes: list[dict],
-    threshold: float = 8000.0,
+    threshold: float = DEFAULT_MSE_THRESHOLD,
     min_steps: int = 5,
 ) -> list[list[dict]]:
     """Segment action nodes by MSE-based state differences."""
@@ -382,9 +371,9 @@ class Streamer:
         self,
         db_path: str,
         screenshot_dir: str,
-        check_interval: float = 5.0,
+        check_interval: float = 15.0,
         min_actions_threshold: int = 5,
-        segment_threshold: float = 8000.0,
+        segment_threshold: float = DEFAULT_MSE_THRESHOLD,
         enable_hotkey: bool = False,
         max_stored_actions: int = 1000,
         periodic_delete: bool = False,
@@ -606,18 +595,17 @@ class Streamer:
         # screenshot_paths: list[str] = []
 
         # 4. Store in memory with eviction
+        new_action_nodes: list[dict] = []
         async with self._lock:
             for i, action in enumerate(merged_actions):
-                self._stored_actions.append(
-                    {
-                        "timestamp": time_list[i]["before"]
-                        if i < len(time_list)
-                        else 0,
-                        "action": action,
-                        "state_str": states[i],
-                        "time_info": time_list[i] if i < len(time_list) else {},
-                    }
-                )
+                action_node = {
+                    "timestamp": time_list[i]["before"] if i < len(time_list) else 0,
+                    "action": action,
+                    "state_str": states[i],
+                    "time_info": time_list[i] if i < len(time_list) else {},
+                }
+                self._stored_actions.append(action_node)
+                new_action_nodes.append(action_node)
             if len(self._stored_actions) > self.max_stored_actions:
                 self._stored_actions = self._stored_actions[-self.max_stored_actions :]
 
@@ -641,15 +629,29 @@ class Streamer:
             type if (force and type in ("pause", "user_prompt")) else "snapshot"
         )
 
-        # 6b. Identify the one screenshot that the snapshot processor will
-        #     pass into the observer pipeline.  That file must survive until
-        #     the observer reads it (cleaned later by
+        # 6b. MSE-deduplicate the action screenshots while preserving a true
+        #     before/final-after pair and forwarding removed-frame actions to
+        #     the next retained frame.
+        #     These files must survive until the observer reads them (cleaned by
         #     _cleanup_consumed_screenshots in segment_processor).
-        snapshot_keeper: str | None = None
-        if segments and effective_type == "snapshot":
-            last_seg = segments[-1]
-            if last_seg:
-                snapshot_keeper = last_seg[-1].get("state_str", {}).get("after")
+        action_snapshots = (
+            await asyncio.to_thread(
+                meaningful_action_snapshots,
+                [new_action_nodes],
+                mse_threshold=self.segment_threshold,
+            )
+            if effective_type == "snapshot"
+            else []
+        )
+        if action_snapshots:
+            logger.info(
+                "Selected %d observer frames from %d merged actions "
+                "with MSE threshold %.1f",
+                len(action_snapshots),
+                len(new_action_nodes),
+                self.segment_threshold,
+            )
+        snapshot_keepers = {snapshot.image_path for snapshot in action_snapshots}
 
         # 6c. Delete ALL event screenshots from stored actions — segmentation
         #     already read them. Future segmentation cycles will get
@@ -660,7 +662,7 @@ class Streamer:
             ss = sa.get("state_str") or {}
             for key in ("before", "after"):
                 p = ss.get(key)
-                if p and p != snapshot_keeper:
+                if p and p not in snapshot_keepers:
                     stale_paths.append(p)
                     ss[key] = None  # prevent future imread attempts
 
@@ -677,6 +679,7 @@ class Streamer:
                     user_text=user_text,
                     image_path=image_path,
                     timestamp=timestamp,
+                    action_snapshots=action_snapshots,
                 )
             )
 

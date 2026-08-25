@@ -2,27 +2,9 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
 import sensing.screen as screen_module
 from PIL import Image
 from sensing.screen import Screen
-
-
-@pytest.mark.parametrize("position", [(-100, -100), (200, 200)])
-def test_save_frame_clamps_cursor_box_to_image(tmp_path, position):
-    screen = Screen.__new__(Screen)
-    screen.screens_dir = str(tmp_path)
-
-    async def run_inline(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    screen._run_in_thread = run_inline
-    frame = SimpleNamespace(width=100, height=80, rgb=bytes(100 * 80 * 3))
-
-    path, _ = asyncio.run(screen._save_frame(frame, *position, "outside"))
-
-    with Image.open(path) as saved:
-        assert saved.size == (100, 80)
 
 
 def test_save_frame_preserves_native_resolution(tmp_path):
@@ -39,15 +21,7 @@ def test_save_frame_preserves_native_resolution(tmp_path):
         rgb=bytes(3440 * 1440 * 3),
     )
 
-    path, _ = asyncio.run(
-        screen._save_frame(
-            frame,
-            0,
-            0,
-            "resolution",
-            draw_box=False,
-        )
-    )
+    path, _ = asyncio.run(screen._save_frame(frame, "resolution"))
 
     with Image.open(path) as saved:
         assert saved.size == (3440, 1440)
@@ -67,16 +41,7 @@ def test_save_frame_uses_lossless_png_for_hotkey_capture(tmp_path):
         rgb=bytes([13, 127, 241]) * (120 * 80),
     )
 
-    path, _ = asyncio.run(
-        screen._save_frame(
-            frame,
-            0,
-            0,
-            "hotkey",
-            draw_box=False,
-            lossless=True,
-        )
-    )
+    path, _ = asyncio.run(screen._save_frame(frame, "hotkey", lossless=True))
 
     assert path.endswith("_hotkey.png")
     with Image.open(path) as saved:

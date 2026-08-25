@@ -82,13 +82,12 @@ The proactive assistant is built from three independent modules, each answering 
 
 By default (`--enable_judge=False`), the judge does not run and the experience is pull-based: the observer streams observations to the UI, and the user decides when to ask for help. Pass `--enable_judge=True` to turn on the judge as a proactive push layer that fires invites or in-chat nudges when it decides to intervene.
 
-#### Observation cadence (`observer_interval_seconds`)
+#### Observation cadence (`check_interval`, `observer_interval_seconds`)
 
 The observer fires from three sources:
 
-- **Time-driven tick.** An always-on loop observes the current screen every `observer_interval_seconds` whenever the user has been active within the last ~2 intervals. It is **decoupled from action volume**, so it catches low-distinct-action activity like **scrolling a long list** and **short tasks** that the action path misses.
-  - Lower `observer_interval_seconds` for snappier suggestions, raise it to cut VLM cost (each observation is one multimodal call).
-- **Detected-action snapshot.** When the streamer finds at least `min_actions_threshold` new keyboard, mouse, or scroll actions, it observes the newest state immediately. These calls are coalesced to at most one per streamer cycle (20 seconds by default), and they share a cooldown with the time-driven tick so the two paths do not duplicate work.
+- **Detected-action snapshot (primary).** Every `check_interval` (15 seconds by default), the streamer processes a batch when it finds at least `min_actions_threshold` new keyboard, mouse, or scroll actions. Consecutive keypresses and scroll callbacks are merged. The observer always receives the first true before frame and final after frame. Intermediate after frames are retained only when RGB MSE from the most recently retained frame exceeds `8000`; actions from removed frames are attached in order to the next retained frame. Action calls bypass the fallback cooldown, while the shared lock still prevents overlapping model calls.
+- **Time-driven fallback.** An always-on loop checks the current screen every `observer_interval_seconds` (3600 seconds by default). It uses the shared observation cursor, so recent action observations suppress this fallback. Lower the interval only when a deployment intentionally needs action-independent observations.
 - **Idle / user prompt.** The `pause` observation fires after the screen idle timeout; a `user_prompt` observation fires when the user sends a message.
 
 After `sensing_idle_timeout_seconds` without system-wide keyboard, mouse, or trackpad activity (5 minutes by default), sensing enters a dormant state: screen capture, database polling, observer ticks, and progress judgments pause. It also pauses immediately when the laptop reports that the display is asleep. The first user
@@ -99,7 +98,9 @@ input wakes sensing; the wake-up event itself is discarded so it cannot be paire
 ```bash
 uv run python -m sensing.sensing_server \
   --observer_model=<provider/model> \
-  --observer_interval_seconds=15.0 \
+  --check_interval=15 \
+  --mse_threshold=8000 \
+  --observer_interval_seconds=3600 \
   --sensing_idle_timeout_seconds=300 \
   --min_actions_threshold=2 \
   --port=8080 \

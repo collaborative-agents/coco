@@ -25,6 +25,7 @@ from sensing.gum import GUM
 from sensing.progress_detector import ProgressDetector, ProgressDetectorConfig
 from sensing.screen import Screen
 from sensing.segment_processor import (
+    DEFAULT_MSE_THRESHOLD,
     AiTutoringProcessor,
     HotKeyBuffer,
     WorkflowInductionProcessor,
@@ -678,7 +679,7 @@ def _get_ai_processor() -> AiTutoringProcessor | None:
 
 
 async def _observer_ticker(interval_seconds: float) -> None:
-    """Always-on, time-driven observation tick.
+    """Low-frequency, time-driven fallback observation tick.
 
     Every ``interval_seconds`` we capture a fresh screenshot and produce an
     observation — but only if the user has been active within the last
@@ -725,8 +726,10 @@ async def _observer_ticker(interval_seconds: float) -> None:
 class FeedbackRequest(BaseModel):
     """A user's explicit reaction to a proactive suggestion.
 
-    ``kind``: ``engage`` | ``dismiss`` | ``thumbs_up`` | ``thumbs_down``.
-    ``surface``: ``bubble`` (avatar observation bubble) | ``chat`` (tutor message).
+    ``kind``: ``shown`` | ``engage`` | ``dismiss`` | ``thumbs_up`` |
+    ``thumbs_down``.
+    ``surface``: ``bubble`` (avatar observation bubble) | ``notification``
+    (hidden-avatar native card) | ``chat`` (tutor message).
     """
 
     kind: str
@@ -751,7 +754,7 @@ async def record_feedback(req: FeedbackRequest):
     # Keep an in-memory reaction for this observation so the observer can avoid
     # re-raising a just-dismissed suggestion (injected into its next prompt).
     if ai_proc is not None and req.observation_id:
-        ai_proc.record_reaction(req.observation_id, req.kind)
+        ai_proc.record_reaction(req.observation_id, req.kind, status=req.status)
     rec = getattr(ai_proc, "_recorder", None) if ai_proc is not None else None
     if rec is None:
         # No recorder (e.g. ai_tutoring disabled) — accept but no-op.
@@ -872,8 +875,9 @@ async def main_async(
     ai_tutoring: bool,
     tutor_url: str,
     observer_model: str,
+    mse_threshold: float = DEFAULT_MSE_THRESHOLD,
     enable_judge: bool = False,
-    observer_interval_seconds: float = 15.0,
+    observer_interval_seconds: float = 3600.0,
 ):
     """Start GUM, Streamer, and FastAPI server concurrently."""
     global streamer
@@ -938,7 +942,10 @@ async def main_async(
             ai_tutor_output_log=ai_tutor_output_log,
             observer_model=observer_model,
             memory_engine=memory_engine,
-            action_snapshot_cooldown_seconds=check_interval,
+            # The streamer already emits at most one action batch per check
+            # cycle. A zero action cooldown makes actions dominant over the
+            # hourly fallback while the shared lock still prevents overlap.
+            action_snapshot_cooldown_seconds=0.0,
             # node_uuid and redis_url are configured later via POST /session
         )
         processors.append(ai_processor)
@@ -983,6 +990,7 @@ async def main_async(
         screenshot_dir=screenshot_dir,
         check_interval=check_interval,
         min_actions_threshold=min_actions_threshold,
+        segment_threshold=mse_threshold,
         enable_hotkey=False,
         segment_processors=processors,
     )
@@ -1005,8 +1013,7 @@ async def main_async(
             # Start the proactive judge in pre-session (invite) mode. It runs
             # continuously; POST /session reconfigures it for in-chat nudges.
             await _start_progress_detector(None)
-            # Always-on, time-driven observation tick (covers scrolling / short
-            # tasks that the action-accumulation path misses).
+            # Low-frequency fallback for activity that the action path misses.
             if ai_tutoring and observer_interval_seconds > 0:
                 observer_ticker_task = asyncio.create_task(
                     _observer_ticker(observer_interval_seconds)
@@ -1046,19 +1053,22 @@ async def main_async(
 
 def main(
     port: int = 8080,
-    check_interval: float = 20.0,
+    check_interval: float = 15.0,
     min_actions_threshold: int = 2,
     workflow_induction: bool = False,
     ai_tutoring: bool = True,
     tutor_url: str = "http://localhost:8081",
     observer_model: str = "",
+    mse_threshold: float = DEFAULT_MSE_THRESHOLD,
     enable_judge: bool = False,
-    observer_interval_seconds: float = 15.0,
+    observer_interval_seconds: float = 3600.0,
 ):
     # The observer model must be supplied explicitly; there is no built-in
     # default so the caller (CLI or desktop app) always chooses it consciously.
     if not (observer_model or "").strip():
         raise ValueError("--observer_model is required")
+    if mse_threshold < 0:
+        raise ValueError("--mse_threshold must be nonnegative")
     asyncio.run(
         main_async(
             port=port,
@@ -1068,6 +1078,7 @@ def main(
             ai_tutoring=ai_tutoring,
             tutor_url=tutor_url,
             observer_model=observer_model,
+            mse_threshold=mse_threshold,
             enable_judge=enable_judge,
             observer_interval_seconds=observer_interval_seconds,
         )

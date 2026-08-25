@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -97,7 +98,10 @@ async def test_ai_processor_retrieves_context_for_support_event(monkeypatch):
         score=0.91,
         observations=[evidence],
     )
-    store = SimpleNamespace(search=MagicMock(return_value=[hit]))
+    store = SimpleNamespace(
+        search=MagicMock(return_value=[hit]),
+        recent_propositions=MagicMock(return_value=[]),
+    )
     memory_engine = SimpleNamespace(
         store=store,
         add_observation=AsyncMock(return_value=True),
@@ -137,11 +141,9 @@ async def test_ai_processor_retrieves_context_for_support_event(monkeypatch):
     assert "old inference" not in retrieved_evidence["content"]
     query = "Reply to the recruiter The user is drafting a reply in Outlook."
     assert event["retrieved_context"]["query"] == query
-    assert store.search.call_count == 2
-    recent_call, relevant_call = store.search.call_args_list
-    assert recent_call.args == ("",)
-    assert recent_call.kwargs["limit"] == 3
-    assert recent_call.kwargs["include_observations"] == 0
+    store.recent_propositions.assert_called_once()
+    assert store.search.call_count == 1
+    relevant_call = store.search.call_args
     assert relevant_call.args == (query,)
     assert relevant_call.kwargs["limit"] == 3
     assert relevant_call.kwargs["include_observations"] == 1
@@ -238,10 +240,11 @@ async def test_observer_receives_recent_propositions_as_longer_term_context(
             text="The user recently reviewed a colleague's internship presentation.",
             confidence=8,
             decay=5,
-            updated_at=980.0,
-        )
+            updated_at=100.0,
+        ),
+        latest_observation_at=980.0,
     )
-    store = SimpleNamespace(search=MagicMock(return_value=[hit]))
+    store = SimpleNamespace(recent_propositions=MagicMock(return_value=[hit]))
     memory_engine = SimpleNamespace(
         store=store,
         add_observation=AsyncMock(return_value=True),
@@ -269,9 +272,107 @@ async def test_observer_receives_recent_propositions_as_longer_term_context(
     assert "<recent_propositions>" in captured["text_prompt"]
     assert "broader, longer-term summaries" in captured["text_prompt"]
     assert "colleague's internship presentation" in captured["text_prompt"]
-    store.search.assert_called_once_with(
-        "",
+    assert "last_activity_t-20s" in captured["text_prompt"]
+    store.recent_propositions.assert_called_once_with(
         limit=3,
+        start_time=-2_600.0,
+        end_time=1_000.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_observer_receives_three_relevant_propositions_distinct_from_recent(
+    monkeypatch,
+):
+    recent_hit = SimpleNamespace(
+        proposition=SimpleNamespace(
+            id=12,
+            text="The user recently edited the current paper section.",
+            confidence=8,
+            decay=5,
+        ),
+        latest_observation_at=980.0,
+        score=1.0,
+    )
+    relevant_hits = [
+        recent_hit,
+        *[
+            SimpleNamespace(
+                proposition=SimpleNamespace(
+                    id=proposition_id,
+                    text=text,
+                    confidence=confidence,
+                    decay=durability,
+                ),
+                score=score,
+            )
+            for proposition_id, text, confidence, durability, score in (
+                (21, "Prior ablation writing preferences.", 9, 7, 0.91),
+                (22, "Earlier context about Observer training signals.", 8, 6, 0.82),
+                (23, "The paper uses false-alarm rate terminology.", 7, 5, 0.73),
+            )
+        ],
+    ]
+    store = SimpleNamespace(
+        recent_propositions=MagicMock(return_value=[recent_hit]),
+        search=MagicMock(return_value=relevant_hits),
+    )
+    memory_engine = SimpleNamespace(
+        store=store,
+        add_observation=AsyncMock(return_value=True),
+    )
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+        memory_engine=memory_engine,
+    )
+    processor._build_context_prompt = AsyncMock(return_value="<memory />\n")
+    processor._collect_images = lambda text: (text, [])
+    processor._observation_history.append(
+        {
+            "ts": 990.0,
+            "type": "snapshot",
+            "obs": json.dumps(
+                {
+                    "observation": "The user is editing an ablation paragraph.",
+                    "user_intent": "Refine the Observer ablation discussion",
+                    "need_support": "no",
+                }
+            ),
+            "observation_id": "prior-observation",
+        }
+    )
+    monkeypatch.setattr(segment_processor.time, "time", lambda: 1_000.0)
+    captured = {}
+
+    def fake_observe(text_prompt, *_args, **_kwargs):
+        captured["text_prompt"] = text_prompt
+        return '{"need_support":"no"}', {}
+
+    monkeypatch.setattr(segment_processor, "_observe", fake_observe)
+
+    await processor._handle_observation(type="snapshot")
+
+    prompt = captured["text_prompt"]
+    assert "<recent_propositions>" in prompt
+    assert "<relevant_propositions>" in prompt
+    assert prompt.count("The user recently edited the current paper section.") == 1
+    assert "Prior ablation writing preferences." in prompt
+    assert "Earlier context about Observer training signals." in prompt
+    assert "The paper uses false-alarm rate terminology." in prompt
+    assert "proposition_id=21" in prompt
+    assert "proposition_id=22" in prompt
+    assert "proposition_id=23" in prompt
+    query = (
+        "Refine the Observer ablation discussion "
+        "The user is editing an ablation paragraph."
+    )
+    assert f"retrieval_query: {query}" in prompt
+    store.search.assert_called_once_with(
+        query,
+        limit=4,
         end_time=1_000.0,
         include_observations=0,
     )
