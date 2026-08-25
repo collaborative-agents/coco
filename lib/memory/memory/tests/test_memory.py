@@ -76,6 +76,41 @@ def test_store_can_find_proposition_through_supporting_observation(tmp_path):
     assert hits[0].proposition.text == "User is debugging authentication"
 
 
+def test_recent_propositions_use_linked_activity_instead_of_memory_update_time(
+    tmp_path,
+):
+    store = MemoryStore(tmp_path / "memory.db")
+    store.add_observation(
+        ObservationInput(id="recent", content="Recent work", created_at=900.0)
+    )
+    store.add_observation(
+        ObservationInput(id="old", content="Old profile lookup", created_at=100.0)
+    )
+    from memory.models import PropositionDraft
+
+    recent_id = store.insert_proposition(
+        PropositionDraft("User is doing recent work", "Recent evidence"), ["recent"]
+    )
+    # Insert the old proposition last so its lifecycle timestamp is newer. The
+    # activity-ranked API must still prefer the proposition with recent evidence.
+    old_id = store.insert_proposition(
+        PropositionDraft("An old profile fact", "Old evidence"), ["old"]
+    )
+
+    unfiltered_hits = store.recent_propositions(limit=3, end_time=1_000.0)
+    assert [hit.proposition.id for hit in unfiltered_hits] == [recent_id, old_id]
+    assert [hit.latest_observation_at for hit in unfiltered_hits] == [900.0, 100.0]
+
+    filtered_hits = store.recent_propositions(
+        limit=3,
+        start_time=500.0,
+        end_time=1_000.0,
+    )
+
+    assert [hit.proposition.id for hit in filtered_hits] == [recent_id]
+    assert filtered_hits[0].latest_observation_at == 900.0
+
+
 def test_direct_proposition_match_outranks_incidental_observation_match(tmp_path):
     store = MemoryStore(tmp_path / "memory.db")
     store.add_observation(

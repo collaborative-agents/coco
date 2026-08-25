@@ -8,6 +8,16 @@ The SQLite database uses WAL mode and FTS5 so sensing can write while the tutor 
 
 Retrieval searches proposition text, linked update summaries, and supporting observations. Missing evidence citations fall back to at most five lexical matches rather than linking the whole batch.
 
+The observer's `<recent_propositions>` block uses the newest linked observation
+time—not the proposition row's creation/update time—to identify recent user
+activity. It is limited to evidence from the previous hour, so revising or
+recreating an old memory cannot make an old activity appear recent.
+
+The observer also receives up to three distinct `<relevant_propositions>`.
+These are BM25-ranked using explicit user text plus the newest prior observer
+state, so older task-specific memory can be recalled without being presented as
+recent activity. Current screenshots remain authoritative.
+
 ## Filesystem primitives
 
 `MemoryFileSystem` provides read-only, filesystem-inspired access over the same

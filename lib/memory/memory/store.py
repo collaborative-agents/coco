@@ -587,6 +587,48 @@ class MemoryStore:
                 )
         return sorted(hits, key=lambda hit: hit.score, reverse=True)[:limit]
 
+    def recent_propositions(
+        self,
+        *,
+        limit: int = 3,
+        start_time: float | None = None,
+        end_time: float | None = None,
+    ) -> list[PropositionHit]:
+        """Return propositions ordered by their newest linked user activity.
+
+        Proposition ``created_at`` and ``updated_at`` describe the lifecycle of
+        the synthesized memory row. A revision can recreate an old fact today,
+        so those fields must not be used as evidence that the remembered user
+        activity itself is recent.
+        """
+        limit = max(1, min(limit, 50))
+        sql = """SELECT p.*, MAX(o.created_at) AS latest_observation_at
+                 FROM propositions p
+                 JOIN observation_proposition op ON op.proposition_id=p.id
+                 JOIN observations o ON o.id=op.observation_id
+                 WHERE 1=1"""
+        params: list[object] = []
+        if start_time is not None:
+            sql += " AND o.created_at >= ?"
+            params.append(start_time)
+        if end_time is not None:
+            sql += " AND o.created_at <= ?"
+            params.append(end_time)
+        sql += """ GROUP BY p.id
+                   ORDER BY latest_observation_at DESC, p.id DESC
+                   LIMIT ?"""
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            PropositionHit(
+                proposition=self._proposition(row),
+                score=1.0 / (index + 1),
+                latest_observation_at=float(row["latest_observation_at"]),
+            )
+            for index, row in enumerate(rows)
+        ]
+
     @staticmethod
     def _observation(row: sqlite3.Row) -> ObservationRecord:
         return ObservationRecord(

@@ -54,3 +54,4 @@ class PropositionHit:
     score: float
     observations: list[ObservationRecord] = field(default_factory=list)
     updates: list[PropositionUpdateRecord] = field(default_factory=list)
+    latest_observation_at: float | None = None
