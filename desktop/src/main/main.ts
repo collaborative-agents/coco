@@ -1766,6 +1766,10 @@ ipcMain.handle(
         currentTutorModelId = activeTutorModel.id;
         process.env.TUTOR_MODEL = defaultTutorModel.model;
         process.env.OBSERVER_MODEL = runtime.config.sensing.model;
+        personalizationScheduler?.updateModelConfiguration(
+          runtime.config.sensing.model,
+          runtime.sensingEnv,
+        );
         await Promise.all([
           serviceManager.stopService('tutor-server'),
           serviceManager.stopService('sensing-server'),

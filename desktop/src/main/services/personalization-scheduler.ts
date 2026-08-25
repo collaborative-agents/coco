@@ -52,6 +52,20 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+function sameStringRecord(
+  left: Record<string, string> | undefined,
+  right: Record<string, string> | undefined,
+): boolean {
+  const leftRecord = left ?? {};
+  const rightRecord = right ?? {};
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => leftRecord[key] === rightRecord[key])
+  );
+}
+
 function readJson(filePath: string): Record<string, unknown> | undefined {
   try {
     return asObject(JSON.parse(fs.readFileSync(filePath, 'utf8')));
@@ -176,6 +190,29 @@ export class PersonalizationScheduler {
 
   isSleeping() {
     return this.sleeping;
+  }
+
+  updateModelConfiguration(
+    model: string,
+    providerEnv?: Record<string, string>,
+  ) {
+    const normalizedModel = model.trim();
+    if (!normalizedModel) {
+      throw new Error('Personalization model ID is required.');
+    }
+    if (
+      this.options.model === normalizedModel &&
+      sameStringRecord(this.options.providerEnv, providerEnv)
+    ) {
+      return;
+    }
+
+    this.options.model = normalizedModel;
+    this.options.providerEnv = providerEnv ? { ...providerEnv } : undefined;
+    this.writeDedicatedLog(
+      `Model configuration updated: model=${normalizedModel}`,
+    );
+    this.preempt('model configuration changed');
   }
 
   /** Return live scheduler state enriched with resume-safe disk checkpoints. */

@@ -111,4 +111,47 @@ describe('PersonalizationScheduler status', () => {
 
     expect(args).toEqual(expect.arrayContaining(['--llm-concurrency', '3']));
   });
+
+  it('uses updated model settings without restarting the scheduler', () => {
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot: path.join(root, 'personalization'),
+      memoryRoot: root,
+      model: 'gemini/gemini-2.5-pro',
+      providerEnv: { GEMINI_API_KEY: 'old-key' },
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+    });
+    const schedulerInternals = scheduler as unknown as {
+      command: (job: 'evolve') => { args: string[] };
+      options: {
+        providerEnv?: Record<string, string>;
+      };
+      preempt: (reason: string) => void;
+    };
+    const preempt = jest.spyOn(schedulerInternals, 'preempt');
+
+    scheduler.updateModelConfiguration('hosted_vllm/Qwen/VL', {
+      HOSTED_VLLM_API_BASE: 'https://inference.example.test/v1',
+      HOSTED_VLLM_API_KEY: 'new-key',
+    });
+
+    const { args } = schedulerInternals.command('evolve');
+    expect(args).toEqual(
+      expect.arrayContaining(['--model', 'hosted_vllm/Qwen/VL']),
+    );
+    expect(args).not.toContain('gemini/gemini-2.5-pro');
+    expect(schedulerInternals.options.providerEnv).toEqual({
+      HOSTED_VLLM_API_BASE: 'https://inference.example.test/v1',
+      HOSTED_VLLM_API_KEY: 'new-key',
+    });
+    expect(preempt).toHaveBeenCalledWith('model configuration changed');
+
+    scheduler.updateModelConfiguration('hosted_vllm/Qwen/VL', {
+      HOSTED_VLLM_API_BASE: 'https://inference.example.test/v1',
+      HOSTED_VLLM_API_KEY: 'new-key',
+    });
+    expect(preempt).toHaveBeenCalledTimes(1);
+  });
 });
