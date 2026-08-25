@@ -154,6 +154,7 @@ describe('App', () => {
   });
 
   it('shows and approves the previous daily memory update', async () => {
+    const sendMessage = jest.fn();
     const invoke = jest.fn((channel: string) => {
       if (channel === 'get-daily-memory-draft') {
         return Promise.resolve({
@@ -185,7 +186,7 @@ describe('App', () => {
     (window as any).electron = {
       ipcRenderer: {
         on: jest.fn(() => jest.fn()),
-        sendMessage: jest.fn(),
+        sendMessage,
         invoke,
       },
     };
@@ -196,6 +197,12 @@ describe('App', () => {
         'Offer help when repeated report formatting is visible.',
       ),
     ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith(
+        'daily-memory-review-visibility',
+        { visible: true },
+      );
+    });
     expect(screen.getByText('When to proactively support')).toBeInTheDocument();
     fireEvent.click(screen.getByText('1 example'));
     expect(

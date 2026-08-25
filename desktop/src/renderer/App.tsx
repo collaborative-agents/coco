@@ -1173,6 +1173,12 @@ function PetView() {
     actionsMenuVisible,
   ]);
 
+  useEffect(() => {
+    window.electron?.ipcRenderer.sendMessage('daily-memory-review-visibility', {
+      visible: dailyReviewVisible,
+    });
+  }, [dailyReviewVisible]);
+
   return (
     <div className="pet-stage">
       {/* Activity panel */}

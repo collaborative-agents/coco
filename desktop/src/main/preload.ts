@@ -77,6 +77,7 @@ export type Channels =
   | 'toggle-observation-history'
   | 'open-observation-history'
   | 'activity-history-visibility'
+  | 'daily-memory-review-visibility'
   | 'avatar-renderer-ready'
   // Activity panel hydrates persisted history from main on open
   | 'get-activity-history'

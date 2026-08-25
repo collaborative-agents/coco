@@ -49,6 +49,7 @@ import type { TutorStreamEvent } from './services/tutor-stream';
 import { PersonalizationScheduler } from './services/personalization-scheduler';
 import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { DailyMemoryDraftService } from './services/daily-memory-drafts';
+import { HiddenAvatarVisibility } from './services/hidden-avatar-visibility';
 import {
   WakeWordService,
   type WakeWordStatusEvent,
@@ -248,6 +249,7 @@ let tray: Tray | null = null;
 let hideAvatarMode = false;
 let avatarRendererReady = false;
 let pendingOpenHistory = false;
+const hiddenAvatarVisibility = new HiddenAvatarVisibility();
 const observationSleepGuard = new ObservationSleepGuard();
 let personalizationScheduler: PersonalizationScheduler | null = null;
 let eveningPersonalizationScheduler: EveningPersonalizationScheduler | null =
@@ -488,6 +490,21 @@ const preloadPath = () =>
     ? path.join(__dirname, 'preload.js')
     : path.join(__dirname, '../../.erb/dll/preload.js');
 
+function syncHiddenAvatarWindowVisibility(): void {
+  if (
+    !hideAvatarMode ||
+    !avatarWindow ||
+    avatarWindow.isDestroyed()
+  ) {
+    return;
+  }
+  if (hiddenAvatarVisibility.shouldShowWindow()) {
+    avatarWindow.show();
+  } else {
+    avatarWindow.hide();
+  }
+}
+
 // ── Onboarding window ─────────────────────────────────────────────────────────
 // Shown once on first launch (when coco-profile.json doesn't exist yet).
 // Centered modal; after the user completes or skips it, the profile is written
@@ -563,7 +580,7 @@ const createAvatarWindow = () => {
 
   avatarWindow.on('ready-to-show', () => {
     if (hideAvatarMode) {
-      avatarWindow?.hide();
+      syncHiddenAvatarWindowVisibility();
     } else if (process.env.START_MINIMIZED) {
       avatarWindow?.minimize();
     } else {
@@ -574,6 +591,7 @@ const createAvatarWindow = () => {
   avatarWindow.on('closed', () => {
     avatarWindow = null;
     avatarRendererReady = false;
+    hiddenAvatarVisibility.clear();
   });
 
   avatarWindow.webContents.setWindowOpenHandler((edata) => {
@@ -1137,7 +1155,10 @@ function openHistory(): void {
 function applyAvatarVisibility(hidden: boolean): void {
   hideAvatarMode = hidden;
   if (hidden) {
-    avatarWindow?.hide();
+    // Keep the renderer alive while hidden so its midnight timer can discover
+    // a new daily memory draft and reveal only the review surface.
+    createAvatarWindow();
+    syncHiddenAvatarWindowVisibility();
     createTray();
     return;
   }
@@ -2398,9 +2419,20 @@ ipcMain.removeAllListeners('activity-history-visibility');
 ipcMain.on(
   'activity-history-visibility',
   (_event, { visible }: { visible?: boolean }) => {
-    if (!hideAvatarMode) return;
-    if (visible === true) avatarWindow?.show();
-    else if (visible === false) avatarWindow?.hide();
+    hiddenAvatarVisibility.setVisible('history', visible === true);
+    syncHiddenAvatarWindowVisibility();
+  },
+);
+
+ipcMain.removeAllListeners('daily-memory-review-visibility');
+ipcMain.on(
+  'daily-memory-review-visibility',
+  (_event, { visible }: { visible?: boolean }) => {
+    hiddenAvatarVisibility.setVisible(
+      'daily-memory-review',
+      visible === true,
+    );
+    syncHiddenAvatarWindowVisibility();
   },
 );
 
