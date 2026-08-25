@@ -63,6 +63,8 @@ class AudioEventRequest(BaseModel):
 
 class GuidanceResponse(BaseModel):
     guidance: str
+    four_d_dimension: str | None = None
+    teaching_depth: str | None = None
     llm_metrics: dict | None = None
     tool_calls: list[dict] = Field(default_factory=list)
 
@@ -80,6 +82,20 @@ class RecapResponse(BaseModel):
     quiz: RecapQuizResponse
 
 
+class LearningRecapInput(BaseModel):
+    summary_title: str
+    bullets: list[str]
+
+
+class DailyLearningReviewRequest(BaseModel):
+    recaps: list[LearningRecapInput]
+
+
+class DailyLearningReviewResponse(BaseModel):
+    summary_title: str
+    takeaways: list[str]
+
+
 class InstantSuggestionRequest(BaseModel):
     observation: str
     image_paths: list[str] | None = None
@@ -95,6 +111,8 @@ class InstantSuggestionResponse(BaseModel):
     targetTool: str | None = None
     prompt: str | None = None
     copyText: str  # unified text the UI copies (body for content, prompt for delegate)
+    fourDDimension: str | None = None
+    teachingDepth: str | None = None
     llm_metrics: dict | None = None
 
 
@@ -114,6 +132,10 @@ class ModelRequest(BaseModel):
 
 class ScenarioRequest(BaseModel):
     scenario: str
+
+
+class CompetencyCoachedRequest(BaseModel):
+    four_d_dimension: str
 
 
 class ProblemStatementRequest(BaseModel):
@@ -353,6 +375,16 @@ def _process_guidance(raw_guidance: str) -> str:
             "guidance": guidance_text,
             "example_prompt": example_prompt,
             "visualization": visualization,
+            "four_d_dimension": (
+                _xml_tag_re("four_d_dimension").search(raw).group(1).strip().lower()
+                if _xml_tag_re("four_d_dimension").search(raw)
+                else None
+            ),
+            "teaching_depth": (
+                _xml_tag_re("teaching_depth").search(raw).group(1).strip().lower()
+                if _xml_tag_re("teaching_depth").search(raw)
+                else None
+            ),
         }
 
     else:
@@ -415,11 +447,28 @@ def _process_guidance(raw_guidance: str) -> str:
             "guidance": guidance_text,
             "example_prompt": example_prompt,
             "visualization": visualization,
+            "four_d_dimension": obj.get("four_d_dimension"),
+            "teaching_depth": obj.get("teaching_depth"),
         }
 
         logger.info("Parsed guidance in JSON format (legacy).")
 
     # ── 3. Save HTML to disk ──────────────────────────────────────────────────
+    if obj.get("four_d_dimension") not in {
+        "delegation",
+        "description",
+        "discernment",
+        "diligence",
+    }:
+        obj["four_d_dimension"] = None
+    if obj.get("teaching_depth") not in {
+        "introduce",
+        "reinforce",
+        "deepen",
+        "not_applicable",
+    }:
+        obj["teaching_depth"] = None
+
     if visualization == "yes" and html_code:
         logger.info("Saving HTML visualization...")
         viz_result: VizResult = save_html_visualization(html_code)
@@ -445,6 +494,15 @@ def _process_guidance(raw_guidance: str) -> str:
     obj["visualization_code"] = html_code if html_code else None
 
     return json.dumps(obj)
+
+
+def _guidance_metadata(guidance: str) -> dict:
+    """Read optional 4D metadata without breaking legacy/plain responses."""
+    try:
+        parsed = json.loads(guidance)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +539,8 @@ async def suggestion_instant(req: InstantSuggestionRequest):
             configured_model_name,
             tutor.memory if tutor is not None else TutorSystem._load_memory(),
             req.image_paths,
+            tutor.curriculum_state if tutor is not None else None,
+            tutor.competency_counts if tutor is not None else None,
         )
         result["llm_metrics"] = llm_metrics
         return InstantSuggestionResponse(**result)
@@ -504,8 +564,11 @@ async def handle_user_prompt(req: EventRequest):
         )
         # Execute visualization code (also blocking) and mutate the JSON.
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
+        parsed_guidance = _guidance_metadata(guidance)
         return GuidanceResponse(
             guidance=guidance,
+            four_d_dimension=parsed_guidance.get("four_d_dimension"),
+            teaching_depth=parsed_guidance.get("teaching_depth"),
             llm_metrics=llm_metrics,
             tool_calls=llm_metrics.get("tool_calls", []),
         )
@@ -549,6 +612,7 @@ async def handle_user_prompt_stream(req: EventRequest):
                 event = queue.get_nowait()
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
+            parsed_guidance = _guidance_metadata(guidance)
             tool_calls = llm_metrics.get("tool_calls", [])
             observer_metrics = next(
                 (
@@ -565,6 +629,8 @@ async def handle_user_prompt_stream(req: EventRequest):
                 "llm_metrics": llm_metrics,
                 "tool_calls": tool_calls,
                 "observer_metrics": observer_metrics,
+                "four_d_dimension": parsed_guidance.get("four_d_dimension"),
+                "teaching_depth": parsed_guidance.get("teaching_depth"),
             }
             yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
         except Exception as exc:
@@ -662,12 +728,15 @@ async def handle_audio_prompt_stream(req: AudioEventRequest):
                 event = queue.get_nowait()
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
+            parsed_guidance = _guidance_metadata(guidance)
             done = {
                 "type": "done",
                 "guidance": guidance,
                 "llm_metrics": llm_metrics,
                 "tool_calls": llm_metrics.get("tool_calls", []),
                 "observer_metrics": None,
+                "four_d_dimension": parsed_guidance.get("four_d_dimension"),
+                "teaching_depth": parsed_guidance.get("teaching_depth"),
             }
             yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
         except Exception as exc:
@@ -692,8 +761,11 @@ async def handle_pause(req: EventRequest):
             req.teaching_depth,
         )
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
+        parsed_guidance = _guidance_metadata(guidance)
         return GuidanceResponse(
             guidance=guidance,
+            four_d_dimension=parsed_guidance.get("four_d_dimension"),
+            teaching_depth=parsed_guidance.get("teaching_depth"),
             llm_metrics=llm_metrics,
             tool_calls=llm_metrics.get("tool_calls", []),
         )
@@ -719,6 +791,18 @@ async def get_context():
     )
 
 
+@app.post("/context/competency/coached")
+async def record_competency_coached(req: CompetencyCoachedRequest):
+    """Record a proactive 4D suggestion after the user reveals it."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    dimension = req.four_d_dimension.strip().lower()
+    if dimension not in TutorSystem._4d_competencies():
+        raise HTTPException(status_code=422, detail="Invalid 4D dimension")
+    tutor._update_curriculum_state("teaching_moment", dimension)
+    return {"status": "ok"}
+
+
 @app.post("/recap", response_model=RecapResponse)
 async def generate_recap():
     """Generate a summary and recap question from the active local transcript."""
@@ -731,6 +815,26 @@ async def generate_recap():
         raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Recap generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/daily-learning-review", response_model=DailyLearningReviewResponse)
+async def generate_daily_learning_review(req: DailyLearningReviewRequest):
+    """Synthesize all session recaps from one activity day into three lessons."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    if not req.recaps:
+        raise HTTPException(status_code=422, detail="At least one recap is required")
+    try:
+        review, _metrics = await asyncio.to_thread(
+            tutor.generate_daily_learning_review,
+            [recap.model_dump() for recap in req.recaps],
+        )
+        return DailyLearningReviewResponse(**review)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Daily learning review generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

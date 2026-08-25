@@ -70,6 +70,8 @@ def _build_user_prompt(
     ai_tools: list[str],
     memory: str = "",
     has_screenshots: bool = False,
+    curriculum_state: dict | None = None,
+    competency_counts: dict | None = None,
 ) -> str:
     parts: list[str] = []
     if task_label:
@@ -77,6 +79,18 @@ def _build_user_prompt(
     parts.append(f"<observation>\n{observation}\n</observation>")
     if memory:
         parts.append(f"<memory>\n{memory}\n</memory>")
+    if curriculum_state:
+        parts.append(
+            "<curriculum_state>\n"
+            + "\n".join(f"  {key}: {value}" for key, value in curriculum_state.items())
+            + "\n</curriculum_state>"
+        )
+    if competency_counts:
+        parts.append(
+            "<recurrence_counts>\n"
+            + "\n".join(f"  {key}: {value}" for key, value in competency_counts.items())
+            + "\n</recurrence_counts>"
+        )
     if has_screenshots:
         parts.append(
             "<screenshots>\n"
@@ -105,6 +119,8 @@ def _parse_instant_suggestion(raw: str) -> dict:
     body = _xml_tag("body", raw)
     target_tool = _xml_tag("targetTool", raw)
     prompt = _xml_tag("prompt", raw)
+    four_d_dimension = _xml_tag("four_d_dimension", raw)
+    teaching_depth = _xml_tag("teaching_depth", raw)
 
     # Fallback: model returned a JSON object instead of XML tags.
     if kind is None and body is None and prompt is None:
@@ -118,6 +134,8 @@ def _parse_instant_suggestion(raw: str) -> dict:
             body = obj.get("body") or body
             target_tool = obj.get("targetTool") or obj.get("target_tool") or target_tool
             prompt = obj.get("prompt") or prompt
+            four_d_dimension = obj.get("four_d_dimension") or four_d_dimension
+            teaching_depth = obj.get("teaching_depth") or teaching_depth
 
     kind = (kind or "").strip().lower()
     if kind not in _VALID_KINDS:
@@ -128,6 +146,18 @@ def _parse_instant_suggestion(raw: str) -> dict:
     body = _strip_xml_artifacts(body) if body else None
     prompt = _strip_xml_artifacts(prompt) if prompt else None
     target_tool = _strip_xml_artifacts(target_tool).lower() if target_tool else None
+    four_d_dimension = (
+        _strip_xml_artifacts(four_d_dimension).lower()
+        if four_d_dimension
+        else None
+    )
+    if four_d_dimension not in {"delegation", "description", "discernment", "diligence"}:
+        four_d_dimension = None
+    teaching_depth = (
+        _strip_xml_artifacts(teaching_depth).lower() if teaching_depth else None
+    )
+    if teaching_depth not in {"introduce", "reinforce", "deepen"}:
+        teaching_depth = None
 
     if kind == "delegate":
         if not prompt:
@@ -147,6 +177,8 @@ def _parse_instant_suggestion(raw: str) -> dict:
         "targetTool": target_tool,
         "prompt": prompt,
         "copyText": copy_text,
+        "fourDDimension": four_d_dimension,
+        "teachingDepth": teaching_depth,
     }
 
 
@@ -158,9 +190,12 @@ def generate_instant_suggestion(
     model: str,
     memory: str = "",
     image_paths: list[str] | None = None,
+    curriculum_state: dict | None = None,
+    competency_counts: dict | None = None,
 ) -> dict:
     suggestion, _ = generate_instant_suggestion_with_metrics(
-        observation, task_label, scenario, ai_tools, model, memory, image_paths
+        observation, task_label, scenario, ai_tools, model, memory, image_paths,
+        curriculum_state, competency_counts
     )
     return suggestion
 
@@ -173,6 +208,8 @@ def generate_instant_suggestion_with_metrics(
     model: str,
     memory: str = "",
     image_paths: list[str] | None = None,
+    curriculum_state: dict | None = None,
+    competency_counts: dict | None = None,
 ) -> tuple[dict, LLMCallMetrics]:
     """Generate a single ready-to-use suggestion for *observation*.
 
@@ -187,6 +224,8 @@ def generate_instant_suggestion_with_metrics(
         ai_tools or [],
         memory=memory,
         has_screenshots=bool(image_paths),
+        curriculum_state=curriculum_state,
+        competency_counts=competency_counts,
     )
     # Instant suggestions may retrieve relevant long-term or recent activity,
     # but never inspect the live screen: their observation/screenshots were

@@ -46,11 +46,15 @@ def test_judge_intervention_is_marked_for_desktop_filtering():
         "struggle",
         "The Judge found repeated friction.",
         intervention_source="judge",
+        trigger_type="inefficiency",
+        teaching_depth="reinforce",
     )
 
     event = processor._obs_subscribers[0].get_nowait()
     assert event["status"] == "stuck"
     assert event["intervention_source"] == "judge"
+    assert event["trigger_type"] == "inefficiency"
+    assert event["teaching_depth"] == "reinforce"
 
 
 def test_ambient_observation_is_not_marked_as_judge_approved():

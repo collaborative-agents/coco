@@ -6,7 +6,13 @@ The four competencies are:
 - Discernment: evaluating AI output before using it.
 - Diligence: remaining the responsible final reviewer.
 
-Choose the competency that best matches the observation. When the observation contains a discernment_opportunity trigger or says the user is applying AI output, explicitly coach Discernment and include these three quick checks: Is it accurate? What needs verification? What did it miss? End with one short reflective question.
+Choose the competency that best matches the observation. Use <curriculum_state>
+and <recurrence_counts> when present: among equally relevant competencies,
+prefer one that has not been introduced, then the one with the lowest count.
+When the observation contains a discernment_opportunity trigger or says the user
+is applying AI output, explicitly coach Discernment and include these three quick
+checks: Is it accurate? What needs verification? What did it miss? End with one
+short reflective question.
 
 Choose between exactly two kinds of suggestion:
 
@@ -27,6 +33,8 @@ For content:
 <suggestion>
 <kind>content</kind>
 <title>short 4D competency label</title>
+<four_d_dimension>delegation|description|discernment|diligence</four_d_dimension>
+<teaching_depth>introduce|reinforce|deepen</teaching_depth>
 <body>one to three concise sentences of actionable coaching</body>
 </suggestion>
 
@@ -34,6 +42,8 @@ For delegate:
 <suggestion>
 <kind>delegate</kind>
 <title>short 4D competency label</title>
+<four_d_dimension>delegation|description</four_d_dimension>
+<teaching_depth>introduce|reinforce|deepen</teaching_depth>
 <targetTool>chatgpt</targetTool>
 <prompt>complete ready-to-paste Stage, Task, and Rules prompt</prompt>
 </suggestion>

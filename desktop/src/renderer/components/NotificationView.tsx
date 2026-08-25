@@ -13,12 +13,14 @@ import {
 type VizState = 'none' | 'success' | 'error';
 type NotifType =
   | 'default'
+  | 'daily-summary'
   | 'proactive-suggestion'
   | 'instant-suggestion'
   | 'session-start-prompt'
   | 'session-end-prompt';
 
 interface NotificationPayload {
+  notificationId?: string;
   message: string;
   actionLabel?: string;
   cancelLabel?: string;
@@ -254,7 +256,10 @@ export function NotificationBubble({
   // card doesn't overflow with a multi-paragraph response.
   const resolvedMessage = resolveMessage(message);
   const displayMessage =
-    expanded || isPrompt || notifType === 'instant-suggestion'
+    expanded ||
+    isPrompt ||
+    notifType === 'instant-suggestion' ||
+    notifType === 'daily-summary'
       ? resolvedMessage
       : truncateForPreview(resolvedMessage);
 
@@ -501,6 +506,7 @@ export default function NotificationView() {
           suggestion: incoming?.suggestion,
           adjustable: incoming?.adjustable === true,
           scenario: incoming?.scenario,
+          notificationId: incoming?.notificationId,
         });
         setLoadingSuggestion(false);
         setSuggestionRating(null);
@@ -518,6 +524,13 @@ export default function NotificationView() {
   if (!visible || !payload) return null;
 
   const ipc = window.electron?.ipcRenderer;
+  const reportResponse = (outcome: 'accepted' | 'dismissed') => {
+    if (!payload.notificationId) return;
+    ipc?.sendMessage('notification-response', {
+      notificationId: payload.notificationId,
+      outcome,
+    });
+  };
 
   const rateInstantSuggestion = (rating: 'up' | 'down') => {
     if (
@@ -546,6 +559,10 @@ export default function NotificationView() {
   };
 
   const handleAction = async () => {
+    if (payload.notifType === 'proactive-suggestion' && loadingSuggestion) {
+      return;
+    }
+    reportResponse('accepted');
     if (payload.notifType === 'session-start-prompt') {
       // Ask main to show the mini session-setup window.
       ipc?.sendMessage('show-session-setup');
@@ -560,7 +577,6 @@ export default function NotificationView() {
       return;
     }
     if (payload.notifType === 'proactive-suggestion') {
-      if (loadingSuggestion) return;
       // Lock immediately on click, before awaiting a cached/in-flight
       // suggestion. Otherwise an observation arriving during that await can
       // replace the notification the user is actively opening.
@@ -630,6 +646,7 @@ export default function NotificationView() {
   };
 
   const handleCancel = () => {
+    reportResponse('dismissed');
     setVisible(false);
     window.close();
   };
@@ -658,6 +675,7 @@ export default function NotificationView() {
   };
 
   const handleDismiss = () => {
+    reportResponse('dismissed');
     recordUnengagedDismissal();
     setVisible(false);
     window.close();
@@ -676,6 +694,7 @@ export default function NotificationView() {
   };
 
   const handleSuggestionAction = (toolId: string | null) => {
+    reportResponse('accepted');
     ipc?.sendMessage('suggestion-action', {
       toolId,
       copyText: payload.suggestion?.copyText,
@@ -691,6 +710,7 @@ export default function NotificationView() {
 
   const handleChatAboutSuggestion = () => {
     if (!payload.suggestion) return;
+    reportResponse('accepted');
     ipc?.sendMessage('chat-about-suggestion', {
       observationId: payload.observationId,
       status: payload.status,
@@ -704,6 +724,7 @@ export default function NotificationView() {
 
   const handleOpenCocoChat = () => {
     if (!payload.suggestion) return;
+    reportResponse('accepted');
     ipc?.sendMessage('chat-about-suggestion', {
       observationId: payload.observationId,
       status: payload.status,

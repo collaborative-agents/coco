@@ -50,6 +50,7 @@ import {
   startObservationStream,
   stopObservationStream,
 } from './services/observation-stream';
+import { NextDaySummaryScheduler } from './services/next-day-summary-scheduler';
 import {
   consumeTutorStream,
   TutorTurnTiming,
@@ -74,11 +75,22 @@ import {
   recordSupportSuggestion,
   pruneActivity,
 } from './activity-store';
+import {
+  markLearningRecapsReviewedThrough,
+  readLatestUnreviewedLearningDay,
+  saveLearningRecap,
+} from './learning-recap-store';
 import { readConversations, saveConversation } from './conversation-store';
 import {
   recordSessionEnded,
   recordSessionStarted,
 } from './session-event-store';
+import {
+  getSystemPermissionWarning,
+  needsWindowsMicrophoneSettings,
+  systemPermissionButtonLabel,
+  systemPermissionSettingsUrl,
+} from './system-permission-warning';
 import {
   defaultTutor,
   isLlmRouterConfigured,
@@ -193,6 +205,7 @@ let imagePreviewWindow: BrowserWindow | null = null;
 let imagePreviewDataUrl: string | null = null;
 let wakeWordCaptureWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
+let nextDaySummaryScheduler: NextDaySummaryScheduler | null = null;
 let notificationHovered = false;
 let proactiveSuggestionOpen = false;
 let latestHiddenSuggestionObservationId: string | undefined;
@@ -210,6 +223,7 @@ let wakeWordService: WakeWordService | null = null;
 let wakeWordEnabled = false;
 let wakeWordStatus: WakeWordStatusEvent = { status: 'disabled' };
 let systemSuspended = false;
+let systemPermissionWarningShown = false;
 let wakeWordCapturePaused = false;
 let wakeWordCapturePauseTimer: ReturnType<typeof setTimeout> | null = null;
 let wakeWordCaptureState = 'stopped';
@@ -1184,9 +1198,22 @@ const showSessionRecapWindow = () => {
   );
 
   const tutorPort = process.env.TUTOR_PORT || '8081';
+  const recapSessionId = currentSessionId;
+  const recapUserId = currentUserId;
   const recapPromise: Promise<object | null> = axios
     .post(`http://127.0.0.1:${tutorPort}/recap`, {}, { timeout: 45_000 })
-    .then((response) => response.data as object)
+    .then((response) => {
+      const data = response.data as object;
+      if (recapSessionId && recapUserId) {
+        saveLearningRecap(app.getPath('userData'), {
+          sessionId: recapSessionId,
+          userId: recapUserId,
+          generatedAt: Date.now() / 1000,
+          recap: data,
+        });
+      }
+      return data;
+    })
     .catch((error) => {
       log.warn(`[SessionRecap] Could not generate recap: ${error}`);
       return null;
@@ -1220,6 +1247,8 @@ const NOTIF_HEIGHT = 220;
 // the prompt/actions on page 2 without requiring manual window resizing.
 const NOTIF_SUGGESTION_WIDTH = 480;
 const NOTIF_SUGGESTION_HEIGHT = 420;
+const NOTIF_DAILY_SUMMARY_WIDTH = 420;
+const NOTIF_DAILY_SUMMARY_HEIGHT = 300;
 const NOTIF_EXPANDED_WIDTH = 560;
 const NOTIF_EXPANDED_HEIGHT = 520;
 let notificationCollapsedSize = {
@@ -1230,10 +1259,48 @@ let notificationCollapsedSize = {
 type VizState = 'none' | 'success' | 'error';
 type NotifType =
   | 'default'
+  | 'daily-summary'
   | 'proactive-suggestion'
   | 'instant-suggestion'
   | 'session-start-prompt'
   | 'session-end-prompt';
+
+type NotificationOutcome = 'accepted' | 'dismissed' | 'ignored';
+
+interface ActiveNotificationRecord {
+  id: string;
+  resolved: boolean;
+  created: Promise<void>;
+  ignoreTimer?: ReturnType<typeof setTimeout>;
+}
+
+let activeNotificationRecord: ActiveNotificationRecord | null = null;
+
+const resolveNotificationRecord = (
+  record: ActiveNotificationRecord | null,
+  outcome: NotificationOutcome,
+) => {
+  if (!record || record.resolved) return;
+  record.resolved = true;
+  if (record.ignoreTimer) clearTimeout(record.ignoreTimer);
+  void record.created.then(() =>
+    gatewayClient?.resolveNotification(record.id, outcome),
+  );
+};
+
+const notificationCategory = (notifType: NotifType | undefined): string => {
+  switch (notifType) {
+    case 'session-start-prompt':
+      return 'session_start';
+    case 'session-end-prompt':
+      return 'session_end';
+    case 'proactive-suggestion':
+    case 'instant-suggestion':
+      return 'proactive_suggestion';
+    default:
+      return 'general';
+  }
+};
 
 const showNotification = (payload: {
   message: string;
@@ -1246,6 +1313,7 @@ const showNotification = (payload: {
   rawObservation?: string;
   suggestion?: InstantSuggestion;
   scenario?: string;
+  category?: string;
 }) => {
   if (
     payload.notifType === 'session-end-prompt' &&
@@ -1283,13 +1351,59 @@ const showNotification = (payload: {
   }
   // Destroy any existing notification before showing a new one (dedup guard).
   notificationHovered = false;
+  resolveNotificationRecord(activeNotificationRecord, 'ignored');
   notificationWindow?.destroy();
+
+  const notificationId = randomUUID();
+  const shouldPersist = payload.notifType !== 'daily-summary';
+  const notificationRecord: ActiveNotificationRecord | null = shouldPersist
+    ? {
+        id: notificationId,
+        resolved: false,
+        created:
+          gatewayClient?.addNotification({
+            id: notificationId,
+            category:
+              payload.category ?? notificationCategory(payload.notifType),
+            notificationType: payload.notifType ?? 'default',
+            message: payload.message,
+            shownAt: new Date(),
+            sessionId:
+              isSessionActive && currentSessionId
+                ? currentSessionId
+                : undefined,
+            observationId: payload.observationId,
+            actionLabel: payload.actionLabel,
+            cancelLabel: payload.cancelLabel,
+            status: payload.status,
+            fourDDimension: payload.suggestion?.fourDDimension,
+            triggerType: payload.suggestion?.triggerType,
+          }) ?? Promise.resolve(),
+      }
+    : null;
+  if (notificationRecord) {
+    notificationRecord.ignoreTimer = setTimeout(
+      () => resolveNotificationRecord(notificationRecord, 'ignored'),
+      5 * 60_000,
+    );
+  }
+  activeNotificationRecord = notificationRecord;
 
   const isInteractiveSuggestion =
     payload.notifType === 'proactive-suggestion' && payload.suggestion != null;
-  notificationCollapsedSize = isInteractiveSuggestion
-    ? { width: NOTIF_SUGGESTION_WIDTH, height: NOTIF_SUGGESTION_HEIGHT }
-    : { width: NOTIF_WIDTH, height: NOTIF_HEIGHT };
+  if (isInteractiveSuggestion) {
+    notificationCollapsedSize = {
+      width: NOTIF_SUGGESTION_WIDTH,
+      height: NOTIF_SUGGESTION_HEIGHT,
+    };
+  } else if (payload.notifType === 'daily-summary') {
+    notificationCollapsedSize = {
+      width: NOTIF_DAILY_SUMMARY_WIDTH,
+      height: NOTIF_DAILY_SUMMARY_HEIGHT,
+    };
+  } else {
+    notificationCollapsedSize = { width: NOTIF_WIDTH, height: NOTIF_HEIGHT };
+  }
   const { width: initialWidth, height: initialHeight } =
     notificationCollapsedSize;
   const { workArea } = screen.getPrimaryDisplay();
@@ -1338,15 +1452,20 @@ const showNotification = (payload: {
     nextNotificationWindow.show();
     nextNotificationWindow.webContents.send('notification', {
       ...payload,
+      notificationId: shouldPersist ? notificationId : undefined,
       adjustable,
     });
   });
 
   nextNotificationWindow.on('closed', () => {
+    resolveNotificationRecord(notificationRecord, 'ignored');
     // An older window can finish closing after its replacement was assigned.
     // Only the window that still owns the slot may clear the active lock.
     if (notificationWindow !== nextNotificationWindow) return;
     notificationWindow = null;
+    if (activeNotificationRecord === notificationRecord) {
+      activeNotificationRecord = null;
+    }
     notificationHovered = false;
     proactiveSuggestionOpen = false;
   });
@@ -1390,6 +1509,27 @@ ipcMain.handle('get-profile', () => {
     return null;
   }
 });
+
+ipcMain.removeAllListeners('notification-response');
+ipcMain.on(
+  'notification-response',
+  (
+    _event,
+    payload: { notificationId?: string; outcome?: NotificationOutcome },
+  ) => {
+    if (
+      !payload?.notificationId ||
+      payload.notificationId !== activeNotificationRecord?.id ||
+      !['accepted', 'dismissed', 'ignored'].includes(payload.outcome ?? '')
+    ) {
+      return;
+    }
+    resolveNotificationRecord(
+      activeNotificationRecord,
+      payload.outcome as NotificationOutcome,
+    );
+  },
+);
 
 ipcMain.handle('get-chat-content-zoom-factor', () => chatContentZoomFactor);
 
@@ -2130,6 +2270,34 @@ ipcMain.handle(
         };
       }
     }
+    if (
+      enabled &&
+      process.platform === 'win32' &&
+      needsWindowsMicrophoneSettings(
+        process.platform,
+        systemPreferences.getMediaAccessStatus('microphone'),
+      )
+    ) {
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Microphone permission required',
+        message: 'Coco needs microphone access for voice activation.',
+        detail:
+          'Enable microphone access for desktop apps in Windows Settings, then turn “Listen for Coco” on again.',
+        buttons: ['Open Microphone Settings', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (response === 0) {
+        await shell.openExternal('ms-settings:privacy-microphone');
+      }
+      return {
+        success: false,
+        error:
+          'Microphone access is required. Enable microphone access for desktop apps in Windows Settings.',
+      };
+    }
     wakeWordEnabled = enabled;
     if (!enabled) setWakeWordCapturePaused(false);
     saveWakeWordEnabled(enabled);
@@ -2244,6 +2412,7 @@ ipcMain.on('notification', (_event, args) => {
   showNotification({
     message: msg,
     actionLabel: buttonText,
+    category: 'tutor_guidance',
   });
 });
 
@@ -2451,12 +2620,21 @@ interface InstantSuggestion {
   copyText: string;
   availableTools?: AiToolButton[];
   llm_metrics?: LLMCallMetrics;
+  fourDDimension?:
+    | 'delegation'
+    | 'description'
+    | 'discernment'
+    | 'diligence';
+  teachingDepth?: 'introduce' | 'reinforce' | 'deepen';
+  triggerType?: string;
+  interventionSource?: 'judge' | 'observer';
 }
 
 const suggestionCache = new Map<
   string,
   { ts: number; promise: Promise<InstantSuggestion | null> }
 >();
+const loggedProactiveSuggestions = new Set<string>();
 const SUGGESTION_TTL_MS = 5 * 60_000;
 // Model latency can exceed 12 seconds under load. Keep the eager request alive
 // long enough for the notification click to reveal its result instead of
@@ -2536,6 +2714,9 @@ function precomputeSuggestion(event: {
   task_label?: string;
   scenario?: string;
   image_paths?: string[];
+  intervention_source?: 'judge';
+  trigger_type?: string;
+  teaching_depth?: 'introduce' | 'reinforce' | 'deepen' | 'not_applicable';
 }): Promise<InstantSuggestion | null> | undefined {
   const id = event.observation_id;
   if (!id) return undefined;
@@ -2562,7 +2743,17 @@ function precomputeSuggestion(event: {
       { timeout: SUGGESTION_REQUEST_TIMEOUT_MS },
     )
     .then((resp) => {
-      const data = resp.data as InstantSuggestion;
+      const data = {
+        ...(resp.data as InstantSuggestion),
+        triggerType: event.trigger_type ?? event.status,
+        teachingDepth:
+          (resp.data as InstantSuggestion).teachingDepth ??
+          (event.teaching_depth === 'not_applicable'
+            ? undefined
+            : event.teaching_depth),
+        interventionSource:
+          event.intervention_source === 'judge' ? 'judge' : 'observer',
+      } as InstantSuggestion;
       recordSupportSuggestion(id, data);
       log.info(
         `[InstantSuggestion] precompute ready id=${id} kind=${data?.kind} in ${Date.now() - startedAt}ms`,
@@ -3221,6 +3412,15 @@ ipcMain.handle(
               'coco',
               String(streamEvent.guidance ?? streamedText),
               turnTiming.complete(model),
+              {
+                messageKind:
+                  requestKind === 'practice_suggestions'
+                    ? 'practice_suggestion'
+                    : 'user_response',
+                fourDDimension: streamEvent.four_d_dimension,
+                teachingDepth: streamEvent.teaching_depth,
+                interventionSource: 'user',
+              },
             );
           }
           ipcEvent.sender.send('chat-stream-event', {
@@ -3384,6 +3584,12 @@ ipcMain.handle(
               'coco',
               String(streamEvent.guidance ?? streamedText),
               turnTiming.complete(model),
+              {
+                messageKind: 'voice_response',
+                fourDDimension: streamEvent.four_d_dimension,
+                teachingDepth: streamEvent.teaching_depth,
+                interventionSource: 'user',
+              },
             );
           }
           ipcEvent.sender.send('chat-stream-event', {
@@ -3535,6 +3741,40 @@ ipcMain.on('activity-support-engaged', (_event, payload) => {
     suggestion: payload?.suggestion,
     destination: payload?.destination === 'inline' ? 'inline' : 'conversation',
   });
+  const suggestion = payload?.suggestion as InstantSuggestion | undefined;
+  if (
+    suggestion?.fourDDimension &&
+    currentSessionId &&
+    !loggedProactiveSuggestions.has(observationId)
+  ) {
+    loggedProactiveSuggestions.add(observationId);
+    gatewayClient?.addMessage(
+      currentSessionId,
+      'coco',
+      suggestion.copyText,
+      undefined,
+      {
+        messageKind: 'proactive_intervention',
+        fourDDimension: suggestion.fourDDimension,
+        triggerType: suggestion.triggerType,
+        teachingDepth: suggestion.teachingDepth,
+        interventionSource: suggestion.interventionSource,
+        observationId,
+      },
+    );
+    const tutorPort = process.env.TUTOR_PORT || '8081';
+    axios
+      .post(
+        `http://127.0.0.1:${tutorPort}/context/competency/coached`,
+        { four_d_dimension: suggestion.fourDDimension },
+        { timeout: 8000 },
+      )
+      .catch((error) => {
+        log.warn(
+          `[Curriculum] Failed to record ${suggestion.fourDDimension}: ${(error as Error).message}`,
+        );
+      });
+  }
 });
 
 ipcMain.removeAllListeners('activity-support-rated');
@@ -3929,7 +4169,40 @@ const showModelsRequiredWarning = () => {
     message:
       'Coco is paused. Open Settings and configure a sensing model and at least one tutor model.',
     actionLabel: 'Got it',
+    category: 'system',
   });
+};
+
+const showSystemPermissionWarning = async (): Promise<void> => {
+  if (process.platform !== 'darwin' || systemPermissionWarningShown) return;
+
+  const warning = getSystemPermissionWarning(process.platform, {
+    accessibilityTrusted:
+      systemPreferences.isTrustedAccessibilityClient(false),
+    screenCaptureStatus: systemPreferences.getMediaAccessStatus('screen'),
+  });
+  if (!warning) return;
+
+  systemPermissionWarningShown = true;
+  log.warn(`[Permissions] ${warning.detail}`);
+  const buttons = [
+    ...warning.settingsTargets.map(systemPermissionButtonLabel),
+    'Later',
+  ];
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    title: 'Coco permissions required',
+    message: warning.message,
+    detail: warning.detail,
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+    noLink: true,
+  });
+  const selectedTarget = warning.settingsTargets[response];
+  if (selectedTarget) {
+    await shell.openExternal(systemPermissionSettingsUrl(selectedTarget));
+  }
 };
 
 // Effective model ids. Managed app configuration wins when present; legacy
@@ -4062,6 +4335,83 @@ const startObserver = () => {
 
   // Trim old activity history once per launch so the JSONL stays bounded.
   pruneActivity(Math.floor(Date.now() / 1000));
+
+  // Unlike the public CoCo evening scheduler, this transition is driven by an
+  // actual observation. That makes the learning review appear on the next day
+  // the participant uses the computer, even if CoCo stayed open overnight.
+  nextDaySummaryScheduler = new NextDaySummaryScheduler({
+    statePath: path.join(
+      app.getPath('userData'),
+      'next-learning-review-state.json',
+    ),
+    onFirstUse: async ({ startTs: todayStartTs }) => {
+      // Do not replace something time-sensitive. Returning false leaves the
+      // date unhandled, so the next observation retries the summary.
+      if (notificationWindow && !notificationWindow.isDestroyed()) {
+        return false;
+      }
+
+      if (!currentUserId) return true;
+      const recaps = readLatestUnreviewedLearningDay(
+        app.getPath('userData'),
+        currentUserId,
+        todayStartTs,
+      );
+      if (recaps.length === 0) return true;
+      const tutorPort = process.env.TUTOR_PORT || '8081';
+      const response = await axios.post(
+        `http://127.0.0.1:${tutorPort}/daily-learning-review`,
+        {
+          recaps: recaps.map((recap) => ({
+            summary_title: recap.summaryTitle,
+            bullets: recap.bullets,
+          })),
+        },
+        { timeout: 45_000 },
+      );
+      const review = response.data as {
+        summary_title?: unknown;
+        takeaways?: unknown;
+      };
+      if (
+        typeof review.summary_title !== 'string' ||
+        !Array.isArray(review.takeaways) ||
+        review.takeaways.length !== 3 ||
+        !review.takeaways.every(
+          (takeaway): takeaway is string =>
+            typeof takeaway === 'string' && Boolean(takeaway.trim()),
+        )
+      ) {
+        throw new Error('Tutor returned an invalid daily learning review.');
+      }
+      const latestRecap = recaps[recaps.length - 1];
+      const summaryDate = new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: 'numeric',
+      }).format(new Date(latestRecap.generatedAt * 1000));
+      // Generation can take several seconds. Preserve any notification that
+      // appeared while the daily review was being synthesized and retry later.
+      if (notificationWindow && !notificationWindow.isDestroyed()) {
+        return false;
+      }
+      showNotification({
+        message: [
+          `**Review from ${summaryDate}**`,
+          review.summary_title.trim(),
+          ...review.takeaways.map((takeaway) => `- ${takeaway.trim()}`),
+        ].join('\n'),
+        actionLabel: 'Open Coco',
+        notifType: 'daily-summary',
+      });
+      markLearningRecapsReviewedThrough(
+        app.getPath('userData'),
+        currentUserId,
+        latestRecap.generatedAt,
+        Date.now() / 1000,
+      );
+      return true;
+    },
+  });
 
   // Subscribe to the sensing server's live observation feed and forward
   // each event to the avatar window. The SSE client retries with backoff,
@@ -4219,6 +4569,10 @@ const startObserver = () => {
           notifType: 'session-end-prompt',
         });
       }
+
+      // This event is the first concrete evidence of use today. The scheduler
+      // persists the handled date, so all later observations are no-ops.
+      void nextDaySummaryScheduler?.checkNow();
     },
   });
 };
@@ -4304,6 +4658,9 @@ app
     createWakeWordCaptureWindow();
     // Keep chat state alive while its panel is closed.
     createChatWindow();
+    void showSystemPermissionWarning().catch((error) => {
+      log.warn(`[Permissions] Could not show permission warning: ${error}`);
+    });
 
     // Register global shortcut to toggle DevTools (Cmd/Ctrl+Shift+I)
     globalShortcut.register('CommandOrControl+Shift+I', () => {

@@ -157,12 +157,23 @@ describe('CocoGatewayClient', () => {
     });
     client.setAuthSession('token-1', 'user-1');
 
-    await client.addMessage('session-1', 'coco', 'response', {
-      requestStartedAt: new Date('2026-08-05T10:00:00.000Z'),
-      firstTokenAt: new Date('2026-08-05T10:00:00.400Z'),
-      responseCompletedAt: new Date('2026-08-05T10:00:01.500Z'),
-      model: 'gemini/gemini-3-flash-preview',
-    });
+    await client.addMessage(
+      'session-1',
+      'coco',
+      'response',
+      {
+        requestStartedAt: new Date('2026-08-05T10:00:00.000Z'),
+        firstTokenAt: new Date('2026-08-05T10:00:00.400Z'),
+        responseCompletedAt: new Date('2026-08-05T10:00:01.500Z'),
+        model: 'gemini/gemini-3-flash-preview',
+      },
+      {
+        messageKind: 'user_response',
+        fourDDimension: 'description',
+        teachingDepth: 'reinforce',
+        interventionSource: 'user',
+      },
+    );
 
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
       _id: expect.any(String),
@@ -174,6 +185,10 @@ describe('CocoGatewayClient', () => {
       first_token_at: '2026-08-05T10:00:00.400Z',
       response_completed_at: '2026-08-05T10:00:01.500Z',
       model: 'gemini/gemini-3-flash-preview',
+      message_kind: 'user_response',
+      four_d_dimension: 'description',
+      teaching_depth: 'reinforce',
+      intervention_source: 'user',
     });
   });
 
@@ -277,5 +292,48 @@ describe('CocoGatewayClient', () => {
     expect(fetchImpl.mock.calls[0][1].headers.Authorization).toBe(
       'Bearer gateway-token',
     );
+  });
+
+  it('stores and resolves notification lifecycle records', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    const client = new CocoGatewayClient({
+      gatewayUrl: 'https://gateway.example',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    client.setAuthSession('gateway-token', 'participant-1');
+
+    await client.addNotification({
+      id: 'notification-1',
+      category: 'proactive_suggestion',
+      notificationType: 'proactive-suggestion',
+      message: 'Review this AI output.',
+      shownAt: new Date('2026-08-25T10:00:00Z'),
+      sessionId: 'session-1',
+      observationId: 'observation-1',
+      fourDDimension: 'discernment',
+      triggerType: 'discernment_opportunity',
+    });
+    await client.resolveNotification(
+      'notification-1',
+      'accepted',
+      new Date('2026-08-25T10:00:05Z'),
+    );
+
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
+      _id: 'notification-1',
+      category: 'proactive_suggestion',
+      notification_type: 'proactive-suggestion',
+      message: 'Review this AI output.',
+      shown_at: '2026-08-25T10:00:00.000Z',
+      outcome: 'pending',
+      sid: 'session-1',
+      observation_id: 'observation-1',
+      four_d_dimension: 'discernment',
+      trigger_type: 'discernment_opportunity',
+    });
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toEqual({
+      outcome: 'accepted',
+      responded_at: '2026-08-25T10:00:05.000Z',
+    });
   });
 });

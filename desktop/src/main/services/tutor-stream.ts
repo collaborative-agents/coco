@@ -7,6 +7,12 @@ export interface TutorStreamEvent {
     | 'done'
     | 'error';
   [key: string]: unknown;
+  four_d_dimension?:
+    | 'delegation'
+    | 'description'
+    | 'discernment'
+    | 'diligence';
+  teaching_depth?: 'introduce' | 'reinforce' | 'deepen' | 'not_applicable';
 }
 
 export interface TutorStreamTimeouts {

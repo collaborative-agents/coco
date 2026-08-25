@@ -84,6 +84,9 @@ export interface ObservationEvent {
   applying_ai_output?: string;
   /** Marks an interruption explicitly approved by the sensing-side Judge. */
   intervention_source?: 'judge';
+  /** Actual reason selected by the sensing-side Judge for this intervention. */
+  trigger_type?: string;
+  teaching_depth?: 'introduce' | 'reinforce' | 'deepen' | 'not_applicable';
   /** Stable id of the observer call that produced this event (for feedback joins). */
   observation_id?: string;
   llm_metrics?: LLMCallMetrics;
@@ -107,6 +110,14 @@ export interface InstantSuggestion {
   prompt?: string;
   copyText: string;
   llm_metrics?: LLMCallMetrics;
+  fourDDimension?:
+    | 'delegation'
+    | 'description'
+    | 'discernment'
+    | 'diligence';
+  teachingDepth?: 'introduce' | 'reinforce' | 'deepen';
+  triggerType?: string;
+  interventionSource?: 'judge' | 'observer';
   /**
    * The user's own AI tools (from their onboarding selection), so a `delegate`
    * bubble can show one "Open" button per available tool and let the user pick

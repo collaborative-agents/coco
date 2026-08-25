@@ -753,6 +753,8 @@ class AiTutoringProcessor(SegmentProcessor):
         llm_metrics: dict | None = None,
         image_paths: list[str] | None = None,
         intervention_source: str | None = None,
+        trigger_type: str | None = None,
+        teaching_depth: str | None = None,
     ) -> None:
         if not self._obs_subscribers:
             return
@@ -810,6 +812,10 @@ class AiTutoringProcessor(SegmentProcessor):
             event["applying_ai_output"] = applying_ai_output
         if intervention_source:
             event["intervention_source"] = intervention_source
+        if trigger_type:
+            event["trigger_type"] = trigger_type
+        if teaching_depth:
+            event["teaching_depth"] = teaching_depth
 
         for q in self._obs_subscribers:
             try:

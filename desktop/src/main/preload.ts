@@ -12,6 +12,7 @@ export type Channels =
   | 'close-main-window'
   | 'notification'
   | 'notification-hover-state'
+  | 'notification-response'
   | 'proactive-suggestion-open-state'
   | 'set-notification-expanded'
   | 'observation-update'

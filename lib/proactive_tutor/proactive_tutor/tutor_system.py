@@ -59,6 +59,30 @@ Rules:
 - Return only valid JSON, with no Markdown fences or extra keys.
 """
 
+_DAILY_LEARNING_REVIEW_SYSTEM_PROMPT = """You are a learning coach creating a
+short review of everything a user learned across one activity day. You receive
+one or more grounded session recaps from that same day.
+
+Return only valid JSON with this exact shape:
+{
+  "summary_title": "<one concise title describing the day's overall learning>",
+  "takeaways": [
+    "<important transferable learning point>",
+    "<important transferable learning point>",
+    "<important transferable learning point>"
+  ]
+}
+
+Rules:
+- Produce exactly three takeaways, even when there was only one session.
+- Synthesize across all supplied sessions and remove duplicated ideas.
+- Prioritize concrete, transferable lessons the user can apply again.
+- Ground every takeaway in the supplied recaps; do not invent new topics.
+- Describe what the user learned, not activity statistics or app usage.
+- Keep each takeaway to one concise sentence.
+- Do not include a quiz, Markdown, or extra keys.
+"""
+
 _PRACTICE_SUGGESTION_REQUEST = (
     "Suggest meaningful tasks I can practice or topics I can learn based on my "
     "usual work and experience level."
@@ -246,6 +270,23 @@ class TutorSystem:
             # Blind acceptance coaching touches Discernment.
             self.competency_counts["discernment"] += 1
 
+    @staticmethod
+    def _extract_response_competency(guidance: str) -> str | None:
+        """Return the primary 4D competency declared by the tutor response."""
+        import re
+
+        match = re.search(
+            r"<four_d_dimension>\s*([^<]+?)\s*</four_d_dimension>",
+            guidance,
+            re.IGNORECASE,
+        )
+        value = match.group(1).strip().lower() if match else ""
+        return value if value in TutorSystem._4d_competencies() else None
+
+    @staticmethod
+    def _4d_competencies() -> set[str]:
+        return {"delegation", "description", "discernment", "diligence"}
+
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
@@ -391,6 +432,42 @@ class TutorSystem:
                 )
 
         raise ValueError("Could not generate a valid recap quiz")
+
+    def generate_daily_learning_review(
+        self, recaps: list[dict[str, Any]]
+    ) -> tuple[dict, LLMCallMetrics]:
+        """Synthesize one activity day's session recaps into three takeaways."""
+        if not recaps:
+            raise ValueError("At least one session recap is required")
+        raw, metrics = prompt_to_text_with_metrics(
+            model=self.tutor_agent.model,
+            system_prompt=_DAILY_LEARNING_REVIEW_SYSTEM_PROMPT,
+            user_prompt=(
+                "Here are all session recaps from the user's previous activity day:\n\n"
+                f"{json.dumps(recaps, ensure_ascii=False, indent=2)}\n\n"
+                "Generate the daily learning review JSON."
+            ),
+            operation="daily_learning_review",
+        )
+        return self._parse_daily_learning_review(raw), metrics
+
+    @staticmethod
+    def _parse_daily_learning_review(raw: str) -> dict:
+        text = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text, flags=re.IGNORECASE)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        review = json.loads(match.group(0) if match else text)
+        if not isinstance(review, dict):
+            raise ValueError("Daily learning review must be a JSON object")
+        title = review.get("summary_title")
+        takeaways = review.get("takeaways")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("Daily learning review is missing summary_title")
+        if not isinstance(takeaways, list) or len(takeaways) != 3:
+            raise ValueError("Daily learning review must contain exactly three takeaways")
+        if not all(isinstance(item, str) and item.strip() for item in takeaways):
+            raise ValueError("Daily learning review takeaways must be non-empty strings")
+        return {"summary_title": title.strip(), "takeaways": takeaways}
 
     @staticmethod
     def _parse_recap(raw: str) -> dict:
@@ -810,7 +887,7 @@ class TutorSystem:
         self._log_tutor_call(
             "user_prompt", text_prompt, guidance, image_paths, llm_metrics=metrics
         )
-        weak_competency = None
+        weak_competency = self._extract_response_competency(guidance)
 
         # print("\n=== Tutor Response ===")
         # print(guidance)
@@ -1029,7 +1106,7 @@ class TutorSystem:
         guidance, metrics = self.tutor_agent.tutor_with_metrics(text_prompt)
         logger.info(f"[PAUSE][TUTOR] {guidance}")
         self._log_tutor_call("pause", text_prompt, guidance, None, llm_metrics=metrics)
-        weak_competency = None
+        weak_competency = self._extract_response_competency(guidance)
 
         print("\n=== Pause Guidance ===")
         print(guidance)

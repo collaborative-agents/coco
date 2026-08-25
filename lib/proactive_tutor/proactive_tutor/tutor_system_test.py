@@ -275,6 +275,39 @@ def test_generate_recap_retries_when_first_quiz_uses_labels(monkeypatch):
     assert "previous quiz was rejected" in prompts[1].lower()
 
 
+def test_generate_daily_learning_review_combines_sessions_into_three_points(monkeypatch):
+    response = {
+        "summary_title": "You learned to specify and verify AI work",
+        "takeaways": [
+            "State the desired outcome and constraints before delegating.",
+            "Check important claims against the original source.",
+            "Revise the request when the first result misses the goal.",
+        ],
+    }
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return json.dumps(response), {}
+
+    monkeypatch.setattr(
+        "proactive_tutor.tutor_system.prompt_to_text_with_metrics",
+        fake_completion,
+    )
+    tutor = _make_tutor_system()
+    review, _metrics = tutor.generate_daily_learning_review(
+        [
+            {"summary_title": "You practiced delegation", "bullets": ["Set scope."]},
+            {"summary_title": "You practiced diligence", "bullets": ["Verify claims."]},
+        ]
+    )
+
+    assert review == response
+    assert len(review["takeaways"]) == 3
+    assert "You practiced delegation" in captured["user_prompt"]
+    assert captured["operation"] == "daily_learning_review"
+
+
 def test_handle_user_prompt_with_metrics_logs_tutor_call(tmp_path):
     """Metrics returned by the tutor agent are returned and recorded."""
     metrics = {
@@ -545,6 +578,36 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
     assert rows[0]["session_id"] == "audio-session"
     assert rows[0]["ts"] == 1234.5
     assert rows[0]["tutor_input"] == "Please explain this spreadsheet."
+
+
+def test_response_dimension_updates_curriculum_state():
+    ts = TutorSystem.__new__(TutorSystem)
+    ts.curriculum_state = {
+        "framework_introduced": True,
+        "delegation_introduced": False,
+        "description_introduced": False,
+        "discernment_introduced": False,
+        "diligence_introduced": False,
+    }
+    ts.competency_counts = {
+        "delegation": 0,
+        "description": 0,
+        "discernment": 0,
+        "diligence": 0,
+    }
+    ts.intervention_count = 0
+
+    response = (
+        "<guidance>Give the AI clear constraints.</guidance>"
+        "<four_d_dimension>description</four_d_dimension>"
+        "<teaching_depth>introduce</teaching_depth>"
+    )
+    dimension = ts._extract_response_competency(response)
+    ts._update_curriculum_state("teaching_moment", dimension)
+
+    assert dimension == "description"
+    assert ts.curriculum_state["description_introduced"] is True
+    assert ts.competency_counts["description"] == 1
 
 
 if __name__ == "__main__":

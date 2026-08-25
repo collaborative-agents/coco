@@ -31,6 +31,40 @@ export interface GatewayAssistantTurnTiming {
   model?: string;
 }
 
+export type FourDDimension =
+  | 'delegation'
+  | 'description'
+  | 'discernment'
+  | 'diligence';
+
+export interface GatewayTutorMessageMetadata {
+  messageKind:
+    | 'user_response'
+    | 'voice_response'
+    | 'practice_suggestion'
+    | 'proactive_intervention';
+  fourDDimension?: FourDDimension;
+  triggerType?: string;
+  teachingDepth?: 'introduce' | 'reinforce' | 'deepen' | 'not_applicable';
+  interventionSource?: 'user' | 'judge' | 'observer';
+  observationId?: string;
+}
+
+export interface GatewayNotification {
+  id: string;
+  category: string;
+  notificationType: string;
+  message: string;
+  shownAt: Date;
+  sessionId?: string;
+  observationId?: string;
+  actionLabel?: string;
+  cancelLabel?: string;
+  status?: string;
+  fourDDimension?: FourDDimension;
+  triggerType?: string;
+}
+
 export interface GatewayAuthCredentials {
   participantId: string;
   password: string;
@@ -228,6 +262,7 @@ export class CocoGatewayClient {
     role: 'user' | 'coco',
     content: string,
     turnTiming?: GatewayAssistantTurnTiming,
+    metadata?: GatewayTutorMessageMetadata,
   ): Promise<void> {
     const messageTimestamp =
       role === 'coco' && turnTiming
@@ -252,6 +287,65 @@ export class CocoGatewayClient {
             ...(turnTiming.model ? { model: turnTiming.model } : {}),
           }
         : {}),
+      ...(role === 'coco' && metadata
+        ? {
+            message_kind: metadata.messageKind,
+            ...(metadata.fourDDimension
+              ? { four_d_dimension: metadata.fourDDimension }
+              : {}),
+            ...(metadata.triggerType
+              ? { trigger_type: metadata.triggerType }
+              : {}),
+            ...(metadata.teachingDepth
+              ? { teaching_depth: metadata.teachingDepth }
+              : {}),
+            ...(metadata.interventionSource
+              ? { intervention_source: metadata.interventionSource }
+              : {}),
+            ...(metadata.observationId
+              ? { observation_id: metadata.observationId }
+              : {}),
+          }
+        : {}),
+    });
+  }
+
+  async addNotification(notification: GatewayNotification): Promise<void> {
+    await this.post('/api/storage/notifications', {
+      _id: notification.id,
+      category: notification.category,
+      notification_type: notification.notificationType,
+      message: notification.message,
+      shown_at: notification.shownAt.toISOString(),
+      outcome: 'pending',
+      ...(notification.sessionId ? { sid: notification.sessionId } : {}),
+      ...(notification.observationId
+        ? { observation_id: notification.observationId }
+        : {}),
+      ...(notification.actionLabel
+        ? { action_label: notification.actionLabel }
+        : {}),
+      ...(notification.cancelLabel
+        ? { cancel_label: notification.cancelLabel }
+        : {}),
+      ...(notification.status ? { status: notification.status } : {}),
+      ...(notification.fourDDimension
+        ? { four_d_dimension: notification.fourDDimension }
+        : {}),
+      ...(notification.triggerType
+        ? { trigger_type: notification.triggerType }
+        : {}),
+    });
+  }
+
+  async resolveNotification(
+    notificationId: string,
+    outcome: 'accepted' | 'dismissed' | 'ignored',
+    respondedAt = new Date(),
+  ): Promise<void> {
+    await this.patch(`/api/storage/notifications/${notificationId}/response`, {
+      outcome,
+      responded_at: respondedAt.toISOString(),
     });
   }
 

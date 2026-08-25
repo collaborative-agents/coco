@@ -493,6 +493,12 @@ describe('window controls', () => {
     rerender(<NotificationBubble message={message} adjustable expanded />);
     expect(screen.getByText(/full-message-ending/)).toBeInTheDocument();
   });
+
+  it('shows a daily summary in full without requiring expansion', () => {
+    const message = `${'Yesterday summary detail '.repeat(12)}summary-ending`;
+    render(<NotificationBubble message={message} notifType="daily-summary" />);
+    expect(screen.getByText(/summary-ending/)).toBeInTheDocument();
+  });
 });
 
 describe('interactive notification locking', () => {

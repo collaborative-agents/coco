@@ -739,6 +739,8 @@ class ProgressDetector:
             llm_metrics=metrics,
             image_paths=suggestion_image_paths,
             intervention_source="judge",
+            trigger_type=judgment.trigger_type,
+            teaching_depth=judgment.teaching_depth,
         )
 
         payload = {
