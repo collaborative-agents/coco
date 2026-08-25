@@ -192,6 +192,32 @@ describe('CocoGatewayClient', () => {
     });
   });
 
+  it('labels a stored user transcription as voice input', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    const client = new CocoGatewayClient({
+      gatewayUrl: 'https://gateway.example',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    client.setAuthSession('token-1', 'user-1');
+
+    await client.addMessage(
+      'session-1',
+      'user',
+      'Please explain this chart.',
+      undefined,
+      { messageKind: 'voice_input' },
+    );
+
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
+      _id: expect.any(String),
+      sid: 'session-1',
+      a: { type: 'user', id: 'user-1' },
+      content: 'Please explain this chart.',
+      ts: expect.any(String),
+      message_kind: 'voice_input',
+    });
+  });
+
   it('stores harness provenance on each session', async () => {
     const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
     const client = new CocoGatewayClient({

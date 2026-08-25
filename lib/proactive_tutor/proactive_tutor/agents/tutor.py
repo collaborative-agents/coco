@@ -473,7 +473,9 @@ class TutorAgent:
                     "content": (
                         "Transcribe the user's audio faithfully. Return only the "
                         "spoken words as plain text. Do not answer the user, add a "
-                        "summary, or include labels."
+                        "summary, or include labels. If there is no clearly "
+                        "intelligible speech, return exactly <NO_SPEECH>. Never "
+                        "guess or invent words from silence or background noise."
                     ),
                 },
                 {

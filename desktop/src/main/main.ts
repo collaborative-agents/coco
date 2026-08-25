@@ -3565,6 +3565,8 @@ ipcMain.handle(
                 gatewaySessionId,
                 'user',
                 transcription,
+                undefined,
+                { messageKind: 'voice_input' },
               );
             }
           }

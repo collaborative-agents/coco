@@ -39,6 +39,7 @@ export type FourDDimension =
 
 export interface GatewayTutorMessageMetadata {
   messageKind:
+    | 'voice_input'
     | 'user_response'
     | 'voice_response'
     | 'practice_suggestion'
@@ -287,22 +288,22 @@ export class CocoGatewayClient {
             ...(turnTiming.model ? { model: turnTiming.model } : {}),
           }
         : {}),
-      ...(role === 'coco' && metadata
+      ...(metadata
         ? {
             message_kind: metadata.messageKind,
-            ...(metadata.fourDDimension
+            ...(role === 'coco' && metadata.fourDDimension
               ? { four_d_dimension: metadata.fourDDimension }
               : {}),
-            ...(metadata.triggerType
+            ...(role === 'coco' && metadata.triggerType
               ? { trigger_type: metadata.triggerType }
               : {}),
-            ...(metadata.teachingDepth
+            ...(role === 'coco' && metadata.teachingDepth
               ? { teaching_depth: metadata.teachingDepth }
               : {}),
-            ...(metadata.interventionSource
+            ...(role === 'coco' && metadata.interventionSource
               ? { intervention_source: metadata.interventionSource }
               : {}),
-            ...(metadata.observationId
+            ...(role === 'coco' && metadata.observationId
               ? { observation_id: metadata.observationId }
               : {}),
           }

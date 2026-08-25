@@ -945,8 +945,9 @@ class TutorSystem:
                 except Exception as exc:
                     logger.warning("[AUDIO_PROMPT] Transcription failed: %s", exc)
                     return
-                if text.strip():
-                    on_event({"type": "transcription", "text": text.strip()})
+                cleaned = text.strip()
+                if cleaned and cleaned.upper() != "<NO_SPEECH>":
+                    on_event({"type": "transcription", "text": cleaned})
 
             transcription_future.add_done_callback(publish_transcription)
             guidance, metrics = self.tutor_agent.chat_with_metrics(
@@ -960,7 +961,10 @@ class TutorSystem:
                 logger.warning("[AUDIO_PROMPT] Transcription failed: %s", exc)
                 transcription = ""
 
-        stored_user_text = transcription or "[Voice message]"
+        if not transcription or transcription.upper() == "<NO_SPEECH>":
+            raise ValueError("No intelligible speech was detected. Please try again.")
+
+        stored_user_text = transcription
 
         # Retain only the transcript. The raw base64 audio exists only for the
         # provider request and is redacted by the Router before usage logging.

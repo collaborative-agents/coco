@@ -8,9 +8,13 @@ uv run python -m pytest proactive_tutor/tutor_system_test.py
 """
 
 import base64
+import io
 import json
+import math
 import os
+import struct
 import threading
+import wave
 
 import pytest
 from proactive_tutor.tutor_system import _RECAP_SYSTEM_PROMPT, TutorSystem
@@ -26,6 +30,21 @@ requires_llm = pytest.mark.skipif(
 
 def _make_tutor_system() -> TutorSystem:
     return TutorSystem(model_name=MODEL)
+
+
+def _voiced_wav_base64() -> str:
+    sample_rate = 16_000
+    samples = [
+        int(0.2 * 32767 * math.sin(2 * math.pi * 440 * i / sample_rate))
+        for i in range(sample_rate // 5)
+    ]
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"".join(struct.pack("<h", sample) for sample in samples))
+    return base64.b64encode(output.getvalue()).decode("ascii")
 
 
 # ------------------------------------------------------------------
@@ -519,8 +538,7 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
     events = []
     transcription_started = threading.Event()
     release_transcription = threading.Event()
-    wav_header = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + bytes(36)
-    audio_data = base64.b64encode(wav_header).decode("ascii")
+    audio_data = _voiced_wav_base64()
 
     def fake_chat(messages, image_paths=None, on_event=None):
         assert transcription_started.wait(timeout=1)
@@ -578,6 +596,41 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
     assert rows[0]["session_id"] == "audio-session"
     assert rows[0]["ts"] == 1234.5
     assert rows[0]["tutor_input"] == "Please explain this spreadsheet."
+
+
+def test_audio_prompt_does_not_retain_or_publish_no_speech_transcription(monkeypatch):
+    ts = _make_tutor_system()
+    ts._chat_messages = [{"role": "user", "content": "Earlier context"}]
+    events = []
+    metrics = {
+        "operation": "tutor",
+        "model": MODEL,
+        "duration_ms": 1,
+        "tool_calls": [],
+    }
+
+    monkeypatch.setattr(
+        ts.tutor_agent,
+        "chat_with_metrics",
+        lambda messages, image_paths=None, on_event=None: (
+            "Hallucinated guidance",
+            metrics,
+        ),
+    )
+    monkeypatch.setattr(
+        ts.tutor_agent,
+        "transcribe_audio_with_metrics",
+        lambda audio, audio_format="wav": ("<NO_SPEECH>", metrics),
+    )
+
+    with pytest.raises(ValueError, match="No intelligible speech"):
+        ts.handle_audio_prompt_with_metrics(
+            _voiced_wav_base64(),
+            on_event=events.append,
+        )
+
+    assert events == []
+    assert ts._chat_messages == [{"role": "user", "content": "Earlier context"}]
 
 
 def test_response_dimension_updates_curriculum_state():
