@@ -506,6 +506,21 @@ async def handle_user_prompt(req: EventRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.post("/review/daily", response_model=GuidanceResponse)
+async def daily_review():
+    """Generate a stateless review of today's activity from long-term memory."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    try:
+        guidance, llm_metrics = await asyncio.to_thread(
+            tutor.generate_daily_review_with_metrics
+        )
+        return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
+    except Exception as e:
+        logger.error(f"Error generating daily review: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.post("/events/user_prompt/stream")
 async def handle_user_prompt_stream(req: EventRequest):
     """Stream tutor tool activity and final-answer text as SSE events."""
