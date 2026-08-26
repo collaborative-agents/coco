@@ -38,6 +38,9 @@ jobs:
 
   package:
     needs: prepare
+    env:
+      COCO_GATEWAY_URL: ${{ vars.COCO_GATEWAY_URL }}
+      LLM_ROUTER_URL: ${{ vars.LLM_ROUTER_URL }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -75,9 +78,39 @@ jobs:
         working-directory: ./desktop
         run: npx ts-node ./.erb/scripts/clean.js dist
 
+      - name: Validate study configuration
+        shell: bash
+        run: |
+          : "${COCO_GATEWAY_URL:?Missing repository variable COCO_GATEWAY_URL}"
+          : "${LLM_ROUTER_URL:?Missing repository variable LLM_ROUTER_URL}"
+
+          [[ "$COCO_GATEWAY_URL" == https://* ]] || {
+            echo "COCO_GATEWAY_URL must use HTTPS" >&2
+            exit 1
+          }
+          [[ "$LLM_ROUTER_URL" == https://* ]] || {
+            echo "LLM_ROUTER_URL must use HTTPS" >&2
+            exit 1
+          }
+
       - name: Build Electron app
         working-directory: ./desktop
         run: npm run build
+
+      - name: Verify embedded study configuration
+        working-directory: ./desktop
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const bundle = fs.readFileSync("release/app/dist/main/main.js", "utf8");
+            for (const name of ["COCO_GATEWAY_URL", "LLM_ROUTER_URL"]) {
+              const value = process.env[name];
+              if (!value || !bundle.includes(value)) {
+                throw new Error(`${name} was not embedded in the main bundle`);
+              }
+            }
+          '
 
       - name: Validate macOS release secrets
         if: startsWith(matrix.platform, 'macos')
