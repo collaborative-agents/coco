@@ -111,4 +111,34 @@ describe('CocoGatewayClient', () => {
       expect.objectContaining({ method: 'PATCH' }),
     );
   });
+
+  it('delivers fatal service errors to the dedicated storage endpoint', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValue(jsonResponse({ success: true }));
+    const client = new CocoGatewayClient({
+      gatewayUrl: 'https://study.example',
+      fetchImpl,
+    });
+    client.setAuthSession('token');
+
+    await client.deliver({
+      id: 'operation-fatal-1',
+      type: 'fatal_error',
+      createdAt: '2026-01-01T00:00:00Z',
+      payload: {
+        _id: 'fatal-1',
+        service: 'observer',
+        failure_type: 'unexpected_exit',
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://study.example/api/storage/fatal-errors',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer token' }),
+      }),
+    );
+  });
 });

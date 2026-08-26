@@ -30,7 +30,8 @@ export type GatewayOperationType =
   | 'session_start'
   | 'session_end'
   | 'message'
-  | 'interaction_batch';
+  | 'interaction_batch'
+  | 'fatal_error';
 
 export interface GatewayQueuedOperation {
   id: string;
@@ -155,6 +156,13 @@ export class CocoGatewayClient {
       case 'interaction_batch':
         await this.request(
           '/api/storage/interaction-events/batch',
+          'POST',
+          operation.payload,
+        );
+        return;
+      case 'fatal_error':
+        await this.request(
+          '/api/storage/fatal-errors',
           'POST',
           operation.payload,
         );

@@ -186,4 +186,40 @@ describe('PersonalizationScheduler status', () => {
     expect(onJobComplete).toHaveBeenCalledTimes(1);
     expect(onJobComplete).toHaveBeenCalledWith('evolve');
   });
+
+  it('reports bounded personalization subprocess failures', () => {
+    const onFatalError = jest.fn();
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot: path.join(root, 'personalization'),
+      memoryRoot: root,
+      model: 'provider/model',
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+      onFatalError,
+    });
+    const schedulerInternals = scheduler as unknown as {
+      notifyFatalError: (error: {
+        job: 'evolve';
+        failureType: 'unexpected_exit';
+        message: string;
+        exitCode: number;
+      }) => void;
+    };
+
+    schedulerInternals.notifyFatalError({
+      job: 'evolve',
+      failureType: 'unexpected_exit',
+      message: 'worker failed',
+      exitCode: 1,
+    });
+
+    expect(onFatalError).toHaveBeenCalledWith({
+      job: 'evolve',
+      failureType: 'unexpected_exit',
+      message: 'worker failed',
+      exitCode: 1,
+    });
+  });
 });

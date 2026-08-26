@@ -34,7 +34,7 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import axios from 'axios';
 import { resolveHtmlPath } from './util';
-import { serviceManager } from './services/manager';
+import { serviceManager, type ServiceFatalError } from './services/manager';
 import { configureServiceModelArguments } from './services/model-arguments';
 import {
   startObservationStream,
@@ -46,12 +46,16 @@ import {
   TutorStreamTimeoutError,
 } from './services/tutor-stream';
 import type { TutorStreamEvent } from './services/tutor-stream';
-import { PersonalizationScheduler } from './services/personalization-scheduler';
+import {
+  PersonalizationScheduler,
+  type PersonalizationFatalError,
+} from './services/personalization-scheduler';
 import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { DailyMemoryDraftService } from './services/daily-memory-drafts';
 import { HiddenAvatarVisibility } from './services/hidden-avatar-visibility';
 import { CocoGatewayClient } from './services/gateway-client';
 import GatewayOutbox from './services/gateway-outbox';
+import { sanitizeFatalErrorMessage } from './services/fatal-error-telemetry';
 import {
   clearAuthSession,
   readAuthSession,
@@ -450,12 +454,101 @@ let currentTutorModelId: string | null = null;
 // Invite timing is owned by the sensing-side judge; no renderer-side cooldown.
 
 const queueGatewayOperation = (
-  type: 'session_start' | 'session_end' | 'message' | 'interaction_batch',
+  type:
+    | 'session_start'
+    | 'session_end'
+    | 'message'
+    | 'interaction_batch'
+    | 'fatal_error',
   payload: Record<string, unknown>,
 ) => {
   if (!gatewayOutbox) return;
   gatewayOutbox.enqueue(type, payload);
 };
+
+type FatalService = 'observer' | 'tutor' | 'personalization';
+
+const configuredModelForFatalError = (
+  service: FatalService,
+): string | undefined => {
+  const config = readModelConfiguration();
+  if (service === 'observer' || service === 'personalization') {
+    return (
+      config?.sensing.model || process.env.OBSERVER_MODEL?.trim() || undefined
+    );
+  }
+  const selected =
+    config?.tutors.find((tutor) => tutor.id === currentTutorModelId) ??
+    (config ? defaultTutor(config) : undefined);
+  return selected?.model || process.env.TUTOR_MODEL?.trim() || undefined;
+};
+
+const queueFatalError = (
+  service: FatalService,
+  error: {
+    failureType: 'spawn_error' | 'unexpected_exit';
+    message: string;
+    exitCode?: number;
+    signal?: string;
+    restartScheduled?: boolean;
+    restartAttempt?: number;
+    job?: 'signals' | 'revise' | 'evolve';
+  },
+): void => {
+  const model = configuredModelForFatalError(service);
+  let modelEnvironment: Record<string, string> = {};
+  try {
+    const runtime = resolveModelRuntime();
+    modelEnvironment = {
+      ...runtime?.sensingEnv,
+      ...runtime?.tutorEnv,
+    };
+  } catch {
+    // A broken model configuration may be the failure being reported. Generic
+    // pattern redaction still runs when the credentials cannot be read.
+  }
+  queueGatewayOperation('fatal_error', {
+    _id: randomUUID(),
+    occurred_at: new Date().toISOString(),
+    service,
+    failure_type: error.failureType,
+    message: sanitizeFatalErrorMessage(error.message, [
+      process.env,
+      modelEnvironment,
+    ]),
+    app_run_id: appRunId,
+    app_version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    ...(currentSessionId ? { session_id: currentSessionId } : {}),
+    ...(model ? { model } : {}),
+    ...(typeof error.exitCode === 'number'
+      ? { exit_code: error.exitCode }
+      : {}),
+    ...(error.signal ? { signal: error.signal } : {}),
+    ...(typeof error.restartScheduled === 'boolean'
+      ? { restart_scheduled: error.restartScheduled }
+      : {}),
+    ...(typeof error.restartAttempt === 'number'
+      ? { restart_attempt: error.restartAttempt }
+      : {}),
+    ...(error.job ? { job: error.job } : {}),
+  });
+};
+
+const fatalServiceById: Record<
+  string,
+  Exclude<FatalService, 'personalization'>
+> = {
+  'sensing-server': 'observer',
+  'tutor-server': 'tutor',
+};
+
+serviceManager.setFatalErrorHandler((error: ServiceFatalError) => {
+  const service = fatalServiceById[error.serviceId];
+  if (!service) return;
+  queueFatalError(service, error);
+});
 
 const gatewayInteractionKinds = new Set([
   'shown',
@@ -4459,6 +4552,9 @@ const startObserver = () => {
         'personalization.log',
       ),
       getIdleSeconds: () => powerMonitor.getSystemIdleTime(),
+      onFatalError: (error: PersonalizationFatalError) => {
+        queueFatalError('personalization', error);
+      },
       onJobFinished: (job, outcome) => {
         if (job !== 'evolve') return;
         if (outcome === 'completed') {

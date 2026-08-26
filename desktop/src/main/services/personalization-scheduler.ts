@@ -11,6 +11,14 @@ export type PersonalizationRunOutcome =
   | 'preempted'
   | 'failed';
 
+export interface PersonalizationFatalError {
+  job: PersonalizationJob;
+  failureType: 'spawn_error' | 'unexpected_exit';
+  message: string;
+  exitCode?: number;
+  signal?: string;
+}
+
 export interface PersonalizationStatus {
   available: boolean;
   sleeping: boolean;
@@ -107,6 +115,7 @@ export interface PersonalizationSchedulerOptions {
     job: PersonalizationJob,
     outcome: PersonalizationRunOutcome,
   ) => void;
+  onFatalError?: (error: PersonalizationFatalError) => void;
 }
 
 /** Owns one low-priority, disposable personalization subprocess at a time. */
@@ -142,6 +151,8 @@ export class PersonalizationScheduler {
   };
 
   private readonly options: PersonalizationSchedulerOptions;
+
+  private readonly expectedPreemptions = new WeakSet<ChildProcess>();
 
   constructor(options: PersonalizationSchedulerOptions) {
     this.options = options;
@@ -377,6 +388,8 @@ export class PersonalizationScheduler {
     this.activeJob = job;
     this.activeStartedAt = Date.now();
     this.activeOutput = '';
+    let recentStderr = '';
+    let spawnErrorReported = false;
     child.stdout?.on('data', (chunk) => {
       const message = String(chunk).trim();
       if (message) {
@@ -388,13 +401,20 @@ export class PersonalizationScheduler {
     child.stderr?.on('data', (chunk) => {
       const message = String(chunk).trim();
       if (message) {
+        recentStderr = `${recentStderr}\n${message}`.slice(-4096);
         log.warn(`[Personalization:${job}] ${message}`);
         this.writeDedicatedLog(`[${job}:stderr]\n${message}`);
       }
     });
     child.on('error', (error) => {
+      spawnErrorReported = true;
       log.warn(`[Personalization] ${job} failed to start`, error);
       this.writeDedicatedLog(`[${job}:spawn-error] ${error.stack ?? error}`);
+      this.notifyFatalError({
+        job,
+        failureType: 'spawn_error',
+        message: error.message,
+      });
     });
     child.on('exit', (code, signal) => {
       if (this.active === child) this.active = null;
@@ -404,8 +424,10 @@ export class PersonalizationScheduler {
         this.pendingSignals = true;
       }
       const noWork = code === 3;
+      const expectedPreemption = this.expectedPreemptions.has(child);
+      this.expectedPreemptions.delete(child);
       let outcome: PersonalizationRunOutcome = 'failed';
-      if (signal) outcome = 'preempted';
+      if (signal && expectedPreemption) outcome = 'preempted';
       else if (noWork) outcome = 'no_work';
       else if (code === 0) outcome = 'completed';
       this.lastRun = {
@@ -429,6 +451,18 @@ export class PersonalizationScheduler {
       this.writeDedicatedLog(
         `${job} exited code=${String(code)} signal=${String(signal)}`,
       );
+      if (outcome === 'failed' && !spawnErrorReported) {
+        this.notifyFatalError({
+          job,
+          failureType: 'unexpected_exit',
+          message:
+            recentStderr.trim() ||
+            this.lastRun.detail ||
+            `Personalization job exited unexpectedly (code=${String(code)}, signal=${String(signal)}).`,
+          ...(typeof code === 'number' ? { exitCode: code } : {}),
+          ...(signal ? { signal } : {}),
+        });
+      }
       this.notifyJobFinished(job, outcome);
       if (!this.stopped) setTimeout(() => this.tick(), 1_000);
     });
@@ -442,9 +476,18 @@ export class PersonalizationScheduler {
     if (outcome === 'completed') this.options.onJobComplete?.(job);
   }
 
+  private notifyFatalError(error: PersonalizationFatalError) {
+    try {
+      this.options.onFatalError?.(error);
+    } catch (handlerError) {
+      log.warn('[Personalization] fatal-error handler failed', handlerError);
+    }
+  }
+
   private preempt(reason: string) {
     const child = this.active;
     if (!child?.pid) return;
+    this.expectedPreemptions.add(child);
     log.info(`[Personalization] preempting active job: ${reason}`);
     this.writeDedicatedLog(`Preempting active job: ${reason}`);
     try {
