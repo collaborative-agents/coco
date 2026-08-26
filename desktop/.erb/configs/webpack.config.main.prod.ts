@@ -12,8 +12,19 @@ import webpackPaths from './webpack.paths';
 import checkNodeEnv from '../scripts/check-node-env';
 import deleteSourceMaps from '../scripts/delete-source-maps';
 
+const dotenv = require('dotenv');
+
+// Study service URLs are safe to embed; participant credentials are fetched
+// after authentication and are never included in the application bundle.
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+
 checkNodeEnv('production');
 deleteSourceMaps();
+
+const buildStudyConfig = {
+  gatewayUrl: process.env.COCO_GATEWAY_URL?.trim() || '',
+  routerUrl: process.env.LLM_ROUTER_URL?.trim() || '',
+};
 
 const configuration: webpack.Configuration = {
   devtool: 'source-map',
@@ -66,6 +77,7 @@ const configuration: webpack.Configuration = {
 
     new webpack.DefinePlugin({
       'process.type': '"browser"',
+      __COCO_BUILD_STUDY_CONFIG__: JSON.stringify(buildStudyConfig),
     }),
   ],
 

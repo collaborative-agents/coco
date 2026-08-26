@@ -154,4 +154,36 @@ describe('PersonalizationScheduler status', () => {
     });
     expect(preempt).toHaveBeenCalledTimes(1);
   });
+
+  it('reports every finished job while reserving completion for successful updates', () => {
+    const onJobComplete = jest.fn();
+    const onJobFinished = jest.fn();
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot: path.join(root, 'personalization'),
+      memoryRoot: root,
+      model: 'provider/model',
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+      onJobComplete,
+      onJobFinished,
+    });
+    const schedulerInternals = scheduler as unknown as {
+      notifyJobFinished: (
+        job: 'evolve',
+        outcome: 'completed' | 'no_work' | 'failed',
+      ) => void;
+    };
+
+    schedulerInternals.notifyJobFinished('evolve', 'completed');
+    schedulerInternals.notifyJobFinished('evolve', 'no_work');
+    schedulerInternals.notifyJobFinished('evolve', 'failed');
+
+    expect(onJobFinished).toHaveBeenNthCalledWith(1, 'evolve', 'completed');
+    expect(onJobFinished).toHaveBeenNthCalledWith(2, 'evolve', 'no_work');
+    expect(onJobFinished).toHaveBeenNthCalledWith(3, 'evolve', 'failed');
+    expect(onJobComplete).toHaveBeenCalledTimes(1);
+    expect(onJobComplete).toHaveBeenCalledWith('evolve');
+  });
 });

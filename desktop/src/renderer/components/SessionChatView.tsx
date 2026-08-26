@@ -22,6 +22,8 @@ import type { LLMCallMetrics, TutorToolCall } from './observation-types';
 const IS_MAC =
   typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 const HOTKEY_LABEL = IS_MAC ? 'Cmd + Shift + Space' : 'Ctrl + Shift + Space';
+const COMPOSER_COLLAPSED_MAX_HEIGHT = 120;
+const COMPOSER_EXPANDED_MAX_HEIGHT = 320;
 
 // ── Tutor guidance parsing ─────────────────────────────────────────────────────
 // The local tutor server returns a JSON envelope string, e.g.
@@ -217,6 +219,7 @@ interface TutorModelOption {
   label: string;
   provider: string;
   model: string;
+  supportsAudio: boolean;
   baseUrl?: string;
 }
 
@@ -251,6 +254,7 @@ const MODEL_PROVIDER_OPTIONS = [
   ['gemini', 'Google Gemini'],
   ['openai', 'OpenAI'],
   ['anthropic', 'Anthropic'],
+  ['nv_inference', 'NVIDIA InferenceHub'],
   ['tinker', 'Tinker'],
   ['tinfoil', 'Tinfoil'],
   ['hosted_vllm', 'OpenAI-compatible endpoint'],
@@ -263,6 +267,7 @@ const blankSensingModel = (): TutorModelOption => ({
   label: 'Sensing',
   provider: 'gemini',
   model: '',
+  supportsAudio: false,
 });
 
 const blankTutorModel = (): TutorModelOption => ({
@@ -270,6 +275,7 @@ const blankTutorModel = (): TutorModelOption => ({
   label: 'Primary tutor',
   provider: 'anthropic',
   model: '',
+  supportsAudio: false,
 });
 
 // crypto.randomUUID needs a secure context; fall back for safety.
@@ -370,7 +376,10 @@ const S: Record<string, React.CSSProperties> = {
   pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
   pendingAnnotate: { position: 'absolute', left: 3, bottom: 3, height: 21, border: '1px solid rgba(255,255,255,0.72)', borderRadius: 6, padding: '0 6px', background: 'rgba(32,74,121,0.94)', color: '#fff', cursor: 'pointer', fontFamily: FONT, fontSize: 10, fontWeight: 700, lineHeight: '19px', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' },
   inputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
-  textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
+  composerTextAreaWrap: { flex: 1, minWidth: 0 },
+  composerExpandRow: { display: 'flex', justifyContent: 'flex-end', marginBottom: 3 },
+  composerExpandBtn: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 3px', fontFamily: FONT, fontSize: 10.5, fontWeight: 700 },
+  textarea: { width: '100%', minHeight: 50, boxSizing: 'border-box', display: 'block', resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, lineHeight: 1.4, fontFamily: FONT, outline: 'none', color: '#111827', transition: 'height 100ms ease' },
   sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
   micBtn: {
     width: 38,
@@ -880,6 +889,8 @@ function ChatMetrics({
 export default function SessionChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const [composerCanExpand, setComposerCanExpand] = useState(false);
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -913,6 +924,11 @@ export default function SessionChatView() {
     blankSensingModel,
   );
   const [defaultTutorModelId, setDefaultTutorModelId] = useState('');
+  const [savedTutorAudioSupport, setSavedTutorAudioSupport] = useState<
+    Record<string, boolean>
+  >({});
+  const currentTutorSupportsAudio =
+    savedTutorAudioSupport[currentTutorModelId] === true;
   const [modelCredentials, setModelCredentials] = useState<Record<string, string>>({});
   const [modelConfigLoading, setModelConfigLoading] = useState(true);
   const [modelLoadError, setModelLoadError] = useState('');
@@ -963,6 +979,7 @@ export default function SessionChatView() {
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
   const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const composerTextAreaRef = useRef<HTMLTextAreaElement>(null);
   const pendingHotkeyImagesRef = useRef<Set<string>>(new Set());
   const sessionIdRef = useRef<string | null>(null);
   const pendingContextRef = useRef<string | null>(null);
@@ -976,6 +993,27 @@ export default function SessionChatView() {
   const wakeDetectionInProgressRef = useRef(false);
 
   useEffect(() => () => voiceRecorderRef.current?.cancel(), []);
+
+  useEffect(() => {
+    const textArea = composerTextAreaRef.current;
+    if (!textArea) return;
+    textArea.style.height = 'auto';
+    const contentHeight = Math.max(textArea.scrollHeight, 50);
+    const needsExpansion = contentHeight > COMPOSER_COLLAPSED_MAX_HEIGHT;
+    setComposerCanExpand(needsExpansion);
+    if (!needsExpansion && composerExpanded) {
+      setComposerExpanded(false);
+    }
+    const expandedLimit = Math.min(
+      COMPOSER_EXPANDED_MAX_HEIGHT,
+      Math.max(180, window.innerHeight * 0.4),
+    );
+    const maxHeight = composerExpanded && needsExpansion
+      ? expandedLimit
+      : COMPOSER_COLLAPSED_MAX_HEIGHT;
+    textArea.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+    textArea.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
+  }, [composerExpanded, input]);
 
   useEffect(() => {
     const applyZoomFactor = (value: unknown) => {
@@ -1093,6 +1131,12 @@ export default function SessionChatView() {
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
+      window.electron?.ipcRenderer.sendMessage('training-feedback', {
+        kind: 'copy',
+        surface: 'chat',
+        message_id: message.id,
+        session_id: sessionIdRef.current,
+      });
       setCopiedMessageKey(key);
       window.setTimeout(() => {
         setCopiedMessageKey((current) => (current === key ? null : current));
@@ -1127,6 +1171,7 @@ export default function SessionChatView() {
     const cleanup = window.electron?.ipcRenderer.on('chat-stream-event', (data: any) => {
       const event = (data ?? {}) as {
         requestId?: string;
+        messageId?: string;
         type?: string;
         text?: string;
         call?: TutorToolCall;
@@ -1166,7 +1211,7 @@ export default function SessionChatView() {
             return {
               ...message,
               text: event.guidance ?? message.text,
-              id: message.id ?? makeMessageId(),
+              id: event.messageId ?? message.id ?? makeMessageId(),
               ts: Date.now(),
               observerMetrics: event.observerMetrics ?? null,
               tutorMetrics: event.llm_metrics ?? null,
@@ -1421,19 +1466,29 @@ export default function SessionChatView() {
         if (!config?.sensing || !Array.isArray(config.tutors) || config.tutors.length === 0) {
           const tutor = blankTutorModel();
           setTutorModels([tutor]);
+          setSavedTutorAudioSupport({ [tutor.id]: false });
           setDefaultTutorModelId(tutor.id);
           setModelLoadError(
             'No saved model configuration was found. Configure the sensing and tutor models below.',
           );
           return;
         }
-        setTutorModels(config.tutors.map((model: TutorModelOption) => ({
+        const normalizedTutors = config.tutors.map((model: TutorModelOption) => ({
           ...model,
           model: model.model.replace(/^(?:hosted_vllm|tinker)\//, ''),
-        })));
+          supportsAudio: model.supportsAudio === true,
+        }));
+        setTutorModels(normalizedTutors);
+        setSavedTutorAudioSupport(Object.fromEntries(
+          normalizedTutors.map((model: TutorModelOption) => [
+            model.id,
+            model.supportsAudio,
+          ]),
+        ));
         setSensingModel({
           ...config.sensing,
           model: String(config.sensing.model).replace(/^(?:hosted_vllm|tinker)\//, ''),
+          supportsAudio: false,
         });
         setDefaultTutorModelId(config.defaultTutorId || '');
         setCurrentTutorModelId((current) => current || config.defaultTutorId || '');
@@ -1441,6 +1496,7 @@ export default function SessionChatView() {
       .catch((error: unknown) => {
         const tutor = blankTutorModel();
         setTutorModels([tutor]);
+        setSavedTutorAudioSupport({ [tutor.id]: false });
         setDefaultTutorModelId(tutor.id);
         setModelLoadError(
           `Could not load saved model settings: ${
@@ -1474,6 +1530,7 @@ export default function SessionChatView() {
     });
     if ((result as { success?: boolean })?.success) {
       setCurrentTutorModelId(modelId);
+      setVoiceError('');
       if (sessionIdRef.current && messagesRef.current.length > 0) {
         window.electron?.ipcRenderer
           .invoke('save-chat-conversation', {
@@ -1565,6 +1622,10 @@ export default function SessionChatView() {
       return;
     }
     setModelCredentials({});
+    setSavedTutorAudioSupport(Object.fromEntries(
+      tutorModels.map((model) => [model.id, model.supportsAudio]),
+    ));
+    setVoiceError('');
     setModelLoadError('');
     setModelSavedFlash(true);
     setTimeout(() => setModelSavedFlash(false), 1500);
@@ -1938,6 +1999,18 @@ export default function SessionChatView() {
       setShowHistory(false);
       setReviewing(null);
     }
+    if (!currentTutorSupportsAudio) {
+      if (fromWakeWord) {
+        setVoiceError(
+          'Coco is awake, but the selected tutor does not support audio input. Type your message or choose an audio-capable tutor.',
+        );
+        await window.electron?.ipcRenderer.invoke(
+          'set-wake-word-capture-paused',
+          { paused: false },
+        );
+      }
+      return;
+    }
     const unavailable =
       sending ||
       startingNewSession ||
@@ -2070,6 +2143,22 @@ export default function SessionChatView() {
     voiceState === 'idle' &&
     (input.trim().length > 0 || pendingImages.length > 0);
   const voiceActive = voiceState === 'listening' || voiceState === 'speaking';
+  const voiceButtonDisabled =
+    sending ||
+    startingNewSession ||
+    Boolean(reviewing) ||
+    voiceState === 'requesting' ||
+    !currentTutorSupportsAudio;
+  let voiceButtonLabel = 'Start voice recording';
+  let voiceButtonTitle = 'Talk to Coco';
+  if (voiceActive) {
+    voiceButtonLabel = 'Stop voice recording';
+    voiceButtonTitle = 'Stop and send voice message';
+  } else if (!currentTutorSupportsAudio) {
+    voiceButtonLabel =
+      'Voice input unavailable: selected tutor does not support audio';
+    voiceButtonTitle = 'The selected tutor model does not support audio input';
+  }
   let voiceStatusText = '';
   if (voiceState === 'requesting') {
     voiceStatusText = 'Requesting microphone access…';
@@ -2095,6 +2184,7 @@ export default function SessionChatView() {
         selectedTutorModel.label,
         `Provider: ${selectedTutorProvider}`,
         `Model: ${selectedTutorModel.model}`,
+        `Audio input: ${currentTutorSupportsAudio ? 'Supported' : 'Not supported'}`,
         ...(selectedTutorModel.baseUrl
           ? [`Endpoint: ${selectedTutorModel.baseUrl}`]
           : []),
@@ -2629,6 +2719,28 @@ export default function SessionChatView() {
                       }))}
                     />
                   )}
+                  <label
+                    htmlFor={`settings-tutor-audio-${model.id}`}
+                    style={{ fontSize: 11.5, color: '#374151' }}
+                  >
+                    <input
+                      id={`settings-tutor-audio-${model.id}`}
+                      type="checkbox"
+                      checked={model.supportsAudio}
+                      onChange={(event) =>
+                        setTutorModels((current) =>
+                          current.map((item, i) =>
+                            i === index
+                              ? {
+                                  ...item,
+                                  supportsAudio: event.target.checked,
+                                }
+                              : item,
+                          ),
+                        )
+                      }
+                    />{' '}Supports audio input
+                  </label>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
                     <label>
                       <input
@@ -2691,7 +2803,13 @@ export default function SessionChatView() {
                   const id = `tutor-${Date.now()}`;
                   setTutorModels((current) => [
                     ...current,
-                    { id, label: '', provider: 'anthropic', model: '' },
+                    {
+                      id,
+                      label: '',
+                      provider: 'anthropic',
+                      model: '',
+                      supportsAudio: false,
+                    },
                   ]);
                 }}
               >
@@ -3168,41 +3286,48 @@ export default function SessionChatView() {
           </div>
         )}
         <div style={S.inputRow}>
-          <textarea
-            style={S.textarea}
-            rows={2}
-            placeholder={
-              voiceState === 'idle'
-                ? 'Ask the tutor… (paste an image to attach)'
-                : 'Listening to your voice…'
-            }
-            value={input}
-            disabled={voiceState !== 'idle'}
-            onChange={(e) => setInput(e.target.value)}
-            onPaste={onPaste}
-            onKeyDown={onKeyDown}
-          />
+          <div style={S.composerTextAreaWrap}>
+            {composerCanExpand && (
+              <div style={S.composerExpandRow}>
+                <button
+                  type="button"
+                  style={S.composerExpandBtn}
+                  aria-label={composerExpanded
+                    ? 'Collapse message editor'
+                    : 'Expand message editor'}
+                  aria-expanded={composerExpanded}
+                  onClick={() => setComposerExpanded((expanded) => !expanded)}
+                >
+                  {composerExpanded ? 'Collapse editor' : 'Expand editor'}
+                </button>
+              </div>
+            )}
+            <textarea
+              ref={composerTextAreaRef}
+              style={S.textarea}
+              rows={2}
+              placeholder={
+                voiceState === 'idle'
+                  ? 'Ask the tutor… (paste an image to attach)'
+                  : 'Listening to your voice…'
+              }
+              value={input}
+              disabled={voiceState !== 'idle'}
+              onChange={(e) => setInput(e.target.value)}
+              onPaste={onPaste}
+              onKeyDown={onKeyDown}
+            />
+          </div>
           <button
             type="button"
-            aria-label={
-              voiceActive ? 'Stop voice recording' : 'Start voice recording'
-            }
-            title={
-              voiceActive ? 'Stop and send voice message' : 'Talk to Coco'
-            }
+            aria-label={voiceButtonLabel}
+            title={voiceButtonTitle}
             style={{
               ...S.micBtn,
               ...(voiceActive ? S.micBtnActive : {}),
-              ...(sending || startingNewSession || reviewing || voiceState === 'requesting'
-                ? S.sendBtnDisabled
-                : {}),
+              ...(voiceButtonDisabled ? S.sendBtnDisabled : {}),
             }}
-            disabled={
-              sending ||
-              startingNewSession ||
-              Boolean(reviewing) ||
-              voiceState === 'requesting'
-            }
+            disabled={voiceButtonDisabled}
             onClick={() => handleVoiceClick()}
           >
             {voiceActive ? (

@@ -554,6 +554,15 @@ function PetView() {
     if (bubblePinnedRef.current) return; // pinned suggestion — stays until ×
     if (bubbleHoverRef.current) return; // paused — re-armed on mouse leave
     hideTimer.current = setTimeout(() => {
+      const current = bubbleRef.current;
+      if (current?.showHelpButton) {
+        window.electron?.ipcRenderer.sendMessage('training-feedback', {
+          kind: 'auto_hidden',
+          surface: 'bubble',
+          observation_id: current.observationId ?? null,
+          status: current.status,
+        });
+      }
       setBubble((b) => (b ? { ...b, fadingOut: true } : null));
       fadeTimer.current = setTimeout(() => {
         setBubble(null);
@@ -975,6 +984,14 @@ function PetView() {
 
     if (res?.status === 'ready' && res.suggestion) {
       recordEngagement(res.suggestion, 'inline');
+      window.electron?.ipcRenderer.sendMessage('training-feedback', {
+        kind: 'revealed',
+        surface: 'bubble',
+        observation_id: current.observationId ?? null,
+        status: current.status,
+        stage: 'revealed',
+        destination: 'inline',
+      });
       // Pin the bubble: once the suggestion is revealed it stays until the user
       // closes it with ×. Cancel any pending auto-hide from the Tier-2 phase.
       bubblePinnedRef.current = true;

@@ -12,11 +12,15 @@ import customModeIcon from '../../../assets/custom.png';
 const IS_MAC =
   typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 const HOTKEY_LABEL = IS_MAC ? 'Cmd + Shift + Space' : 'Ctrl + Shift + Space';
+const ROUTER_MANAGED =
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('routerManaged') === '1';
 
 const MODEL_PROVIDERS = [
   ['gemini', 'Google Gemini'],
   ['openai', 'OpenAI'],
   ['anthropic', 'Anthropic'],
+  ['nv_inference', 'NVIDIA InferenceHub'],
   ['tinker', 'Tinker'],
   ['tinfoil', 'Tinfoil (confidential)'],
   ['hosted_vllm', 'OpenAI-compatible endpoint'],
@@ -29,6 +33,7 @@ interface ModelDraft {
   label: string;
   provider: string;
   model: string;
+  supportsAudio: boolean;
   apiKey: string;
   baseUrl: string;
 }
@@ -59,6 +64,10 @@ function ModelFields({
   if (value.provider === 'hosted_vllm') {
     modelPlaceholder = 'Exact model ID returned by /v1/models';
   }
+  let endpointPlaceholder = 'OpenAI-compatible base URL, ending in /v1';
+  if (value.provider === 'lm_studio') {
+    endpointPlaceholder = 'Host (default localhost:1234)';
+  }
   return (
     <div className="ob-model-card">
       <div className="ob-model-card-title">
@@ -68,6 +77,11 @@ function ModelFields({
         <div className="ob-model-warning">
           This model receives screenshots. Choose a vision-capable model and a
           provider you trust.
+        </div>
+      )}
+      {ROUTER_MANAGED && value.provider !== 'lm_studio' && (
+        <div className="ob-model-warning">
+          Model access is provided by the Coco study. No API key is required.
         </div>
       )}
       {!sensing && (
@@ -93,15 +107,16 @@ function ModelFields({
         placeholder={modelPlaceholder}
         onChange={(event) => update('model', event.target.value)}
       />
-      {ENDPOINT_PROVIDERS.has(value.provider) && (
+      {ENDPOINT_PROVIDERS.has(value.provider) &&
+        (!ROUTER_MANAGED || value.provider === 'lm_studio') && (
         <input
           className="ob-custom-input"
           value={value.baseUrl}
-          placeholder={value.provider === 'lm_studio' ? 'Host (default localhost:1234)' : 'OpenAI-compatible base URL, ending in /v1'}
+          placeholder={endpointPlaceholder}
           onChange={(event) => update('baseUrl', event.target.value)}
         />
       )}
-      {value.provider !== 'lm_studio' && (
+      {!ROUTER_MANAGED && value.provider !== 'lm_studio' && (
         <input
           className="ob-custom-input"
           type="password"
@@ -110,6 +125,25 @@ function ModelFields({
           autoComplete="off"
           onChange={(event) => update('apiKey', event.target.value)}
         />
+      )}
+      {!sensing && (
+        <label
+          className="ob-model-capability"
+          htmlFor={`tutor-audio-support-${value.id}`}
+        >
+          <input
+            id={`tutor-audio-support-${value.id}`}
+            type="checkbox"
+            checked={value.supportsAudio}
+            onChange={(event) =>
+              onChange({
+                ...value,
+                supportsAudio: event.target.checked,
+              })
+            }
+          />{' '}
+          This tutor model supports audio input
+        </label>
       )}
       <div className="ob-connection-test-row">
         <button
@@ -161,7 +195,15 @@ function StepModels({
     const id = `tutor-${Date.now()}`;
     setTutors([
       ...tutors,
-      { id, label: '', provider: 'anthropic', model: '', apiKey: '', baseUrl: '' },
+      {
+        id,
+        label: '',
+        provider: 'anthropic',
+        model: '',
+        supportsAudio: false,
+        apiKey: '',
+        baseUrl: '',
+      },
     ]);
   };
   return (
@@ -936,10 +978,24 @@ export default function OnboardingView() {
   const [modelError, setModelError] = useState('');
   const [savingModels, setSavingModels] = useState(false);
   const [sensingModel, setSensingModel] = useState<ModelDraft>({
-    id: 'sensing', label: 'Sensing', provider: 'gemini', model: '', apiKey: '', baseUrl: '',
+    id: 'sensing',
+    label: 'Sensing',
+    provider: 'gemini',
+    model: '',
+    supportsAudio: false,
+    apiKey: '',
+    baseUrl: '',
   });
   const [tutorModels, setTutorModels] = useState<ModelDraft[]>([
-    { id: 'tutor-1', label: 'Primary tutor', provider: 'anthropic', model: '', apiKey: '', baseUrl: '' },
+    {
+      id: 'tutor-1',
+      label: 'Primary tutor',
+      provider: 'anthropic',
+      model: '',
+      supportsAudio: false,
+      apiKey: '',
+      baseUrl: '',
+    },
   ]);
   const [defaultTutorId, setDefaultTutorId] = useState('tutor-1');
   const [connectionTests, setConnectionTests] = useState<
@@ -1001,6 +1057,7 @@ export default function OnboardingView() {
         setSensingModel({
           ...config.sensing,
           model: String(config.sensing.model).replace(/^(?:hosted_vllm|tinker)\//, ''),
+          supportsAudio: false,
           apiKey: '',
           baseUrl: config.sensing.baseUrl ?? '',
         });
@@ -1008,6 +1065,7 @@ export default function OnboardingView() {
           config.tutors.map((item: any) => ({
             ...item,
             model: String(item.model).replace(/^(?:hosted_vllm|tinker)\//, ''),
+            supportsAudio: item.supportsAudio === true,
             apiKey: '',
             baseUrl: item.baseUrl ?? '',
           })),

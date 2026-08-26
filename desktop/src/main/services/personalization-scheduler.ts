@@ -103,6 +103,10 @@ export interface PersonalizationSchedulerOptions {
   /** Dedicated subprocess log, alongside the sensing and tutor service logs. */
   logPath?: string;
   onJobComplete?: (job: PersonalizationJob) => void;
+  onJobFinished?: (
+    job: PersonalizationJob,
+    outcome: PersonalizationRunOutcome,
+  ) => void;
 }
 
 /** Owns one low-priority, disposable personalization subprocess at a time. */
@@ -425,9 +429,17 @@ export class PersonalizationScheduler {
       this.writeDedicatedLog(
         `${job} exited code=${String(code)} signal=${String(signal)}`,
       );
-      if (code === 0) this.options.onJobComplete?.(job);
+      this.notifyJobFinished(job, outcome);
       if (!this.stopped) setTimeout(() => this.tick(), 1_000);
     });
+  }
+
+  private notifyJobFinished(
+    job: PersonalizationJob,
+    outcome: PersonalizationRunOutcome,
+  ) {
+    this.options.onJobFinished?.(job, outcome);
+    if (outcome === 'completed') this.options.onJobComplete?.(job);
   }
 
   private preempt(reason: string) {

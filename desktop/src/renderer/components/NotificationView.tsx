@@ -458,6 +458,11 @@ export default function NotificationView() {
 
   const handleAction = async () => {
     if (payload.notifType === 'session-start-prompt') {
+      ipc?.sendMessage('training-feedback', {
+        kind: 'engage',
+        surface: 'session_prompt',
+        status: 'session_start',
+      });
       // Ask main to show the mini session-setup window.
       ipc?.sendMessage('show-session-setup');
       setVisible(false);
@@ -465,6 +470,11 @@ export default function NotificationView() {
       return;
     }
     if (payload.notifType === 'session-end-prompt') {
+      ipc?.sendMessage('training-feedback', {
+        kind: 'engage',
+        surface: 'session_prompt',
+        status: 'session_end',
+      });
       // Ask main to show the rating window.
       ipc?.sendMessage('proactive-session-end-confirmed');
       setVisible(false);
@@ -510,6 +520,14 @@ export default function NotificationView() {
           status: payload.status,
           text: payload.rawObservation ?? null,
         });
+        ipc?.sendMessage('training-feedback', {
+          kind: 'revealed',
+          surface: 'notification',
+          observation_id: payload.observationId ?? null,
+          status: payload.status,
+          stage: 'revealed',
+          destination: 'inline',
+        });
         ipc?.sendMessage('notification-revealed-state', { revealed: true });
         return;
       }
@@ -525,6 +543,9 @@ export default function NotificationView() {
     if (payload.notifType === 'instant-suggestion') {
       ipc?.sendMessage('suggestion-action', {
         copyText: payload.suggestion?.copyText,
+        observationId: payload.observationId,
+        status: payload.status,
+        surface: 'notification',
       });
       rateInstantSuggestion('up');
       setCopyConfirmed(true);
@@ -537,6 +558,19 @@ export default function NotificationView() {
   };
 
   const handleCancel = () => {
+    if (
+      payload.notifType === 'session-start-prompt' ||
+      payload.notifType === 'session-end-prompt'
+    ) {
+      ipc?.sendMessage('training-feedback', {
+        kind: 'dismiss',
+        surface: 'session_prompt',
+        status:
+          payload.notifType === 'session-start-prompt'
+            ? 'session_start'
+            : 'session_end',
+      });
+    }
     setVisible(false);
     window.close();
   };
@@ -559,6 +593,19 @@ export default function NotificationView() {
 
   const handleDismiss = () => {
     recordUnengagedDismissal();
+    if (
+      payload.notifType === 'session-start-prompt' ||
+      payload.notifType === 'session-end-prompt'
+    ) {
+      ipc?.sendMessage('training-feedback', {
+        kind: 'dismiss',
+        surface: 'session_prompt',
+        status:
+          payload.notifType === 'session-start-prompt'
+            ? 'session_start'
+            : 'session_end',
+      });
+    }
     setVisible(false);
     window.close();
   };
@@ -579,6 +626,9 @@ export default function NotificationView() {
     ipc?.sendMessage('suggestion-action', {
       toolId,
       copyText: payload.suggestion?.copyText,
+      observationId: payload.observationId,
+      status: payload.status,
+      surface: 'notification',
     });
     if (toolId === null) {
       rateInstantSuggestion('up');

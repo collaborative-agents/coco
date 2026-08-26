@@ -9,6 +9,131 @@ import {
 import SessionChatView from '../renderer/components/SessionChatView';
 
 describe('deferred suggestion context', () => {
+  it('disables voice input for text-only tutors without disabling wake-word detection', async () => {
+    const listeners = new Map<string, (data: any) => void>();
+    const sendMessage = jest.fn();
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-model-configuration') {
+        return {
+          sensing: {
+            id: 'sensing',
+            label: 'Sensing',
+            provider: 'gemini',
+            model: 'gemini/vision',
+          },
+          tutors: [
+            {
+              id: 'text-only',
+              label: 'Text only',
+              provider: 'anthropic',
+              model: 'anthropic/claude-sonnet',
+              supportsAudio: false,
+            },
+            {
+              id: 'voice',
+              label: 'Voice tutor',
+              provider: 'openai',
+              model: 'openai/gpt-audio',
+              supportsAudio: true,
+            },
+          ],
+          defaultTutorId: 'text-only',
+        };
+      }
+      if (channel === 'set-chat-model') {
+        return { success: true, modelId: 'voice' };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: any) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage,
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+
+    const disabledMic = await screen.findByRole('button', {
+      name: /Voice input unavailable/,
+    });
+    expect(disabledMic).toBeDisabled();
+
+    await act(async () => {
+      listeners.get('wake-word-detected')?.({ id: 17 });
+    });
+    expect(sendMessage).toHaveBeenCalledWith('wake-word-detection-ack', {
+      id: 17,
+    });
+    expect(invoke).toHaveBeenCalledWith('set-wake-word-capture-paused', {
+      paused: false,
+    });
+    expect(invoke).not.toHaveBeenCalledWith(
+      'send-audio-message',
+      expect.anything(),
+    );
+    expect(
+      await screen.findByText(
+        /Coco is awake, but the selected tutor does not support audio input/,
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Tutor model' }), {
+      target: { value: 'voice' },
+    });
+    expect(
+      await screen.findByRole('button', { name: 'Start voice recording' }),
+    ).toBeEnabled();
+  });
+
+  it('auto-grows long prompts and lets the user expand the message editor', async () => {
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async () => null),
+      },
+    };
+
+    render(<SessionChatView />);
+    const editor = screen.getByPlaceholderText(/Ask the tutor/);
+    let simulatedScrollHeight = 190;
+    Object.defineProperty(editor, 'scrollHeight', {
+      configurable: true,
+      get: () => simulatedScrollHeight,
+    });
+
+    fireEvent.change(editor, {
+      target: { value: 'A long prompt\n'.repeat(20) },
+    });
+
+    const expand = await screen.findByRole('button', {
+      name: 'Expand message editor',
+    });
+    expect(editor).toHaveStyle({ height: '120px', overflowY: 'auto' });
+
+    fireEvent.click(expand);
+    await waitFor(() => {
+      expect(editor).toHaveStyle({ height: '190px', overflowY: 'hidden' });
+    });
+    expect(
+      screen.getByRole('button', { name: 'Collapse message editor' }),
+    ).toHaveAttribute('aria-expanded', 'true');
+
+    simulatedScrollHeight = 60;
+    fireEvent.change(editor, { target: { value: 'Short prompt' } });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Collapse message editor' }),
+      ).not.toBeInTheDocument();
+    });
+    expect(editor).toHaveStyle({ height: '60px', overflowY: 'hidden' });
+  });
+
   it('shows editable model settings when no saved configuration is available', async () => {
     (window as any).electron = {
       ipcRenderer: {
@@ -29,6 +154,9 @@ describe('deferred suggestion context', () => {
       screen.getByPlaceholderText('Vision-capable sensing model'),
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Tutor model ID')).toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', { name: 'Supports audio input' }),
+    ).not.toBeChecked();
     expect(
       screen.getByText(/Configure multiple models, choose a default/),
     ).toBeInTheDocument();

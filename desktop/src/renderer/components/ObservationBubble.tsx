@@ -128,6 +128,9 @@ export default function ObservationBubble({
     window.electron?.ipcRenderer.sendMessage('suggestion-action', {
       toolId: toolId ?? null,
       copyText: suggestion.copyText ?? '',
+      observationId: bubble.observationId,
+      status,
+      surface: 'bubble',
     });
     showToast(
       toolId ? `Opening ${toolLabel} — paste with ⌘V` : 'Copied to clipboard',

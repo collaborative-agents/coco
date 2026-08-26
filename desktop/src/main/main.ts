@@ -50,6 +50,13 @@ import { PersonalizationScheduler } from './services/personalization-scheduler';
 import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { DailyMemoryDraftService } from './services/daily-memory-drafts';
 import { HiddenAvatarVisibility } from './services/hidden-avatar-visibility';
+import { CocoGatewayClient } from './services/gateway-client';
+import GatewayOutbox from './services/gateway-outbox';
+import {
+  clearAuthSession,
+  readAuthSession,
+  saveAuthSession,
+} from './auth-session-store';
 import {
   WakeWordService,
   type WakeWordStatusEvent,
@@ -65,6 +72,7 @@ import {
 import { readConversations, saveConversation } from './conversation-store';
 import {
   defaultTutor,
+  ensureManagedDefaultModelConfiguration,
   getModelConfigurationView,
   prepareModelConnectionTest,
   readModelConfiguration,
@@ -87,6 +95,15 @@ import type {
 } from '../renderer/components/observation-types';
 
 const dotenv = require('dotenv');
+
+type EmbeddedStudyConfig = { gatewayUrl?: string; routerUrl?: string };
+// eslint-disable-next-line no-underscore-dangle
+declare const __COCO_BUILD_STUDY_CONFIG__: EmbeddedStudyConfig | undefined;
+
+const embeddedStudyConfig: EmbeddedStudyConfig =
+  typeof __COCO_BUILD_STUDY_CONFIG__ === 'undefined'
+    ? {}
+    : __COCO_BUILD_STUDY_CONFIG__;
 
 app.setName('coco');
 
@@ -111,6 +128,12 @@ if (app.isPackaged) {
   // Support/coco/.env). Bundling it via extraResources would ship the
   // builder's API keys inside every distributed app bundle.
   dotenv.config({ path: path.join(app.getPath('userData'), '.env') });
+  if (!process.env.COCO_GATEWAY_URL && embeddedStudyConfig.gatewayUrl) {
+    process.env.COCO_GATEWAY_URL = embeddedStudyConfig.gatewayUrl;
+  }
+  if (!process.env.LLM_ROUTER_URL && embeddedStudyConfig.routerUrl) {
+    process.env.LLM_ROUTER_URL = embeddedStudyConfig.routerUrl;
+  }
   // This experimental packaged build retains personalization screenshots by
   // default. An explicit value in the user's .env (especially `0`) wins.
   if (!(process.env.COLLECT_TRAINING_SCREENSHOTS ?? '').trim()) {
@@ -244,6 +267,7 @@ let revealedSuggestionOpen = false;
 let proactiveNotificationOpen = false;
 let latestHiddenSuggestionObservationId: string | undefined;
 let onboardingWindow: BrowserWindow | null = null;
+let authWindow: BrowserWindow | null = null;
 let sessionSetupWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let hideAvatarMode = false;
@@ -254,6 +278,7 @@ const observationSleepGuard = new ObservationSleepGuard();
 let personalizationScheduler: PersonalizationScheduler | null = null;
 let eveningPersonalizationScheduler: EveningPersonalizationScheduler | null =
   null;
+let wakeAfterEveningPersonalization = false;
 let dailyMemoryDraftService: DailyMemoryDraftService | null = null;
 let previewCocoSleepMode = false;
 
@@ -278,7 +303,8 @@ const initializeDailyMemoryDraftService = () => {
 };
 
 let wakeWordService: WakeWordService | null = null;
-let wakeWordEnabled = false;
+const DEFAULT_WAKE_WORD_ENABLED = true;
+let wakeWordEnabled = DEFAULT_WAKE_WORD_ENABLED;
 let wakeWordStatus: WakeWordStatusEvent = { status: 'disabled' };
 let systemSuspended = false;
 let wakeWordCapturePaused = false;
@@ -302,15 +328,20 @@ const wakeWordSettingsPath = () =>
 const readWakeWordEnabled = (): boolean => {
   const settingsPath = wakeWordSettingsPath();
   try {
-    const enabled = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
-      ?.enabled === true;
+    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as {
+      enabled?: unknown;
+    };
+    if (typeof saved?.enabled !== 'boolean') {
+      throw new Error('saved enabled value is missing or invalid');
+    }
+    const { enabled } = saved;
     log.info(`[Wake word] Loaded enabled=${enabled} from ${settingsPath}`);
     return enabled;
   } catch (error) {
     log.info(
-      `[Wake word] No saved setting at ${settingsPath}; defaulting disabled (${(error as Error).message})`,
+      `[Wake word] No saved setting at ${settingsPath}; defaulting enabled (${(error as Error).message})`,
     );
-    return false;
+    return DEFAULT_WAKE_WORD_ENABLED;
   }
 };
 
@@ -383,7 +414,11 @@ const isOnboardingComplete = (): boolean => {
   try {
     const raw = fs.readFileSync(profilePath(), 'utf-8');
     const profile = JSON.parse(raw);
-    return profile?.onboardingComplete === true;
+    return (
+      profile?.onboardingComplete === true &&
+      (!gatewayClient ||
+        (Boolean(currentUserId) && profile?.participantId === currentUserId))
+    );
   } catch {
     return false;
   }
@@ -400,11 +435,127 @@ const readHideAvatarSetting = (): boolean => {
 
 // ── Proactive session state ───────────────────────────────────────────────────
 let isSessionActive = false;
-let currentUserId: string | null = null;
+const appRunId = randomUUID();
+let currentUserId = process.env.COCO_GATEWAY_USER_ID?.trim() || null;
+let isAuthenticated = false;
+let pendingAuthLaunch: 'signin' | 'signup' | null = null;
+let gatewayClient: CocoGatewayClient | null = null;
+let gatewayOutbox: GatewayOutbox | null = null;
+let telemetryFlushTimer: ReturnType<typeof setInterval> | null = null;
+const endedGatewaySessions = new Set<string>();
+const gatewayExposureIds = new Map<string, string>();
 let currentSessionId: string | null = null;
 let pendingTaskLabel: string | null = null;
 let currentTutorModelId: string | null = null;
 // Invite timing is owned by the sensing-side judge; no renderer-side cooldown.
+
+const queueGatewayOperation = (
+  type: 'session_start' | 'session_end' | 'message' | 'interaction_batch',
+  payload: Record<string, unknown>,
+) => {
+  if (!gatewayOutbox) return;
+  gatewayOutbox.enqueue(type, payload);
+};
+
+const gatewayInteractionKinds = new Set([
+  'shown',
+  'revealed',
+  'engage',
+  'dismiss',
+  'auto_hidden',
+  'need_help',
+  'thumbs_up',
+  'thumbs_down',
+  'copy',
+  'open_tool',
+  'chat_about',
+]);
+const gatewayInteractionSurfaces = new Set([
+  'bubble',
+  'notification',
+  'history',
+  'chat',
+  'session_prompt',
+]);
+
+/** Store only the explicit interaction metadata accepted by the study API. */
+const queueGatewayInteraction = (payload: unknown): void => {
+  if (!gatewayOutbox || !payload || typeof payload !== 'object') return;
+  const source = payload as Record<string, unknown>;
+  const kind = typeof source.kind === 'string' ? source.kind : '';
+  const surface = typeof source.surface === 'string' ? source.surface : '';
+  if (
+    !gatewayInteractionKinds.has(kind) ||
+    !gatewayInteractionSurfaces.has(surface)
+  ) {
+    return;
+  }
+  const stringField = (name: string): string | undefined =>
+    typeof source[name] === 'string' && source[name]
+      ? (source[name] as string)
+      : undefined;
+  const numberField = (name: string): number | undefined =>
+    typeof source[name] === 'number' &&
+    Number.isFinite(source[name]) &&
+    (source[name] as number) >= 0
+      ? (source[name] as number)
+      : undefined;
+  const observationId = stringField('observation_id');
+  const messageId = stringField('message_id');
+  const status = stringField('status');
+  const sessionId = stringField('session_id') || currentSessionId || undefined;
+  const exposureSubject = observationId || messageId || status;
+  const exposureKey = exposureSubject
+    ? `${surface}:${exposureSubject}`
+    : undefined;
+  if (kind === 'shown' && exposureKey) {
+    gatewayExposureIds.set(exposureKey, randomUUID());
+  }
+  const exposureId = exposureKey
+    ? gatewayExposureIds.get(exposureKey) ||
+      `${appRunId}:${surface}:${exposureSubject}`
+    : undefined;
+  const previousKind = stringField('previous_kind');
+  const event = {
+    _id: randomUUID(),
+    occurred_at: new Date().toISOString(),
+    kind,
+    surface,
+    app_run_id: appRunId,
+    ...(sessionId ? { session_id: sessionId } : {}),
+    ...(exposureId ? { exposure_id: exposureId } : {}),
+    ...(observationId ? { observation_id: observationId } : {}),
+    ...(messageId ? { message_id: messageId } : {}),
+    ...(stringField('suggestion_id')
+      ? { suggestion_id: stringField('suggestion_id') }
+      : {}),
+    ...(status ? { status } : {}),
+    ...(source.stage === 'offer' || source.stage === 'revealed'
+      ? { stage: source.stage }
+      : {}),
+    ...(source.destination === 'inline' || source.destination === 'conversation'
+      ? { destination: source.destination }
+      : {}),
+    ...(previousKind === 'thumbs_up' || previousKind === 'thumbs_down'
+      ? { previous_kind: previousKind }
+      : {}),
+    ...(numberField('latency_s') !== undefined
+      ? { latency_s: numberField('latency_s') }
+      : {}),
+    ...(stringField('tool_id') ? { tool_id: stringField('tool_id') } : {}),
+  };
+  // Deliberately do not forward `text` or raw observations. The Gateway's
+  // interaction collection contains behavioral metadata, not sensed content.
+  queueGatewayOperation('interaction_batch', { events: [event] });
+};
+
+const queueGatewayMessage = (payload: Record<string, unknown>): void => {
+  if (!currentSessionId) return;
+  queueGatewayOperation('message', {
+    ...payload,
+    sid: currentSessionId,
+  });
+};
 
 const requestedPort = (value: string | undefined, fallback: number): number => {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -490,6 +641,43 @@ const preloadPath = () =>
     ? path.join(__dirname, 'preload.js')
     : path.join(__dirname, '../../.erb/dll/preload.js');
 
+// Authentication is completed before onboarding or any sensing/model service
+// starts, so every remotely stored record belongs to a verified participant.
+const createAuthWindow = () => {
+  if (authWindow && !authWindow.isDestroyed()) {
+    authWindow.show();
+    authWindow.focus();
+    return;
+  }
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
+  const width = 476;
+  const height = 650;
+  authWindow = new BrowserWindow({
+    show: false,
+    x: Math.round((sw - width) / 2),
+    y: Math.round((sh - height) / 2),
+    width,
+    height,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: process.platform !== 'darwin',
+    webPreferences: { preload: preloadPath() },
+  });
+  authWindow.loadURL(`${resolveHtmlPath('index.html')}?view=auth`);
+  authWindow.on('ready-to-show', () => authWindow?.show());
+  authWindow.on('closed', () => {
+    authWindow = null;
+  });
+  authWindow.on('close', (event) => {
+    if (isQuitting || isAuthenticated) return;
+    event.preventDefault();
+    authWindow?.hide();
+    createTray();
+  });
+};
+
 function syncHiddenAvatarWindowVisibility(): void {
   if (
     !hideAvatarMode ||
@@ -533,7 +721,7 @@ const createOnboardingWindow = (modelsOnly = false) => {
 
   const url = `${resolveHtmlPath('index.html')}?view=onboarding${
     modelsOnly ? '&modelsOnly=1' : ''
-  }`;
+  }${process.env.LLM_ROUTER_API_KEY ? '&routerManaged=1' : ''}`;
   onboardingWindow.loadURL(url);
 
   onboardingWindow.on('ready-to-show', () => {
@@ -1040,7 +1228,7 @@ async function openCoco(): Promise<void> {
     return;
   }
   const problemStatement = pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, 120);
+  await createProactiveTutorSession(problemStatement, 120, undefined, 'manual');
 }
 
 function setupPending(): boolean {
@@ -1591,9 +1779,15 @@ async function testModelConnection(
         'GEMINI_API_KEY',
         'GOOGLE_API_KEY',
         'OPENAI_API_KEY',
+        'NV_INFERENCE_API_KEY',
+        'NV_INFERENCE_BASE_URL',
+        'TINKER_API_KEY',
+        'TINKER_BASE_URL',
         'TINFOIL_API_KEY',
         'HOSTED_VLLM_API_KEY',
         'HOSTED_VLLM_API_BASE',
+        'LLM_ROUTER_URL',
+        'LLM_ROUTER_API_KEY',
         'LM_STUDIO_HOST',
         'OA_TICKET_FILE',
         'OA_DESTINATION',
@@ -1860,7 +2054,15 @@ ipcMain.handle(
 // webapp).
 ipcMain.handle('save-profile', (_event, profile: object) => {
   try {
-    fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
+    fs.writeFileSync(
+      profilePath(),
+      JSON.stringify(
+        { ...profile, ...(currentUserId ? { participantId: currentUserId } : {}) },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
     log.info('[Settings] Profile saved:', profilePath());
     return { success: true };
   } catch (err) {
@@ -1872,7 +2074,15 @@ ipcMain.handle('save-profile', (_event, profile: object) => {
 ipcMain.on('onboarding-complete', (_event, profile: object) => {
   // Write the profile so isOnboardingComplete() returns true on next launch.
   try {
-    fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
+    fs.writeFileSync(
+      profilePath(),
+      JSON.stringify(
+        { ...profile, ...(currentUserId ? { participantId: currentUserId } : {}) },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
     log.info('[Onboarding] Profile saved:', profilePath());
   } catch (err) {
     log.error('[Onboarding] Failed to save profile:', err);
@@ -1946,6 +2156,7 @@ ipcMain.on(
       problemStatement,
       120,
       payload,
+      'proactive_suggestion',
     );
   if (!sessionId) {
       log.warn(
@@ -1982,6 +2193,13 @@ ipcMain.on(
         destination: 'conversation',
       });
     }
+    queueGatewayInteraction({
+      kind: 'engage',
+      surface: 'notification',
+      observation_id: observationId,
+      status,
+      destination: 'conversation',
+    });
     const sensingPort = process.env.SENSING_PORT || '8080';
     axios
       .post(
@@ -2007,6 +2225,7 @@ ipcMain.on(
         rawObservation || 'General help session',
         120,
         seed,
+        'proactive_suggestion',
       );
     }
   },
@@ -2016,6 +2235,7 @@ ipcMain.on(
 // server's /feedback endpoint, which logs it into the shared training data.
 ipcMain.removeAllListeners('training-feedback');
 ipcMain.on('training-feedback', async (_event, payload) => {
+  queueGatewayInteraction(payload);
   try {
     const sensingPort = process.env.SENSING_PORT || '8080';
     await axios.post(
@@ -2037,21 +2257,30 @@ ipcMain.handle('get-coco-sleep-mode', () => ({
   sleeping: isCocoSleeping(),
 }));
 
-async function setCocoSleepMode(sleeping: boolean) {
+async function setCocoSleepMode(
+  sleeping: boolean,
+  { wakeAfterPersonalization = false } = {},
+) {
   if (!personalizationScheduler && !isDailyMemoryPreviewOnly()) {
     return { success: false, error: 'Personalization is not ready.' };
   }
-  if (sleeping && personalizationScheduler) {
-    // Make sleep authoritative before stopping services so a concurrent
-    // health request cannot misclassify their intentional shutdown.
-    personalizationScheduler.setSleepMode(true);
-    // Sleep pauses observation but deliberately keeps the tutor alive. This
-    // lets the user continue chatting while Coco-PE uses the quiet period.
-    await serviceManager.stopService('sensing-server');
-    serviceManager.startService('tutor-server');
-  } else if (personalizationScheduler) {
-    personalizationScheduler.setSleepMode(false);
-    serviceManager.startAll();
+  wakeAfterEveningPersonalization = wakeAfterPersonalization;
+  try {
+    if (sleeping && personalizationScheduler) {
+      // Make sleep authoritative before stopping services so a concurrent
+      // health request cannot misclassify their intentional shutdown.
+      personalizationScheduler.setSleepMode(true);
+      // Sleep pauses observation but deliberately keeps the tutor alive. This
+      // lets the user continue chatting while Coco-PE uses the quiet period.
+      await serviceManager.stopService('sensing-server');
+      serviceManager.startService('tutor-server');
+    } else if (personalizationScheduler) {
+      personalizationScheduler.setSleepMode(false);
+      serviceManager.startAll();
+    }
+  } catch (error) {
+    if (wakeAfterPersonalization) wakeAfterEveningPersonalization = false;
+    throw error;
   }
   previewCocoSleepMode = sleeping;
   syncWakeWordService();
@@ -2103,14 +2332,16 @@ async function runEveningPersonalizationTransition(): Promise<boolean> {
     personalizationScheduler.endInteractiveInference();
   }
 
-  const result = await setCocoSleepMode(true);
+  const result = await setCocoSleepMode(true, {
+    wakeAfterPersonalization: true,
+  });
   if (!result.success) return false;
 
   const message = [
     review ||
       "I don't have enough activity in memory to summarize today, but it's still a good time to pause.",
     '**Take a break when you can.** Coco is now asleep and running today’s personalization update.',
-    'You can still chat with Coco. If you want Coco to observe your screen again, wake Coco up.',
+    'Coco will wake automatically when the update finishes. You can still chat while it runs.',
   ].join('\n\n');
   const payload: NotificationPayload = {
     message,
@@ -2715,10 +2946,41 @@ ipcMain.on(
   'suggestion-action',
   (
     _event,
-    { toolId, copyText }: { toolId?: string | null; copyText?: string },
+    {
+      toolId,
+      copyText,
+      observationId,
+      status,
+      surface = 'bubble',
+    }: {
+      toolId?: string | null;
+      copyText?: string;
+      observationId?: string;
+      status?: string;
+      surface?: 'bubble' | 'notification';
+    },
   ) => {
-    if (copyText) clipboard.writeText(copyText);
-    if (toolId) openAiTool(toolId);
+    if (copyText) {
+      clipboard.writeText(copyText);
+      queueGatewayInteraction({
+        kind: 'copy',
+        surface,
+        observation_id: observationId,
+        status,
+        stage: 'revealed',
+      });
+    }
+    if (toolId) {
+      openAiTool(toolId);
+      queueGatewayInteraction({
+        kind: 'open_tool',
+        surface,
+        observation_id: observationId,
+        status,
+        stage: 'revealed',
+        tool_id: toolId,
+      });
+    }
   },
 );
 
@@ -2774,6 +3036,13 @@ ipcMain.on(
         destination: 'conversation',
       });
     }
+    queueGatewayInteraction({
+      kind: 'engage',
+      surface: payload.surface ?? 'bubble',
+      observation_id: payload.observationId,
+      status: payload.status ?? 'observing',
+      destination: 'conversation',
+    });
     const sensingPort = process.env.SENSING_PORT || '8080';
     axios
       .post(
@@ -2795,7 +3064,12 @@ ipcMain.on(
     if (isSessionActive && currentSessionId) {
       openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
     } else {
-      await createProactiveTutorSession(suggestion.title, 120, seed);
+      await createProactiveTutorSession(
+        suggestion.title,
+        120,
+        seed,
+        'proactive_suggestion',
+      );
     }
   },
 );
@@ -2809,7 +3083,11 @@ async function createProactiveTutorSession(
   problemStatement: string,
   struggleSeconds: number,
   seed?: ChatSeed,
+  startTrigger: 'proactive_suggestion' | 'user_message' | 'manual' = 'manual',
 ): Promise<string | null> {
+  if (currentSessionId && !endedGatewaySessions.has(currentSessionId)) {
+    endCurrentSession('user_ended');
+  }
   // Read the user's onboarding profile to get their selected AI tools and mode.
   const { aiTools, scenario, customObserverPrompt, userName } = readProfile();
 
@@ -2828,6 +3106,24 @@ async function createProactiveTutorSession(
   isSessionActive = true;
   openChatForSession(sessionId, problemStatement, seed);
   log.info(`[ProactiveSession] Local tutor session started: ${sessionId}`);
+  queueGatewayOperation('session_start', {
+    _id: sessionId,
+    started_at: new Date().toISOString(),
+    start_trigger: startTrigger,
+    scenario,
+    ...(selectedTutor?.model ? { tutor_model: selectedTutor.model } : {}),
+    ...(modelConfig?.sensing.model
+      ? { observer_model: modelConfig.sensing.model }
+      : {}),
+    app_run_id: appRunId,
+    repository: 'coco',
+    ...(process.env.COCO_GIT_COMMIT_SHA
+      ? { git_commit_sha: process.env.COCO_GIT_COMMIT_SHA }
+      : {}),
+    ...(process.env.COCO_GIT_BRANCH
+      ? { git_branch: process.env.COCO_GIT_BRANCH }
+      : {}),
+  });
 
   // Configure the tutor conversation (the chat only needs the tutor server).
   try {
@@ -2910,7 +3206,12 @@ ipcMain.handle(
     const task =
       problemStatement?.trim() || pendingTaskLabel || 'General help session';
     try {
-      const sessionId = await createProactiveTutorSession(task, 120);
+      const sessionId = await createProactiveTutorSession(
+        task,
+        120,
+        undefined,
+        'manual',
+      );
       return { success: Boolean(sessionId), sessionId };
     } catch (err) {
       log.warn(
@@ -3027,7 +3328,12 @@ ipcMain.on(
   // the auto-detected pendingTaskLabel, then a generic default.
     const problemStatement =
       taskLabel?.trim() || pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, struggleSeconds);
+  await createProactiveTutorSession(
+    problemStatement,
+    struggleSeconds,
+    undefined,
+    'proactive_suggestion',
+  );
   },
 );
 
@@ -3042,7 +3348,18 @@ ipcMain.on('proactive-session-end-confirmed', () => {
 
 // Ends the active session: mark inactive, close the chat panel, and tell the
 // sensing server to revert to pre-session observation mode.
-function endCurrentSession() {
+function endCurrentSession(
+  completionReason: 'user_ended' | 'app_quit' | 'error' = 'user_ended',
+) {
+  const endingSessionId = currentSessionId;
+  if (endingSessionId && !endedGatewaySessions.has(endingSessionId)) {
+    endedGatewaySessions.add(endingSessionId);
+    queueGatewayOperation('session_end', {
+      session_id: endingSessionId,
+      ended_at: new Date().toISOString(),
+      completion_reason: completionReason,
+    });
+  }
   isSessionActive = false;
   currentSessionId = null;
   if (chatWindow && !chatWindow.isDestroyed()) {
@@ -3081,6 +3398,18 @@ ipcMain.handle(
     },
   ) => {
     const tutorPort = process.env.TUTOR_PORT || '8081';
+    const requestStartedAt = new Date();
+    const assistantMessageId = `assistant-${requestId}`;
+    let firstTokenAt: Date | null = null;
+    let streamedText = '';
+    queueGatewayMessage({
+      _id: `user-${requestId}`,
+      a: { type: 'user', id: currentUserId || 'participant' },
+      content: userText,
+      ts: requestStartedAt.toISOString(),
+      message_kind: 'user_response',
+      request_started_at: requestStartedAt.toISOString(),
+    });
     personalizationScheduler?.beginInteractiveInference();
 
     // Persist any pasted images to temp files for the tutor's vision call.
@@ -3133,11 +3462,45 @@ ipcMain.handle(
           image_paths: imagePaths.length ? imagePaths : null,
         },
         (streamEvent: TutorStreamEvent) => {
+          if (streamEvent.type === 'text_delta') {
+            if (!firstTokenAt) firstTokenAt = new Date();
+            if (typeof streamEvent.text === 'string') {
+              streamedText += streamEvent.text;
+            }
+          }
+          if (streamEvent.type === 'done') {
+            const completedAt = new Date();
+            const content =
+              typeof streamEvent.guidance === 'string'
+                ? streamEvent.guidance
+                : streamedText;
+            const metrics =
+              streamEvent.llm_metrics &&
+              typeof streamEvent.llm_metrics === 'object'
+                ? (streamEvent.llm_metrics as Record<string, unknown>)
+                : {};
+            queueGatewayMessage({
+              _id: assistantMessageId,
+              a: { type: 'AITutor', id: 'coco' },
+              content,
+              ts: completedAt.toISOString(),
+              request_started_at: requestStartedAt.toISOString(),
+              first_token_at: (firstTokenAt ?? completedAt).toISOString(),
+              response_completed_at: completedAt.toISOString(),
+              ...(typeof metrics.model === 'string'
+                ? { model: metrics.model }
+                : {}),
+              message_kind: 'user_response',
+            });
+          }
           ipcEvent.sender.send('chat-stream-event', {
             requestId,
             ...streamEvent,
             ...(streamEvent.type === 'done'
-              ? { observerMetrics: streamEvent.observer_metrics ?? null }
+              ? {
+                  messageId: assistantMessageId,
+                  observerMetrics: streamEvent.observer_metrics ?? null,
+                }
               : {}),
           });
         },
@@ -3281,7 +3644,29 @@ ipcMain.handle(
     if (!audioData || audioData.length > 16_000_000) {
       return { error: 'The voice recording is empty or too large.' };
     }
+    const modelConfig = readModelConfiguration();
+    const selectedTutor =
+      modelConfig?.tutors.find((item) => item.id === currentTutorModelId) ??
+      (modelConfig ? defaultTutor(modelConfig) : null);
+    if (!selectedTutor?.supportsAudio) {
+      return {
+        error:
+          'The selected tutor model does not support audio input. Choose an audio-capable tutor or type your message.',
+      };
+    }
     const tutorPort = process.env.TUTOR_PORT || '8081';
+    const requestStartedAt = new Date();
+    const assistantMessageId = `assistant-${requestId}`;
+    let firstTokenAt: Date | null = null;
+    let streamedText = '';
+    queueGatewayMessage({
+      _id: `user-${requestId}`,
+      a: { type: 'user', id: currentUserId || 'participant' },
+      content: '[Voice message]',
+      ts: requestStartedAt.toISOString(),
+      message_kind: 'voice_response',
+      request_started_at: requestStartedAt.toISOString(),
+    });
     personalizationScheduler?.beginInteractiveInference();
     try {
       await consumeTutorStream(
@@ -3292,9 +3677,43 @@ ipcMain.handle(
           session_id: currentSessionId,
         },
         (streamEvent: TutorStreamEvent) => {
+          if (streamEvent.type === 'text_delta') {
+            if (!firstTokenAt) firstTokenAt = new Date();
+            if (typeof streamEvent.text === 'string') {
+              streamedText += streamEvent.text;
+            }
+          }
+          if (streamEvent.type === 'done') {
+            const completedAt = new Date();
+            const content =
+              typeof streamEvent.guidance === 'string'
+                ? streamEvent.guidance
+                : streamedText;
+            const metrics =
+              streamEvent.llm_metrics &&
+              typeof streamEvent.llm_metrics === 'object'
+                ? (streamEvent.llm_metrics as Record<string, unknown>)
+                : {};
+            queueGatewayMessage({
+              _id: assistantMessageId,
+              a: { type: 'AITutor', id: 'coco' },
+              content,
+              ts: completedAt.toISOString(),
+              request_started_at: requestStartedAt.toISOString(),
+              first_token_at: (firstTokenAt ?? completedAt).toISOString(),
+              response_completed_at: completedAt.toISOString(),
+              ...(typeof metrics.model === 'string'
+                ? { model: metrics.model }
+                : {}),
+              message_kind: 'voice_response',
+            });
+          }
           ipcEvent.sender.send('chat-stream-event', {
             requestId,
             ...streamEvent,
+            ...(streamEvent.type === 'done'
+              ? { messageId: assistantMessageId }
+              : {}),
           });
         },
         undefined,
@@ -3686,19 +4105,123 @@ ipcMain.handle(
   },
 );
 
-// IPC Handler for setting the local user id (used only to key training data).
-// There is no auth backend in the local build; the id is a stable local uuid.
+// Legacy renderer hook. A verified participant identity cannot be replaced by
+// a renderer-provided local UUID after authentication.
 ipcMain.handle('set-user-id', async (event, userId) => {
   if (!userId || typeof userId !== 'string') {
     log.error('Invalid userId provided to set-user-id');
     return { success: false, error: 'Invalid userId' };
+  }
+  if (isAuthenticated && userId !== currentUserId) {
+    log.warn('[User] rejected an attempt to replace authenticated identity');
+    return {
+      success: false,
+      error: 'Authenticated participant ID cannot change.',
+    };
   }
   currentUserId = userId;
   log.info(`[User] local userId set to ${userId}`);
   return { success: true };
 });
 
+interface DesktopAuthCredentials {
+  participantId?: string;
+  password?: string;
+  keepSignedIn?: boolean;
+}
+
+const initializeGatewayParticipant = (participantId: string): void => {
+  currentUserId = participantId;
+  isAuthenticated = true;
+  if (!gatewayClient) return;
+  gatewayOutbox = new GatewayOutbox(
+    app.getPath('userData'),
+    participantId,
+    gatewayClient,
+    log,
+  );
+  void gatewayOutbox.flush();
+  if (telemetryFlushTimer) clearInterval(telemetryFlushTimer);
+  telemetryFlushTimer = setInterval(() => {
+    void gatewayOutbox?.flush();
+  }, 30_000);
+};
+
+const configureParticipantRouterCredential = async (): Promise<void> => {
+  if (!gatewayClient || !process.env.LLM_ROUTER_URL?.trim()) return;
+  const credential = await gatewayClient.issueRouterCredential();
+  process.env.LLM_ROUTER_API_KEY = credential.token;
+  ensureManagedDefaultModelConfiguration();
+  log.info('[Auth] participant-scoped LLM Router credential configured');
+};
+
+const authenticate = async (
+  mode: 'signin' | 'signup',
+  credentials: DesktopAuthCredentials,
+) => {
+  if (!gatewayClient) {
+    return { success: false, error: 'The Coco study server is not configured.' };
+  }
+  if (
+    typeof credentials?.participantId !== 'string' ||
+    typeof credentials?.password !== 'string'
+  ) {
+    return { success: false, error: 'Participant ID and password are required.' };
+  }
+  try {
+    const request = {
+      participantId: credentials.participantId.trim(),
+      password: credentials.password,
+      keepSignedIn: credentials.keepSignedIn !== false,
+    };
+    const session =
+      mode === 'signup'
+        ? await gatewayClient.signUp(request)
+        : await gatewayClient.signIn(request);
+    await configureParticipantRouterCredential();
+    initializeGatewayParticipant(session.participantId);
+    pendingAuthLaunch = mode;
+    if (request.keepSignedIn) {
+      saveAuthSession(app.getPath('userData'), {
+        token: session.token,
+        participantId: session.participantId,
+        expiresAt: session.expiresAt,
+      });
+    } else {
+      clearAuthSession(app.getPath('userData'));
+    }
+    log.info(`[Auth] ${mode} succeeded for ${session.participantId}`);
+    return { success: true, participantId: session.participantId };
+  } catch (error) {
+    log.warn(`[Auth] ${mode} failed: ${String(error)}`);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+};
+
+ipcMain.handle('auth-signup', (_event, credentials: DesktopAuthCredentials) =>
+  authenticate('signup', credentials),
+);
+ipcMain.handle('auth-signin', (_event, credentials: DesktopAuthCredentials) =>
+  authenticate('signin', credentials),
+);
+
+ipcMain.removeAllListeners('authentication-ui-complete');
+ipcMain.on('authentication-ui-complete', () => {
+  if (!isAuthenticated || !pendingAuthLaunch) return;
+  pendingAuthLaunch = null;
+  authWindow?.destroy();
+  void launchDesktopSurfaces();
+});
+
 const createWindow = async () => {
+  if (gatewayClient && !isAuthenticated) {
+    createAuthWindow();
+    createTray();
+    return;
+  }
   if (isDebug) {
     await installExtensions();
   }
@@ -3724,6 +4247,38 @@ const createWindow = async () => {
   new AppUpdater();
 };
 
+let desktopSurfacesLaunched = false;
+async function launchDesktopSurfaces(): Promise<void> {
+  if (gatewayClient && !isAuthenticated) {
+    createAuthWindow();
+    createTray();
+    return;
+  }
+  if (desktopSurfacesLaunched) {
+    await createWindow();
+    return;
+  }
+  desktopSurfacesLaunched = true;
+  await requestRequiredMacPermissions();
+  initializeWakeWordService();
+  const canStartConfiguredModels = Boolean(
+    readModelConfiguration() ||
+      (process.env.TUTOR_MODEL?.trim() && process.env.OBSERVER_MODEL?.trim()),
+  );
+  if (
+    isOnboardingComplete() &&
+    canStartConfiguredModels &&
+    !isDailyMemoryPreviewOnly()
+  ) {
+    hideAvatarMode = readHideAvatarSetting();
+    startObserver();
+  }
+  await createWindow();
+  createWakeWordCaptureWindow();
+  // Keep chat state alive while its panel is closed.
+  createChatWindow();
+}
+
 /**
  * Add event listeners...
  */
@@ -3737,7 +4292,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('second-instance', () => {
-  if (onboardingWindow && !onboardingWindow.isDestroyed()) {
+  if (gatewayClient && !isAuthenticated) {
+    createAuthWindow();
+  } else if (onboardingWindow && !onboardingWindow.isDestroyed()) {
     onboardingWindow.show();
     onboardingWindow.focus();
   } else if (chatWindow && !chatWindow.isDestroyed()) {
@@ -3754,6 +4311,7 @@ app.on('will-quit', () => {
   // Unregister all shortcuts
   globalShortcut.unregisterAll();
   eveningPersonalizationScheduler?.stop();
+  if (telemetryFlushTimer) clearInterval(telemetryFlushTimer);
 });
 
 // Warning shown when neither first-launch configuration nor legacy developer
@@ -3901,9 +4459,31 @@ const startObserver = () => {
         'personalization.log',
       ),
       getIdleSeconds: () => powerMonitor.getSystemIdleTime(),
-      onJobComplete: (job) => {
-        if (job === 'evolve') {
+      onJobFinished: (job, outcome) => {
+        if (job !== 'evolve') return;
+        if (outcome === 'completed') {
           avatarWindow?.webContents.send('daily-memory-draft-refresh');
+        }
+        if (
+          wakeAfterEveningPersonalization &&
+          (outcome === 'completed' || outcome === 'no_work')
+        ) {
+          wakeAfterEveningPersonalization = false;
+          void setCocoSleepMode(false).then((result) => {
+            if (result.success) {
+              log.info(
+                '[Evening] Coco woke after the personalization update finished.',
+              );
+            } else {
+              log.warn(
+                `[Evening] Could not wake Coco after personalization: ${result.error}`,
+              );
+            }
+          }).catch((error) => {
+            log.warn(
+              `[Evening] Could not wake Coco after personalization: ${error}`,
+            );
+          });
         }
       },
     });
@@ -4047,6 +4627,13 @@ const startObserver = () => {
                 suggestion,
               });
               if (!shown) return;
+              queueGatewayInteraction({
+                kind: 'shown',
+                surface: 'notification',
+                observation_id: event.observation_id,
+                status,
+                stage: 'offer',
+              });
               const sensingPort = process.env.SENSING_PORT || '8080';
               axios
                 .post(
@@ -4077,23 +4664,39 @@ const startObserver = () => {
       if (!isSessionActive && status === 'task_suggested' && taskLabel) {
         pendingTaskLabel = taskLabel;
         const message = `I see you're ${taskLabel}. Want me to guide you with AI tools?`;
-        showNotification({
+        const shown = showNotification({
           message,
           actionLabel: 'Yes, start session',
           cancelLabel: 'Not now',
           notifType: 'session-start-prompt',
         });
+        if (shown) {
+          queueGatewayInteraction({
+            kind: 'shown',
+            surface: 'session_prompt',
+            status: 'session_start',
+            stage: 'offer',
+          });
+        }
       }
 
       // ── In-session: detect task completion ───────────────────────────
       if (isSessionActive && status === 'task_complete') {
-        showNotification({
+        const shown = showNotification({
           message:
             'Looks like your task is done. Want to wrap up this session?',
           actionLabel: 'Yes, end session',
           cancelLabel: 'Keep going',
           notifType: 'session-end-prompt',
         });
+        if (shown) {
+          queueGatewayInteraction({
+            kind: 'shown',
+            surface: 'session_prompt',
+            status: 'session_end',
+            stage: 'offer',
+          });
+        }
       }
     },
   });
@@ -4103,9 +4706,7 @@ app
   .whenReady()
   .then(async () => {
     await configureLocalServicePorts();
-    await requestRequiredMacPermissions();
     initializeDailyMemoryDraftService();
-    initializeWakeWordService();
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
       systemSuspended = true;
@@ -4146,26 +4747,26 @@ app
     // Ensure default workspace directory exists
     ensureDefaultWorkspaceExists();
 
-    // Only start the observer if onboarding is already done. If not, it will
-    // be started by the 'onboarding-complete' IPC handler after the user
-    // finishes or skips onboarding.
-    const canStartConfiguredModels = Boolean(
-      readModelConfiguration() ||
-        (process.env.TUTOR_MODEL?.trim() && process.env.OBSERVER_MODEL?.trim()),
-    );
-    if (
-      isOnboardingComplete() &&
-      canStartConfiguredModels &&
-      !isDailyMemoryPreviewOnly()
-    ) {
-      hideAvatarMode = readHideAvatarSetting();
-      startObserver();
+    // Gateway delivery remains opt-in for local development. Study packages
+    // embed only service URLs; authentication and model credentials are always
+    // obtained at runtime for the active participant.
+    gatewayClient = CocoGatewayClient.fromEnvironment(log);
+    const storedAuth = readAuthSession(app.getPath('userData'));
+    if (gatewayClient && storedAuth) {
+      try {
+        const restored = await gatewayClient.restoreAuthSession(
+          storedAuth.token,
+        );
+        await configureParticipantRouterCredential();
+        initializeGatewayParticipant(restored.participantId);
+        log.info(`[Auth] restored session for ${restored.participantId}`);
+      } catch (error) {
+        clearAuthSession(app.getPath('userData'));
+        log.warn(`[Auth] saved session could not be restored: ${String(error)}`);
+      }
     }
 
-    createWindow();
-    createWakeWordCaptureWindow();
-    // Keep chat state alive while its panel is closed.
-    createChatWindow();
+    await launchDesktopSurfaces();
 
     // Register global shortcut to toggle DevTools (Cmd/Ctrl+Shift+I)
     globalShortcut.register('CommandOrControl+Shift+I', () => {
@@ -4179,12 +4780,20 @@ app
     // Register global shortcut for screenshot capture (Cmd+Shift+Space).
     // Works system-wide even when Electron is not the focused app.
     globalShortcut.register('CommandOrControl+Shift+Space', () => {
+      if (gatewayClient && !isAuthenticated) {
+        createAuthWindow();
+        return;
+      }
       log.info('[ImagePreview] Screenshot hotkey triggered.');
       void beginHotkeyCapture();
     });
 
     // Cmd/Ctrl+Shift+H — toggle the observation history panel on the avatar.
     globalShortcut.register('CommandOrControl+Shift+H', () => {
+      if (gatewayClient && !isAuthenticated) {
+        createAuthWindow();
+        return;
+      }
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         avatarWindow.webContents.send('toggle-observation-history');
       }
@@ -4193,7 +4802,10 @@ app
     app.on('activate', () => {
       // On macOS it's common to re-create a window in the app when the
       // dock icon is clicked and there are no other windows open.
-      if (avatarWindow === null && chatWindow === null) createWindow();
+      if (gatewayClient && !isAuthenticated) createAuthWindow();
+      else if (avatarWindow === null && chatWindow === null) {
+        void launchDesktopSurfaces();
+      }
     });
   })
   .catch(console.log);
@@ -4202,19 +4814,26 @@ app.on('before-quit', (event) => {
   if (isQuitting) return;
   event.preventDefault();
   isQuitting = true;
+  if (currentSessionId && !endedGatewaySessions.has(currentSessionId)) {
+    endedGatewaySessions.add(currentSessionId);
+    queueGatewayOperation('session_end', {
+      session_id: currentSessionId,
+      ended_at: new Date().toISOString(),
+      completion_reason: 'app_quit',
+    });
+  }
   log.info('App quitting: waiting up to 10s for services to stop...');
   stopObservationStream();
   personalizationScheduler?.stop();
   wakeWordService?.stop('disabled');
   const shutdownTimeoutMs = 10_000;
-  serviceManager
-    .shutdown(shutdownTimeoutMs)
+  Promise.allSettled([
+    serviceManager.shutdown(shutdownTimeoutMs),
+    gatewayOutbox?.flush() ?? Promise.resolve(),
+  ])
     .then(() => {
       log.info('Services stopped, quitting app.');
       app.quit();
     })
-    .catch((e) => {
-      log.warn('Error while stopping services, quitting anyway', e);
-      app.quit();
-    });
+    .catch(() => app.quit());
 });
