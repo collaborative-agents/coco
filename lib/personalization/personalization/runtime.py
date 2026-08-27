@@ -476,12 +476,16 @@ def process_evolve_step(
     resume_path = run_dir / "resume_state.json"
     previous_state = runtime_state.get("last_memory_state")
     resume = resume_path.exists() and not restart_after_image_filter
-    if not resume and isinstance(previous_state, str):
+    # Seed every attempt from the last committed period. A compatible resume
+    # checkpoint replaces this in ``learn``; an incompatible configuration
+    # checkpoint now restarts safely from this base instead.
+    if isinstance(previous_state, str):
         previous = _read_json(Path(previous_state), None)
         if isinstance(previous, dict):
             learner.memory = SectionedMemory.from_json(previous)
     learner.learn(labeled, out_dir=run_dir, resume=resume)
     skipped_batches = list(getattr(learner, "skipped_batches", []))
+    resume_restart_reason = getattr(learner, "resume_restart_reason", None)
 
     store = MemoryStore(memory_root)
     learned_preferences = learner.memory.to_learned_preferences(status="draft")
@@ -510,6 +514,8 @@ def process_evolve_step(
         draft_metrics["skipped_moments"] = sum(
             int(item.get("moment_count", 0)) for item in skipped_batches
         )
+    if resume_restart_reason:
+        draft_metrics["resume_restart_reason"] = resume_restart_reason
     draft = create_memory_draft(
         source_run_id=f"desktop:{active['run_id']}",
         based_on_user_memory=store.load_user_memory(),
@@ -527,6 +533,8 @@ def process_evolve_step(
     active["deleted_images"] = deleted
     if skipped_batches:
         active["skipped_batches"] = skipped_batches
+    if resume_restart_reason:
+        active["resume_restart_reason"] = resume_restart_reason
     runtime_state.update(
         {
             "active_run": active,
@@ -547,6 +555,9 @@ def process_evolve_step(
         result["skipped_moments"] = sum(
             int(item.get("moment_count", 0)) for item in skipped_batches
         )
+    if resume_restart_reason:
+        result["resume_restarted"] = True
+        result["resume_restart_reason"] = resume_restart_reason
     return result
 
 

@@ -608,6 +608,71 @@ def test_learner_resume_rejects_changed_dataset(monkeypatch, tmp_path):
         resumed.learn(["different"], out_dir=tmp_path, log=False, resume=True)
 
 
+def test_learner_restarts_when_resume_configuration_changed(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_generate(self, batch, memory_text):
+        calls.append(list(batch))
+        return [{"pred": "no", "gt": "no", "correct": True} for _ in batch]
+
+    monkeypatch.setattr(SelfEvolvingLearner, "_generate_batch", fake_generate)
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_reflect_batch",
+        lambda self, results, memory_text: [],
+    )
+    monkeypatch.setattr(memory_evolve, "infer_memory", lambda *args, **kwargs: None)
+    original = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=EvolveConfig(epochs=1, batch_size=2),
+    )
+    original.learn(["first", "second"], out_dir=tmp_path, log=False)
+    calls.clear()
+
+    committed_memory = SectionedMemory()
+    committed_memory.apply_ops(
+        [
+            MemoryOp(
+                op="add",
+                section="when_to_support",
+                content="This committed memory must survive the restart.",
+            )
+        ]
+    )
+    restarted = SelfEvolvingLearner(
+        prediction_model="test-model",
+        memory=committed_memory,
+        config=EvolveConfig(epochs=1, batch_size=1),
+    )
+
+    restarted.learn(
+        ["first", "second"],
+        out_dir=tmp_path,
+        log=False,
+        resume=True,
+    )
+
+    assert calls == [["first"], ["second"]]
+    assert restarted.resume_restart_reason == (
+        "cannot resume because the configuration changed"
+    )
+    assert any(
+        bullet.content == "This committed memory must survive the restart."
+        for bullet in restarted.memory.bullets.values()
+    )
+    progress = [
+        json.loads(line)
+        for line in (tmp_path / "progress.jsonl").read_text().splitlines()
+    ]
+    assert progress[0] == {
+        "event": "resume_restarted",
+        "reason": "cannot resume because the configuration changed",
+    }
+    assert json.loads((tmp_path / "resume_state.json").read_text())["status"] == (
+        "complete"
+    )
+
+
 def test_learner_resumes_legacy_memory_and_progress_checkpoint(monkeypatch, tmp_path):
     (tmp_path / "memory_state.json").write_text(json.dumps(SectionedMemory().to_json()))
     (tmp_path / "progress.jsonl").write_text(

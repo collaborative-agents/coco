@@ -29,6 +29,16 @@ from personalization.schemas import LabeledMoment
 from personalization.utils.llm_resilience import transient_llm_error
 
 
+class ResumeCheckpointMismatch(ValueError):
+    """A saved run cannot be resumed under the current data or configuration."""
+
+    def __init__(self, changed: list[str]) -> None:
+        self.changed = tuple(changed)
+        super().__init__(
+            "cannot resume because the " + " and ".join(changed) + " changed"
+        )
+
+
 @dataclass(slots=True)
 class EvolveConfig:
     """Hyper-parameters for the loop; defaults match the personalization baseline."""
@@ -171,6 +181,7 @@ class SelfEvolvingLearner:
         self.last_utility: float | None = None
         self.target_reached = False
         self.skipped_batches: list[dict[str, Any]] = []
+        self.resume_restart_reason: str | None = None
 
     # -- roles ------------------------------------------------------------- #
 
@@ -228,6 +239,7 @@ class SelfEvolvingLearner:
         resume: bool = False,
     ) -> SectionedMemory:
         cfg = self.cfg
+        self.resume_restart_reason = None
         out = Path(out_dir).expanduser() if out_dir else None
         if resume and out is None:
             raise ValueError("resume requires out_dir")
@@ -239,17 +251,37 @@ class SelfEvolvingLearner:
         resume_path = out / "resume_state.json" if out else None
         signature = _run_signature(self, moments)
 
-        checkpoint = (
-            _load_resume_checkpoint(
-                resume_path=resume_path,
-                state_path=state_path,
-                progress_path=progress_path,
-                signature=signature,
-                cfg=cfg,
+        effective_resume = resume
+        try:
+            checkpoint = (
+                _load_resume_checkpoint(
+                    resume_path=resume_path,
+                    state_path=state_path,
+                    progress_path=progress_path,
+                    signature=signature,
+                    cfg=cfg,
+                )
+                if effective_resume
+                else None
             )
-            if resume
-            else None
-        )
+        except ResumeCheckpointMismatch as error:
+            if "configuration" not in error.changed:
+                raise
+            # An application update can legitimately change the bounded
+            # production config. Restart this period from its committed base
+            # memory instead of repeatedly failing on the stale checkpoint.
+            effective_resume = False
+            checkpoint = None
+            self.resume_restart_reason = str(error)
+            self.epochs_completed = 0
+            self.last_utility = None
+            self.target_reached = False
+            self.skipped_batches = []
+            if log:
+                print(
+                    f"{error}; restarting self-evolve from batch 1",
+                    file=sys.stderr,
+                )
         if checkpoint is not None:
             self.memory = SectionedMemory.from_json(checkpoint["memory"])
             self.epochs_completed = int(checkpoint.get("epochs_completed", 0))
@@ -288,7 +320,22 @@ class SelfEvolvingLearner:
             if resume_path is not None and resume_path.exists():
                 resume_path.unlink()
 
-        log_fh = progress_path.open("a" if resume else "w") if progress_path else None
+        log_fh = (
+            progress_path.open("a" if effective_resume else "w")
+            if progress_path
+            else None
+        )
+        if log_fh and self.resume_restart_reason:
+            log_fh.write(
+                json.dumps(
+                    {
+                        "event": "resume_restarted",
+                        "reason": self.resume_restart_reason,
+                    }
+                )
+                + "\n"
+            )
+            log_fh.flush()
 
         def checkpoint_run(
             *,
@@ -619,9 +666,7 @@ def _load_resume_checkpoint(
                 if not isinstance(saved_signature, dict)
                 or saved_signature.get(name) != value
             ]
-            raise ValueError(
-                "cannot resume because the " + " and ".join(changed) + " changed"
-            )
+            raise ResumeCheckpointMismatch(changed)
         if not isinstance(checkpoint.get("memory"), dict):
             raise ValueError("resume_state.json is missing its memory snapshot")
         return checkpoint
