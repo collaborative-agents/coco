@@ -34,6 +34,7 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import axios from 'axios';
 import { resolveHtmlPath } from './util';
+import { DesktopAppUpdater } from './app-updater';
 import { serviceManager, type ServiceFatalError } from './services/manager';
 import { configureServiceModelArguments } from './services/model-arguments';
 import {
@@ -246,13 +247,18 @@ const ensureDefaultWorkspaceExists = () => {
   }
 };
 
-class AppUpdater {
-  constructor() {
-    log.transports.file.level = 'info';
-    autoUpdater.logger = log;
-    autoUpdater.checkForUpdatesAndNotify();
-  }
-}
+let installUpdateAfterShutdown = false;
+const desktopAppUpdater = new DesktopAppUpdater({
+  updater: autoUpdater,
+  logger: log,
+  isPackaged: app.isPackaged,
+  platform: process.platform,
+  currentVersion: () => app.getVersion(),
+  requestRestartAndInstall: () => {
+    installUpdateAfterShutdown = true;
+    app.quit();
+  },
+});
 
 // ── Window state ─────────────────────────────────────────────────────────────
 // avatarWindow      : always-on-top 150×150 pet/avatar (loads local index.html)
@@ -1403,49 +1409,77 @@ function createTray(): void {
     Menu.buildFromTemplate(
       pendingSetup
         ? [
-      {
+            {
               label: isOnboardingComplete()
                 ? 'Open Model Setup'
                 : 'Continue Setup',
-        click: openPrimaryTrayAction,
-      },
-      { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
+              click: openPrimaryTrayAction,
+            },
+            ...(desktopAppUpdater.isSupported()
+              ? [
+                  {
+                    label: 'Check for Updates…',
+                    click: () => {
+                      desktopAppUpdater.checkForUpdates(true).catch((error) =>
+                        log.error(
+                          `[Updater] Manual update check failed: ${error}`,
+                        ),
+                      );
+                    },
+                  },
+                ]
+              : []),
+            { type: 'separator' },
+            { label: 'Quit', click: () => app.quit() },
           ]
         : [
-      {
-        label: sleeping ? 'Status: Sleeping' : 'Status: Awake',
-        enabled: false,
-      },
-      {
-        label: sleeping ? 'Wake Coco' : 'Put Coco to Sleep',
-        click: () => {
-          // Function declaration is intentionally below the tray setup.
-          // eslint-disable-next-line no-use-before-define
-          setCocoSleepMode(!sleeping).catch((err) =>
-            log.warn(`[Tray] Could not change sleep mode: ${err}`),
-          );
-        },
-      },
-      { type: 'separator' },
-      {
-        label: 'Open Chat',
-        click: openPrimaryTrayAction,
-      },
-      {
-        label: 'Open History',
-        click: () => {
-          openHistory();
-        },
-      },
-      {
-        label: 'Settings…',
-        click: () => {
-          openChatSettings();
-        },
-      },
-      { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
+            {
+              label: sleeping ? 'Status: Sleeping' : 'Status: Awake',
+              enabled: false,
+            },
+            {
+              label: sleeping ? 'Wake Coco' : 'Put Coco to Sleep',
+              click: () => {
+                // Function declaration is intentionally below the tray setup.
+                // eslint-disable-next-line no-use-before-define
+                setCocoSleepMode(!sleeping).catch((err) =>
+                  log.warn(`[Tray] Could not change sleep mode: ${err}`),
+                );
+              },
+            },
+            { type: 'separator' },
+            {
+              label: 'Open Chat',
+              click: openPrimaryTrayAction,
+            },
+            {
+              label: 'Open History',
+              click: () => {
+                openHistory();
+              },
+            },
+            {
+              label: 'Settings…',
+              click: () => {
+                openChatSettings();
+              },
+            },
+            ...(desktopAppUpdater.isSupported()
+              ? [
+                  {
+                    label: 'Check for Updates…',
+                    click: () => {
+                      desktopAppUpdater.checkForUpdates(true).catch((error) =>
+                        log.error(
+                          `[Updater] Manual update check failed: ${error}`,
+                        ),
+                      );
+                    },
+                  },
+                ]
+              : []),
+            { type: 'separator' },
+            { label: 'Quit', click: () => app.quit() },
           ],
     ),
   );
@@ -4412,9 +4446,6 @@ const createWindow = async () => {
     applyAvatarVisibility(readHideAvatarSetting());
   }
 
-  // Remove this if your app does not use auto updates
-  // eslint-disable-next-line
-  new AppUpdater();
 };
 
 let desktopSurfacesLaunched = false;
@@ -4880,6 +4911,9 @@ const startObserver = () => {
 app
   .whenReady()
   .then(async () => {
+    // Update checks are independent of authentication, onboarding, and local
+    // service startup. The manager delays its first network request briefly.
+    desktopAppUpdater.start();
     await configureLocalServicePorts();
     initializeDailyMemoryDraftService();
     powerMonitor.on('suspend', () => {
@@ -4998,17 +5032,26 @@ app.on('before-quit', (event) => {
     });
   }
   log.info('App quitting: waiting up to 10s for services to stop...');
+  desktopAppUpdater.stop();
   stopObservationStream();
   personalizationScheduler?.stop();
   wakeWordService?.stop('disabled');
   const shutdownTimeoutMs = 10_000;
+  const finishQuit = () => {
+    if (installUpdateAfterShutdown) {
+      log.info('Services stopped, restarting to install the downloaded update.');
+      autoUpdater.quitAndInstall(true, true);
+      return;
+    }
+    app.quit();
+  };
   Promise.allSettled([
     serviceManager.shutdown(shutdownTimeoutMs),
     gatewayOutbox?.flush() ?? Promise.resolve(),
   ])
     .then(() => {
       log.info('Services stopped, quitting app.');
-      app.quit();
+      finishQuit();
     })
-    .catch(() => app.quit());
+    .catch(finishQuit);
 });

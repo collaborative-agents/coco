@@ -124,6 +124,38 @@ xcrun stapler validate "release/build/mac-arm64/coco.app"
 
 The output directory can be `release/build/mac` for an x64 build.
 
+### Automatic desktop updates
+
+Packaged macOS and Windows builds check the public GitHub Releases feed shortly
+after startup and every six hours. Users choose whether to download an available
+update; after it downloads they can restart immediately or install it when Coco
+next quits. Windows uses an unsigned NSIS installer for now, so its updater does
+not provide publisher-identity verification until Windows signing is enabled.
+
+`v0.1.0` is the updater bootstrap release. Anyone who installed an earlier
+`0.1.0` package must manually install the updater-enabled `v0.1.0` once. Future
+patches use `v0.1.1`, `v0.1.2`, and so on.
+
+To prepare a patch release, update the packaged app version and its lockfile:
+
+```bash
+npm --prefix release/app version 0.1.1 --no-git-tag-version
+```
+
+Then run the **Package & Release** workflow with the same version and enter a
+required **What's new** summary. Markdown is supported; concise bullets work
+best in the native update dialog. The same text becomes the GitHub Release body
+and is displayed before users choose whether to download the update.
+
+Every stable release includes macOS and Windows so neither update feed points
+at an incomplete release. The workflow creates the `v0.1.1` stable release and
+refuses to publish unless the Apple Silicon and Intel ZIPs and the Windows NSIS
+installer all have matching differential blockmaps.
+
+Do not delete old stable ZIPs, NSIS installers, or their blockmaps: the
+differential updater uses them to calculate downloads for users upgrading from
+an earlier patch.
+
 To test the first-launch flow without changing your normal profile, point the
 development app at a fresh directory:
 

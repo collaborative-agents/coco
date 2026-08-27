@@ -215,7 +215,13 @@
       "target": "default",
       "type": "distribution",
       "hardenedRuntime": true,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "publish": {
+        "provider": "github",
+        "owner": "collaborative-agents",
+        "repo": "coco",
+        "channel": "latest"
+      }
     },
     "dmg": {
       "contents": [
@@ -233,15 +239,23 @@
     },
     "win": {
       "icon": "assets/pet1.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "target": [
         "nsis"
-      ]
+      ],
+      "publish": {
+        "provider": "github",
+        "owner": "collaborative-agents",
+        "repo": "coco",
+        "channel": "latest"
+      }
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": true
     },
     "linux": {
       "icon": "assets/pet1.png",
