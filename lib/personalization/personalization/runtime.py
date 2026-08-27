@@ -151,7 +151,9 @@ def process_signal_step(
     stored, new_signal_count, removed_legacy_count = _merge_signal_store(
         output_path,
         derived,
-        replace_kinds=frozenset({"dismiss", "reveal", "thumbs_up", "thumbs_down"}),
+        replace_kinds=frozenset(
+            {"abstain", "dismiss", "reveal", "thumbs_up", "thumbs_down"}
+        ),
     )
     signal_counts = Counter(signal.kind for signal in stored)
     _atomic_json(

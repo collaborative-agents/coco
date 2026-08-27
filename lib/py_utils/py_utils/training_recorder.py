@@ -18,8 +18,8 @@ Append-only JSONL streams, all joinable on ``session_id`` + ids + ``ts``:
   *(sensing, judge mode only)*
 - ``tutor_calls.jsonl``  — one row per TUTOR LLM call: full prompt + generated
   guidance (the delivered-assistance content). *(proactive_tutor)*
-- ``feedback.jsonl``     — one row per explicit user reaction (engage / dismiss /
-  thumbs up / down) to a bubble or a chat message. *(routed via sensing)*
+- ``feedback.jsonl``     — one row per user reaction (engage / dismiss / thumbs
+  up / down) or automatic tutor abstention. *(routed via sensing)*
 
 All writes are best-effort: any failure is swallowed so data collection can
 never break the live pipeline. Observer screenshots are retained until a
@@ -248,7 +248,8 @@ class TrainingRecorder:
     ) -> None:
         """Log one suggestion-interaction signal.
 
-        ``kind``: ``shown`` (an actionable suggestion was displayed) | ``engage``
+        ``kind``: ``abstain`` (the instant tutor rejected the observer's support
+        request) | ``shown`` (an actionable suggestion was displayed) | ``engage``
         (accepted a suggestion) | ``dismiss`` (declined a suggestion) |
         ``need_help`` (asked for help on a calm/``progress`` bubble where nothing
         was suggested — a false-negative signal) | ``thumbs_up`` | ``thumbs_down``.

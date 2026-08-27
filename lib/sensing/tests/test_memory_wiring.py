@@ -172,6 +172,29 @@ def test_recent_observations_treats_thumbs_down_as_negative_feedback():
     assert 'set need_support to "no"' in block
 
 
+def test_recent_observations_treats_tutor_abstain_as_negative_feedback():
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+    )
+    processor._observation_history.append(
+        {
+            "ts": time.time(),
+            "type": "snapshot",
+            "obs": '{"need_support": "yes"}',
+            "observation_id": "observation-1",
+        }
+    )
+    processor.record_reaction("observation-1", "abstain")
+
+    block = processor._recent_observations_block()
+
+    assert "instant suggestion tutor ABSTAINED" in block
+    assert 'set need_support to "no"' in block
+
+
 def test_recent_observations_omit_past_rationale():
     processor = AiTutoringProcessor(
         http_client=SimpleNamespace(),

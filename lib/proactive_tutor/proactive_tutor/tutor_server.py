@@ -78,7 +78,7 @@ class InstantSuggestionRequest(BaseModel):
 
 
 class InstantSuggestionResponse(BaseModel):
-    kind: str  # "content" | "delegate"
+    kind: str  # "abstain" | "content" | "delegate"
     title: str
     body: str | None = None
     targetTool: str | None = None

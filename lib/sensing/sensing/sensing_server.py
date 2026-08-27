@@ -724,10 +724,12 @@ async def _observer_ticker(interval_seconds: float) -> None:
 
 
 class FeedbackRequest(BaseModel):
-    """A user's explicit reaction to a proactive suggestion.
+    """Feedback on a proactive suggestion or its underlying support decision.
 
-    ``kind``: ``shown`` | ``engage`` | ``dismiss`` | ``thumbs_up`` |
-    ``thumbs_down``.
+    ``kind``: ``abstain`` | ``shown`` | ``engage`` | ``dismiss`` |
+    ``thumbs_up`` | ``thumbs_down``. ``abstain`` is emitted automatically when
+    the instant tutor finds that the observer's requested support is not useful
+    enough to show.
     ``surface``: ``bubble`` (avatar observation bubble) | ``notification``
     (hidden-avatar native card) | ``chat`` (tutor message).
     """
@@ -745,7 +747,7 @@ class FeedbackRequest(BaseModel):
 
 @app.post("/feedback", response_model=StatusResponse)
 async def record_feedback(req: FeedbackRequest):
-    """Log an explicit user reaction into the shared training-data recorder.
+    """Log feedback into the shared training-data recorder.
 
     Routed here from the UI (bubble engage/dismiss, chat thumbs up/down) so all
     feedback lands in one ``feedback.jsonl`` alongside the observations/decisions.

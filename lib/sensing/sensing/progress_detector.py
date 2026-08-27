@@ -790,8 +790,10 @@ class ProgressDetector:
             ai._add_snapshot(image_path, timestamp)
 
         # Reuse the observer to build a rich observation (same as pause)
+        observation_id: str | None = None
         try:
             obs, text, metrics = await ai._handle_observation(type="pause")
+            observation_id = getattr(ai, "_last_observation_id", None)
         except Exception as e:
             logger.error(f"ProgressDetector: observer failed during fire: {e}")
             obs = f"Struggle detected: {judgment.evidence}"
@@ -809,6 +811,7 @@ class ProgressDetector:
         ai._broadcast_observation(
             "struggle",
             obs,
+            observation_id=observation_id,
             llm_metrics=metrics,
             image_paths=suggestion_image_paths,
         )

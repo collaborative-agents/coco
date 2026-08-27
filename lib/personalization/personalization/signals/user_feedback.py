@@ -19,8 +19,10 @@ from personalization.schemas import FeedbackEvent, ShortWindowSignal, stable_id
 DEFAULT_SIGNAL_TTL_S = 30 * 60
 
 
-# Canonical interpretation of authoritative UI feedback for both runtime prompt
-# signals and offline support labels. Display and navigation events such as
+# Canonical interpretation of authoritative feedback for both runtime prompt
+# signals and offline support labels. This includes the instant tutor's
+# ``abstain`` verdict, which is an automatic negative check on the observer's
+# decision to request support. Display and navigation events such as
 # ``shown`` and ``need_help`` remain available in raw records for product
 # analytics, but are deliberately not direct personalization signals:
 #
@@ -56,6 +58,15 @@ class FeedbackPolicy:
 
 
 FEEDBACK_POLICIES: dict[str, FeedbackPolicy] = {
+    "abstain": FeedbackPolicy(
+        polarity="negative",
+        confidence=1.0,
+        scope="task",
+        fallback_evidence=(
+            "instant suggestion tutor found no concrete, useful help to offer"
+        ),
+        label_weight=1.2,
+    ),
     "dismiss": FeedbackPolicy(
         polarity="negative",
         confidence=1.0,

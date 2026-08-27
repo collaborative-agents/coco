@@ -25,6 +25,26 @@ def _metrics(call_id: str) -> dict:
     }
 
 
+def test_parse_instant_suggestion_allows_abstain_xml() -> None:
+    assert instant_suggestion._parse_instant_suggestion(
+        "<suggestion><kind>abstain</kind></suggestion>"
+    ) == {
+        "kind": "abstain",
+        "title": "",
+        "body": None,
+        "targetTool": None,
+        "prompt": None,
+        "copyText": "",
+    }
+
+
+def test_parse_instant_suggestion_allows_abstain_json() -> None:
+    result = instant_suggestion._parse_instant_suggestion('{"kind": "abstain"}')
+
+    assert result["kind"] == "abstain"
+    assert result["copyText"] == ""
+
+
 def test_instant_suggestion_does_not_expose_memory_or_screen_tools(monkeypatch) -> None:
     calls: list[tuple[list[dict], str]] = []
 

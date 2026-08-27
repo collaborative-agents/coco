@@ -1739,8 +1739,9 @@ class AiTutoringProcessor(SegmentProcessor):
         items = list(self._observation_history)
         return items[-n:]
 
-    # Terminal reactions (an explicit accept/decline) outrank a plain "shown".
+    # Terminal feedback (accept/decline or tutor abstention) outranks "shown".
     _TERMINAL_REACTIONS = (
+        "abstain",
         "engage",
         "dismiss",
         "need_help",
@@ -1785,6 +1786,10 @@ class AiTutoringProcessor(SegmentProcessor):
             self._reactions.pop(next(iter(self._reactions)))
 
     _REACTION_LABEL = {
+        "abstain": (
+            "instant suggestion tutor ABSTAINED — the support need was "
+            'over-called; set need_support to "no" for similar activity'
+        ),
         "engage": "user ACCEPTED (clicked 'Help me with this')",
         "dismiss": "user DISMISSED this suggestion",
         "need_help": "user ASKED FOR HELP despite this calm status — a MISSED need (you under-called here)",

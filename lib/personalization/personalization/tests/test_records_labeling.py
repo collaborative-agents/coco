@@ -41,7 +41,12 @@ def test_navigation_feedback_is_not_a_personalization_signal(kind):
 
 @pytest.mark.parametrize(
     ("kind", "polarity"),
-    [("thumbs_up", "positive"), ("thumbs_down", "negative"), ("dismiss", "negative")],
+    [
+        ("thumbs_up", "positive"),
+        ("thumbs_down", "negative"),
+        ("dismiss", "negative"),
+        ("abstain", "negative"),
+    ],
 )
 def test_authoritative_feedback_polarity(kind, polarity):
     event = FeedbackEvent(
@@ -81,6 +86,46 @@ def test_thumb_down_prevents_an_unrated_reveal_positive():
     assert [(signal.kind, signal.polarity) for signal in signals] == [
         ("thumbs_down", "negative")
     ]
+
+
+def test_tutor_abstain_negatively_labels_observer_support_call(tmp_path):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": "obs-1",
+                "session_id": "s1",
+                "ts": 1.0,
+                "observer_input": "The user is reading a completed draft.",
+                "observer_output": json.dumps(
+                    {
+                        "observation": "The user is reading a completed draft.",
+                        "need_support": "yes",
+                    }
+                ),
+            }
+        ],
+    )
+    _append_jsonl(
+        session / "feedback.jsonl",
+        [
+            {
+                "ts": 2.0,
+                "session_id": "s1",
+                "kind": "abstain",
+                "surface": "bubble",
+                "observation_id": "obs-1",
+            }
+        ],
+    )
+
+    labeled = label_records(flatten_sessions(load_records(tmp_path)))
+
+    assert len(labeled) == 1
+    assert labeled[0].need_support == "no"
+    assert labeled[0].label_sources == ["feedback:abstain"]
 
 
 def test_closing_expanded_content_does_not_negate_a_reveal():

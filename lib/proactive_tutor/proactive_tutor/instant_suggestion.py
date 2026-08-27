@@ -5,7 +5,8 @@ Given a single observation (plus optional task label and the user's AI tools),
 produce a ready-to-use suggestion that the desktop UI can reveal immediately
 when the user clicks "Help me with this".
 
-Two kinds of suggestion are produced (decided by the LLM):
+Three outcomes are produced (decided by the LLM):
+  - ``abstain``  : no suggestion is useful enough to show.
   - ``content``  : a finished artifact (email, Slack message, …) to copy.
   - ``delegate`` : a ready-to-paste prompt plus the target tool to hand it to.
 """
@@ -26,7 +27,7 @@ from proactive_tutor.ai_tool_capabilities import (
 _PROMPT_PATH = Path(__file__).parent / "prompts_everyday" / "instant_suggestion.txt"
 INSTANT_SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
-_VALID_KINDS = {"content", "delegate"}
+_VALID_KINDS = {"abstain", "content", "delegate"}
 
 # Matches <tag>...</tag>, dot-all and case-insensitive — mirrors the parsing
 # convention used for guidance output in tutor_server._process_guidance.
@@ -129,12 +130,17 @@ def _parse_instant_suggestion(raw: str) -> dict:
         # Infer from which payload field is present; default to content.
         kind = "delegate" if (prompt and not body) else "content"
 
-    title = _strip_xml_artifacts(title or "Suggestion")
+    title = _strip_xml_artifacts(title or ("" if kind == "abstain" else "Suggestion"))
     body = _strip_xml_artifacts(body) if body else None
     prompt = _strip_xml_artifacts(prompt) if prompt else None
     target_tool = _strip_xml_artifacts(target_tool).lower() if target_tool else None
 
-    if kind == "delegate":
+    if kind == "abstain":
+        body = None
+        prompt = None
+        target_tool = None
+        copy_text = ""
+    elif kind == "delegate":
         if not prompt:
             raise ValueError("delegate suggestion missing <prompt>")
         if not target_tool:
