@@ -82,6 +82,7 @@ import {
   prepareModelConnectionTest,
   readModelConfiguration,
   resolveModelRuntime,
+  resolveTutorRuntimeConnection,
   saveModelConfiguration,
   type ModelConfigurationInput,
   type ModelConnection,
@@ -478,15 +479,13 @@ type FatalService = 'observer' | 'tutor' | 'personalization';
 const configuredModelForFatalError = (
   service: FatalService,
 ): string | undefined => {
-  const config = readModelConfiguration();
   if (service === 'observer' || service === 'personalization') {
+    const config = resolveModelRuntime()?.config;
     return (
       config?.sensing.model || process.env.OBSERVER_MODEL?.trim() || undefined
     );
   }
-  const selected =
-    config?.tutors.find((tutor) => tutor.id === currentTutorModelId) ??
-    (config ? defaultTutor(config) : undefined);
+  const selected = resolveTutorRuntimeConnection(currentTutorModelId);
   return selected?.model || process.env.TUTOR_MODEL?.trim() || undefined;
 };
 
@@ -2154,8 +2153,9 @@ ipcMain.handle(
 ipcMain.handle(
   'set-chat-model',
   async (_event, { modelId }: { modelId?: string } = {}) => {
-    const config = readModelConfiguration();
-    const selected = config?.tutors.find((item) => item.id === modelId);
+    const selected = resolveTutorRuntimeConnection(modelId, {
+      fallbackToDefault: false,
+    });
     if (!selected) return { success: false, error: 'Tutor model not found.' };
     const tutorPort = process.env.TUTOR_PORT || '8081';
     try {
@@ -3263,7 +3263,7 @@ async function createProactiveTutorSession(
   const tutor = `http://127.0.0.1:${tutorPort}`;
   const sessionId = randomUUID();
   const modelConfig = readModelConfiguration();
-  const selectedTutor = modelConfig ? defaultTutor(modelConfig) : null;
+  const selectedTutor = resolveTutorRuntimeConnection();
   currentTutorModelId = selectedTutor?.id ?? null;
 
   // Open the chat panel immediately so the user always gets a UI, even if a
@@ -3415,11 +3415,9 @@ ipcMain.handle(
     const { aiTools, scenario, userName } = readProfile();
     try {
       await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
-      const modelConfig = readModelConfiguration();
-      const selectedTutor =
-        modelConfig?.tutors.find(
-          (item) => item.id === conversation.tutorModelId,
-        ) ?? (modelConfig ? defaultTutor(modelConfig) : null);
+      const selectedTutor = resolveTutorRuntimeConnection(
+        conversation.tutorModelId,
+      );
       if (selectedTutor) {
         await axios.post(
           `${tutor}/config/model`,

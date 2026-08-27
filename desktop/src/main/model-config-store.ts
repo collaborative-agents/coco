@@ -535,3 +535,24 @@ export function defaultTutor(config: ModelConfiguration): TutorModelConnection {
     config.tutors[0]
   );
 }
+
+/**
+ * Resolve a tutor connection exactly as it must be sent to the running tutor.
+ *
+ * Persisted configuration intentionally keeps the user's provider-qualified
+ * model IDs. In a managed deployment, resolveModelRuntime adds the outer
+ * hosted_vllm transport prefix and Router credentials. Runtime call sites must
+ * use this helper rather than readModelConfiguration(), or they can
+ * accidentally switch the tutor back to a direct provider route.
+ */
+export function resolveTutorRuntimeConnection(
+  tutorId?: string | null,
+  { fallbackToDefault = true } = {},
+): TutorModelConnection | null {
+  const runtime = resolveModelRuntime();
+  if (!runtime) return null;
+  const selected = tutorId
+    ? runtime.config.tutors.find((item) => item.id === tutorId)
+    : undefined;
+  return selected ?? (fallbackToDefault ? defaultTutor(runtime.config) : null);
+}

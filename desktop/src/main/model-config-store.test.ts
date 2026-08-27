@@ -1,10 +1,16 @@
+import fs from 'fs';
 import {
   buildRoleModelEnvironments,
   credentialId,
   MANAGED_DEFAULT_MODEL_CONFIGURATION,
+  resolveTutorRuntimeConnection,
   routeModelConfigurationThroughLlmRouter,
   validateModelConfiguration,
 } from './model-config-store';
+
+jest.mock('electron', () => ({
+  app: { getPath: () => '/virtual-coco-user-data' },
+}));
 
 describe('model configuration', () => {
   const sensing = {
@@ -208,6 +214,39 @@ describe('model configuration', () => {
       'hosted_vllm/nv_inference/openai/openai/gpt-5.5',
       'hosted_vllm/tinker/thinkingmachines/Inkling',
     ]);
+  });
+
+  it('keeps session-time tutor selection on the same managed Router route', () => {
+    const persistedConfig = validateModelConfiguration(
+      MANAGED_DEFAULT_MODEL_CONFIGURATION,
+    );
+    const originalRouterUrl = process.env.LLM_ROUTER_URL;
+    const originalRouterKey = process.env.LLM_ROUTER_API_KEY;
+    const readFile = jest
+      .spyOn(fs, 'readFileSync')
+      .mockImplementation((filePath) => {
+        if (String(filePath).endsWith('coco-model-config.json')) {
+          return JSON.stringify(persistedConfig);
+        }
+        throw new Error(`No test file at ${String(filePath)}`);
+      });
+    process.env.LLM_ROUTER_URL = 'https://router.example.test';
+    process.env.LLM_ROUTER_API_KEY = 'participant-router-key';
+
+    try {
+      expect(resolveTutorRuntimeConnection('gpt-5-5')).toMatchObject({
+        id: 'gpt-5-5',
+        provider: 'hosted_vllm',
+        model: 'hosted_vllm/nv_inference/openai/openai/gpt-5.5',
+      });
+    } finally {
+      readFile.mockRestore();
+      if (originalRouterUrl === undefined) delete process.env.LLM_ROUTER_URL;
+      else process.env.LLM_ROUTER_URL = originalRouterUrl;
+      if (originalRouterKey === undefined)
+        delete process.env.LLM_ROUTER_API_KEY;
+      else process.env.LLM_ROUTER_API_KEY = originalRouterKey;
+    }
   });
 
   it('migrates the obsolete hosted-vLLM wrapper on saved NVIDIA models', () => {
