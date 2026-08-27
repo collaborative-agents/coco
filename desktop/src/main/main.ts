@@ -92,7 +92,12 @@ import {
   AI_TOOLS,
   resolveAiTools,
   parseAiTool,
+  type InstantSuggestion as ReadyInstantSuggestion,
 } from '../renderer/components/observation-types';
+
+type GeneratedInstantSuggestion =
+  | ReadyInstantSuggestion
+  | (Omit<ReadyInstantSuggestion, 'kind'> & { kind: 'abstain' });
 import type {
   ObservationStatus,
   AiToolButton,
@@ -1577,7 +1582,7 @@ type NotificationPayload = {
   observationId?: string;
   status?: string;
   rawObservation?: string;
-  suggestion?: InstantSuggestion;
+  suggestion?: ReadyInstantSuggestion;
   /** Preserve important lifecycle messages until the current card is closed. */
   deferIfBusy?: boolean;
 };
@@ -2878,20 +2883,13 @@ function readProfile(): {
 // observation_id. By the time the user clicks "Help me with this" (a few
 // seconds of reading later) the result is usually ready, so it can be revealed
 // instantly instead of waiting on a fresh LLM round-trip.
-interface InstantSuggestion {
-  kind: 'content' | 'delegate';
-  title: string;
-  body?: string;
-  targetTool?: string;
-  prompt?: string;
-  copyText: string;
-  availableTools?: AiToolButton[];
-  llm_metrics?: LLMCallMetrics;
-}
-
 const suggestionCache = new Map<
   string,
-  { ts: number; promise: Promise<InstantSuggestion | null> }
+  {
+    ts: number;
+    promise: Promise<GeneratedInstantSuggestion | null>;
+    available: boolean;
+  }
 >();
 const SUGGESTION_TTL_MS = 5 * 60_000;
 // Model latency can exceed 12 seconds under load. Keep the eager request alive
@@ -2970,7 +2968,7 @@ function precomputeSuggestion(event: {
   scenario?: string;
   image_paths?: string[];
   retrieved_context?: ObservationEvent['retrieved_context'];
-}): Promise<InstantSuggestion | null> | undefined {
+}): Promise<GeneratedInstantSuggestion | null> | undefined {
   const id = event.observation_id;
   if (!id) return undefined;
   const cached = suggestionCache.get(id);
@@ -2998,7 +2996,49 @@ function precomputeSuggestion(event: {
       { timeout: SUGGESTION_REQUEST_TIMEOUT_MS },
     )
     .then((resp) => {
-      const data = resp.data as InstantSuggestion;
+      const data = resp.data as GeneratedInstantSuggestion;
+      if (data.kind === 'abstain') {
+        const entry = suggestionCache.get(id);
+        if (entry) entry.available = false;
+        log.info(
+          `[InstantSuggestion] tutor abstained id=${id} in ${Date.now() - startedAt}ms`,
+        );
+
+        // The instant tutor acts as a second-stage check on the observer's
+        // need_support=yes decision. Feed an abstention back as a negative
+        // label tied to that exact observer call.
+        const surface = hideAvatarMode ? 'notification' : 'bubble';
+        const sensingPort = process.env.SENSING_PORT || '8080';
+        axios
+          .post(
+            `http://127.0.0.1:${sensingPort}/feedback`,
+            {
+              kind: 'abstain',
+              surface,
+              observation_id: id,
+              status: event.status ?? null,
+              text:
+                'Instant suggestion tutor found no useful suggestion to show.',
+            },
+            { timeout: 3000 },
+          )
+          .catch((err) => {
+            log.warn(
+              `[Feedback] failed to post tutor abstention: ${(err as Error).message}`,
+            );
+          })
+          .finally(() => personalizationScheduler?.noteFeedback());
+
+        // The observer bubble may already be visible while generation was in
+        // flight. Suppress only the matching, still-unrevealed offer.
+        if (avatarWindow && !avatarWindow.isDestroyed()) {
+          avatarWindow.webContents.send(
+            'suppress-unrevealed-proactive-suggestion',
+            { observationId: id },
+          );
+        }
+        return data;
+      }
       recordSupportSuggestion(id, data);
       log.info(
         `[InstantSuggestion] precompute ready id=${id} kind=${data?.kind} in ${Date.now() - startedAt}ms`,
@@ -3006,13 +3046,19 @@ function precomputeSuggestion(event: {
       return data;
     })
     .catch((err) => {
+      const entry = suggestionCache.get(id);
+      if (entry) entry.available = false;
       log.warn(
         `[InstantSuggestion] precompute failed for ${id} after ${Date.now() - startedAt}ms: ${(err as { message?: string })?.message}`,
       );
       return null;
     })
     .finally(() => personalizationScheduler?.endInteractiveInference());
-  suggestionCache.set(id, { ts: Date.now(), promise });
+  suggestionCache.set(id, {
+    ts: Date.now(),
+    promise,
+    available: true,
+  });
   return promise;
 }
 
@@ -3045,9 +3091,12 @@ ipcMain.handle(
       suggestionCache.delete(observationId!);
       return { status: 'error' };
     }
+    if (value.kind === 'abstain') {
+      return { status: 'abstained' };
+    }
     // Attach the user's own tools so a delegate bubble can offer one Open button
     // per available chatbot/agent (recommended tool first).
-    const suggestion: InstantSuggestion =
+    const suggestion: ReadyInstantSuggestion =
       value.kind === 'delegate'
         ? { ...value, availableTools: buildAvailableTools(value.targetTool) }
         : value;
@@ -3113,7 +3162,7 @@ ipcMain.on(
       observationId?: string;
       status?: string;
       rawObservation?: string;
-      suggestion?: InstantSuggestion;
+      suggestion?: ReadyInstantSuggestion;
       surface?: 'bubble' | 'notification';
       copyPromptToInput?: boolean;
     },
@@ -3958,7 +4007,13 @@ ipcMain.handle('get-activity-history', async (_event, sinceTs?: number) => {
       const support = record.proactive_support;
       if (support?.suggestion || !record.observation_id) return record;
       const cached = suggestionCache.get(record.observation_id);
-      if (!cached || Date.now() - cached.ts > SUGGESTION_TTL_MS) return record;
+      if (
+        !cached ||
+        !cached.available ||
+        Date.now() - cached.ts > SUGGESTION_TTL_MS
+      ) {
+        return record;
+      }
       return {
         ...record,
         proactive_support: { ...support, available: true },
@@ -4726,12 +4781,13 @@ const startObserver = () => {
               // rather than the observer diagnosis that led to it.
               if (
                 !value ||
+                value.kind === 'abstain' ||
                 !hideAvatarMode ||
                 latestHiddenSuggestionObservationId !== event.observation_id
               ) {
                 return;
               }
-              const suggestion: InstantSuggestion =
+              const suggestion: ReadyInstantSuggestion =
                 value.kind === 'delegate'
                   ? {
                       ...value,

@@ -71,6 +71,57 @@ describe('App', () => {
     expect(screen.queryByText('Heads up')).not.toBeInTheDocument();
   });
 
+  it('does not engage or open chat when the instant tutor abstains', async () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const sendMessage = jest.fn();
+    const invoke = jest.fn((channel: string) => {
+      if (channel === 'get-coco-sleep-mode') {
+        return Promise.resolve({ sleeping: false });
+      }
+      if (channel === 'get-instant-suggestion') {
+        return Promise.resolve({ status: 'abstained' });
+      }
+      return Promise.resolve([]);
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: (channel: string, callback: (...args: unknown[]) => void) => {
+          listeners.set(channel, callback);
+          return () => listeners.delete(channel);
+        },
+        sendMessage,
+        invoke,
+      },
+    };
+
+    render(<App />);
+    act(() => {
+      listeners.get('observation-update')?.({
+        type: 'snapshot',
+        observation: 'The user may need help with a completed draft.',
+        observation_id: 'obs-abstain',
+        status: 'support_needed',
+        ts: Date.now() / 1000,
+      });
+    });
+
+    fireEvent.click(screen.getByText('Help me with this'));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('get-instant-suggestion', {
+        observationId: 'obs-abstain',
+      });
+    });
+
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      'help-me-with-this',
+      expect.anything(),
+    );
+    expect(sendMessage.mock.calls).not.toContainEqual([
+      'training-feedback',
+      expect.objectContaining({ kind: 'engage' }),
+    ]);
+  });
+
   it('keeps Coco asleep on fox click and wakes it from the menu', async () => {
     const invoke = jest.fn(
       (channel: string, payload?: { sleeping?: boolean }) => {

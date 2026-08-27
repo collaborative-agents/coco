@@ -758,9 +758,16 @@ function PetView() {
 
     const cleanupChatSuppression = window.electron?.ipcRenderer.on(
       'suppress-unrevealed-proactive-suggestion',
-      () => {
+      (rawData: unknown) => {
+        const data = rawData as { observationId?: string } | undefined;
         const activeBubble = bubbleRef.current;
         if (!activeBubble?.showHelpButton || activeBubble.suggestion) return;
+        if (
+          data?.observationId &&
+          activeBubble.observationId !== data.observationId
+        ) {
+          return;
+        }
         if (hideTimer.current) clearTimeout(hideTimer.current);
         if (fadeTimer.current) clearTimeout(fadeTimer.current);
         if (pulseTimer.current) clearTimeout(pulseTimer.current);
@@ -770,6 +777,20 @@ function PetView() {
         setBubble(null);
         setPulse(null);
         setMood('idle');
+        if (data?.observationId) {
+          setRecords((prev) =>
+            prev.map((record) =>
+              record.observation_id === data.observationId
+                ? {
+                    ...record,
+                    proactive_support: record.proactive_support
+                      ? { ...record.proactive_support, available: false }
+                      : undefined,
+                  }
+                : record,
+            ),
+          );
+        }
       },
     );
 
@@ -965,8 +986,32 @@ function PetView() {
       });
     };
 
-    // Reflect the click immediately. If the precomputed content is available,
-    // the same record is enriched below so History can reopen it verbatim.
+    // Try to reveal the instant suggestion that was precomputed when the bubble
+    // appeared. If it's ready, show it in place (no waiting, no chat round-trip).
+    const res = await window.electron?.ipcRenderer.invoke(
+      'get-instant-suggestion',
+      {
+        observationId: current.observationId ?? null,
+      },
+    );
+
+    // An abstention is an intentional no-op, not a generation failure. The
+    // main process has already attached its negative label to the observer
+    // call, so close the stale offer without opening fallback chat or recording
+    // a contradictory engagement.
+    if (res?.status === 'abstained') {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      if (fadeTimer.current) clearTimeout(fadeTimer.current);
+      setBubble((b) => (b ? { ...b, fadingOut: true } : null));
+      fadeTimer.current = setTimeout(() => {
+        setBubble(null);
+        setMood('idle');
+      }, FADE_MS);
+      return;
+    }
+
+    // Reflect the click after the tutor's second-stage check. If content is
+    // available, the same record is enriched below so History can reopen it.
     recordEngagement(undefined, 'conversation');
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: 'engage',
@@ -974,12 +1019,6 @@ function PetView() {
       observation_id: current.observationId ?? null,
       status: current.status,
       text: current.rawObservation ?? null,
-    });
-
-    // Try to reveal the instant suggestion that was precomputed when the bubble
-    // appeared. If it's ready, show it in place (no waiting, no chat round-trip).
-    const res = await window.electron?.ipcRenderer.invoke('get-instant-suggestion', {
-      observationId: current.observationId ?? null,
     });
 
     if (res?.status === 'ready' && res.suggestion) {
