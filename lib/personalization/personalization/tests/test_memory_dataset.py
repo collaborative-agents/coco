@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from personalization.dataset_builder import build_sft_examples
@@ -18,6 +19,55 @@ from personalization.memory import evaluate as memory_evaluate
 from personalization.memory import evolve as memory_evolve
 from personalization.memory import roles as memory_roles
 from personalization.schemas import LabeledMoment
+from personalization.utils.llm_resilience import MAX_PERSONALIZATION_IMAGE_BYTES
+
+
+def test_role_completion_uses_low_latency_qwen_settings(monkeypatch):
+    captured = {}
+
+    def fake_chat_completion(messages, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(content="done"), {}
+
+    monkeypatch.setattr(memory_roles, "chat_completion", fake_chat_completion)
+
+    result = memory_roles._complete_role(
+        [{"role": "user", "content": "test"}],
+        model="hosted_vllm/qwen3.5-9b",
+        temperature=0.0,
+        max_tokens=2048,
+        operation="personalization.test",
+    )
+
+    assert result == "done"
+    assert captured["max_tokens"] == 2048
+    assert captured["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+
+
+def test_personalization_skips_missing_and_oversized_images(tmp_path):
+    small = tmp_path / "small.jpg"
+    small.write_bytes(b"small")
+    oversized = tmp_path / "oversized.png"
+    oversized.write_bytes(b"x" * (MAX_PERSONALIZATION_IMAGE_BYTES + 1))
+    moment = LabeledMoment(
+        moment_id="moment-1",
+        observation_id="obs-1",
+        session_id="s1",
+        ts=1.0,
+        need_support="no",
+        label_confidence=1.0,
+        label_sources=["test"],
+        label_rationale="test",
+        observer_input="input",
+        observer_output='{"need_support":"no"}',
+        image_paths=[str(small), str(oversized), str(tmp_path / "missing.jpg")],
+    )
+
+    assert memory_roles._moment_image_paths(moment, image_root=None, max_images=2) == [
+        small
+    ]
 
 
 def test_sectioned_memory_applies_ops_votes_and_exports_preferences():
@@ -355,6 +405,112 @@ def test_learner_sends_generation_requests_in_parallel(monkeypatch):
 
     assert len(results) == 4
     assert max_active > 1
+
+
+def test_learner_skips_exhausted_transient_batch_and_continues(monkeypatch, tmp_path):
+    class GatewayTimeout(RuntimeError):
+        status_code = 504
+
+    calls = []
+
+    def generate_batch(self, batch, memory_text):
+        calls.append(list(batch))
+        if batch == ["second"]:
+            raise GatewayTimeout("504 Gateway Time-out after retries")
+        return [{"pred": "no", "gt": "no", "correct": True} for _ in batch]
+
+    monkeypatch.setattr(SelfEvolvingLearner, "_generate_batch", generate_batch)
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_reflect_batch",
+        lambda self, results, memory_text: [],
+    )
+    learner = SelfEvolvingLearner(
+        prediction_model="test-model",
+        config=EvolveConfig(epochs=1, batch_size=1, concurrency=1),
+    )
+
+    learner.learn(["first", "second", "third"], out_dir=tmp_path, log=False)
+
+    assert calls == [["first"], ["second"], ["third"]]
+    assert learner.epochs_completed == 1
+    assert learner.last_utility == 1.0
+    assert len(learner.skipped_batches) == 1
+    skipped = learner.skipped_batches[0]
+    assert skipped == {
+        "event": "batch_skipped",
+        "epoch": 1,
+        "batch": 2,
+        "moment_count": 1,
+        "moment_ids": ["0"],
+        "error_type": "GatewayTimeout",
+        "error": "504 Gateway Time-out after retries",
+        "batch_duration_s": skipped["batch_duration_s"],
+    }
+    assert skipped["batch_duration_s"] >= 0
+    checkpoint = json.loads((tmp_path / "resume_state.json").read_text())
+    assert checkpoint["status"] == "complete"
+    assert checkpoint["skipped_batches"] == learner.skipped_batches
+    progress = [
+        json.loads(line)
+        for line in (tmp_path / "progress.jsonl").read_text().splitlines()
+    ]
+    assert [row.get("event") for row in progress] == [
+        None,
+        "batch_skipped",
+        None,
+        "epoch_end",
+    ]
+
+
+def test_skipped_batch_rolls_back_partial_memory_changes(monkeypatch, tmp_path):
+    class GatewayTimeout(RuntimeError):
+        status_code = 504
+
+    memory = SectionedMemory()
+    memory.apply_ops(
+        [
+            MemoryOp(
+                op="add",
+                section="when_to_support",
+                content="Offer help after repeated failures.",
+            )
+        ]
+    )
+    bullet_id = next(iter(memory.bullets))
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_generate_batch",
+        lambda self, batch, memory_text: [
+            {"pred": "no", "gt": "yes", "correct": False}
+        ],
+    )
+    monkeypatch.setattr(
+        SelfEvolvingLearner,
+        "_reflect_batch",
+        lambda self, results, memory_text: [
+            {
+                "helpful_bullet_ids": [],
+                "harmful_bullet_ids": [bullet_id],
+            }
+        ],
+    )
+
+    def curator_timeout(*args, **kwargs):
+        raise GatewayTimeout("curator timed out after retries")
+
+    monkeypatch.setattr(memory_evolve, "curate", curator_timeout)
+    monkeypatch.setattr(memory_evolve, "infer_memory", lambda *args, **kwargs: None)
+    learner = SelfEvolvingLearner(
+        prediction_model="test-model",
+        memory=memory,
+        config=EvolveConfig(epochs=1, batch_size=1, concurrency=1),
+    )
+
+    learner.learn(["moment"], out_dir=tmp_path, log=False)
+
+    assert learner.memory.bullets[bullet_id].harmful == 0
+    assert len(learner.skipped_batches) == 1
 
 
 def test_learner_resumes_after_last_completed_batch(monkeypatch, tmp_path):

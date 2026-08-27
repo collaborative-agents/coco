@@ -28,6 +28,15 @@ from personalization.memory.prompts import (
 from personalization.memory.state import InferredMemory, SectionedMemory
 from personalization.schemas import LabeledMoment
 from personalization.utils.llm_io import parse_json_object, response_text
+from personalization.utils.llm_resilience import (
+    MAX_MEMORY_CHARS,
+    MAX_OBSERVER_INPUT_CHARS,
+    MAX_PERSONALIZATION_IMAGE_BYTES,
+    MAX_ROLE_PROMPT_CHARS,
+    bounded_text,
+    call_with_transient_retries,
+    personalization_completion_kwargs,
+)
 from personalization.utils.media import image_data_url, sample_frames
 from personalization.utils.observer_output import normalize_need_support
 
@@ -43,7 +52,11 @@ def generate(
     temperature: float = 0.0,
 ) -> dict:
     """Predict with the current memory injected into the observer prompt shape."""
-    user_prompt = MEMORY_BLOCK.format(memory=memory_text) + moment.observer_input
+    user_prompt = bounded_text(
+        MEMORY_BLOCK.format(memory=bounded_text(memory_text, MAX_MEMORY_CHARS))
+        + bounded_text(moment.observer_input, MAX_OBSERVER_INPUT_CHARS),
+        MAX_ROLE_PROMPT_CHARS,
+    )
     content: list[dict] = [{"type": "text", "text": user_prompt}]
     for p in _moment_image_paths(moment, image_root=image_root, max_images=max_images):
         content.append({"type": "image_url", "image_url": {"url": image_data_url(p)}})
@@ -87,16 +100,19 @@ def reflect(
         if result["parsed"]
         else (result["raw"][:800] or "(no output)")
     )
-    prompt = REFLECTOR_TEMPLATE.format(
-        memory=memory_text,
-        gt_observation=out.get("observation", ""),
-        gt_intent=out.get("user_intent", ""),
-        prediction=prediction,
-        gt_need=result["gt"],
-        gt_stype=out.get("suggestion_type", ""),
-        gt_suggestion=out.get("suggestion", "") or "(none)",
-        gt_rationale=out.get("rationale", ""),
-        verdict="CORRECT" if result["correct"] else "WRONG",
+    prompt = bounded_text(
+        REFLECTOR_TEMPLATE.format(
+            memory=bounded_text(memory_text, MAX_MEMORY_CHARS),
+            gt_observation=out.get("observation", ""),
+            gt_intent=out.get("user_intent", ""),
+            prediction=prediction,
+            gt_need=result["gt"],
+            gt_stype=out.get("suggestion_type", ""),
+            gt_suggestion=out.get("suggestion", "") or "(none)",
+            gt_rationale=out.get("rationale", ""),
+            verdict="CORRECT" if result["correct"] else "WRONG",
+        ),
+        MAX_ROLE_PROMPT_CHARS,
     )
     messages = [
         {"role": "system", "content": REFLECTOR_SYSTEM},
@@ -133,8 +149,12 @@ def curate(
             f"Reflection {i} (prediction was {r['verdict']}): {r.get('reflection', '')}\n"
             f"  proposed insights: {json.dumps(r.get('proposed_insights', []))}"
         )
-    prompt = CURATOR_TEMPLATE.format(
-        memory=memory.render(with_ids=True), reflections="\n".join(refl_lines)
+    prompt = bounded_text(
+        CURATOR_TEMPLATE.format(
+            memory=bounded_text(memory.render(with_ids=True), MAX_MEMORY_CHARS),
+            reflections="\n".join(refl_lines),
+        ),
+        MAX_ROLE_PROMPT_CHARS,
     )
     messages = [
         {
@@ -164,7 +184,12 @@ def infer_memory(
     temperature: float = 0.2,
 ) -> InferredMemory | None:
     """Infer a compact user model from the detailed evolved memory."""
-    prompt = INFERENCE_TEMPLATE.format(memory=memory.render_evolved(with_ids=True))
+    prompt = bounded_text(
+        INFERENCE_TEMPLATE.format(
+            memory=bounded_text(memory.render_evolved(with_ids=True), MAX_MEMORY_CHARS)
+        ),
+        MAX_ROLE_PROMPT_CHARS,
+    )
     messages = [
         {
             "role": "system",
@@ -197,11 +222,15 @@ def _complete_role(
     max_tokens: int,
     operation: str,
 ) -> str:
-    response, _metrics = chat_completion(
-        messages,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
+    response, _metrics = call_with_transient_retries(
+        lambda: chat_completion(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            operation=operation,
+            **personalization_completion_kwargs(model),
+        ),
         operation=operation,
     )
     return response_text(response)
@@ -239,5 +268,19 @@ def _moment_image_paths(
     max_images: int,
 ) -> list[Path]:
     root = Path(image_root).expanduser() if image_root is not None else None
-    frames = sample_frames(list(moment.image_paths), max_images)
-    return [root / frame if root is not None else Path(frame) for frame in frames]
+    candidates = [
+        root / frame if root is not None else Path(frame)
+        for frame in moment.image_paths
+    ]
+    bounded: list[Path] = []
+    for path in candidates:
+        try:
+            if (
+                path.is_file()
+                and path.stat().st_size <= MAX_PERSONALIZATION_IMAGE_BYTES
+            ):
+                bounded.append(path)
+        except OSError:
+            # Screenshots are cleaned up concurrently with background jobs.
+            continue
+    return sample_frames(bounded, max_images)

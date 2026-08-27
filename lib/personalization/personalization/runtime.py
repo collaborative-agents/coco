@@ -464,6 +464,11 @@ def process_evolve_step(
             max_images=2,
             concurrency=llm_concurrency,
             max_ops_per_batch=4,
+            # Background jobs need predictable latency behind study gateways.
+            # These roles return compact JSON; the baseline's 20K-token ceiling
+            # needlessly increases queue/runtime pressure for production runs.
+            gen_max_tokens=2048,
+            role_max_tokens=4096,
         ),
     )
     resume_path = run_dir / "resume_state.json"
@@ -474,6 +479,7 @@ def process_evolve_step(
         if isinstance(previous, dict):
             learner.memory = SectionedMemory.from_json(previous)
     learner.learn(labeled, out_dir=run_dir, resume=resume)
+    skipped_batches = list(getattr(learner, "skipped_batches", []))
 
     store = MemoryStore(memory_root)
     learned_preferences = learner.memory.to_learned_preferences(status="draft")
@@ -497,6 +503,11 @@ def process_evolve_step(
     }
     if examples_by_preference_id:
         draft_metrics["examples_by_preference_id"] = examples_by_preference_id
+    if skipped_batches:
+        draft_metrics["skipped_batches"] = len(skipped_batches)
+        draft_metrics["skipped_moments"] = sum(
+            int(item.get("moment_count", 0)) for item in skipped_batches
+        )
     draft = create_memory_draft(
         source_run_id=f"desktop:{active['run_id']}",
         based_on_user_memory=store.load_user_memory(),
@@ -512,6 +523,8 @@ def process_evolve_step(
     active["status"] = "complete"
     active["completed_at"] = time.time()
     active["deleted_images"] = deleted
+    if skipped_batches:
+        active["skipped_batches"] = skipped_batches
     runtime_state.update(
         {
             "active_run": active,
@@ -527,6 +540,11 @@ def process_evolve_step(
         result["new_retrospective_signals"] = new_retrospective_signals
     if retrospective_error:
         result["retrospective_error"] = retrospective_error
+    if skipped_batches:
+        result["skipped_batches"] = len(skipped_batches)
+        result["skipped_moments"] = sum(
+            int(item.get("moment_count", 0)) for item in skipped_batches
+        )
     return result
 
 

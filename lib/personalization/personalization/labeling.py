@@ -24,6 +24,12 @@ from personalization.schemas import (
 from personalization.signals import derive_short_window_signals
 from personalization.signals.user_feedback import FEEDBACK_POLICIES
 from personalization.utils.llm_io import parse_json_object
+from personalization.utils.llm_resilience import (
+    MAX_REVISION_PROMPT_CHARS,
+    bounded_text,
+    call_with_transient_retries,
+    personalization_completion_kwargs,
+)
 from personalization.utils.observer_output import (
     observer_observation,
     observer_status,
@@ -452,21 +458,30 @@ def _revise_disagreement(
     if original_prediction is None or original_prediction == label.need_support:
         raise ValueError("label revision requires a polarity disagreement")
 
-    base_prompt = "\n\n".join(
-        (
-            f"Original need_support prediction: {original_prediction}",
-            f"Derived need_support label: {label.need_support}",
-            f"Derived-label rationale:\n{label.label_rationale}",
-            f"Original observer input:\n{moment.observer_input}",
-            f"Original observer output:\n{moment.observer_output}",
-        )
+    base_prompt = bounded_text(
+        "\n\n".join(
+            (
+                f"Original need_support prediction: {original_prediction}",
+                f"Derived need_support label: {label.need_support}",
+                f"Derived-label rationale:\n{label.label_rationale}",
+                f"Original observer input:\n{moment.observer_input}",
+                f"Original observer output:\n{moment.observer_output}",
+            )
+        ),
+        MAX_REVISION_PROMPT_CHARS,
     )
     prompt = base_prompt
     for attempt in range(retries + 1):
-        raw = prompt_to_text(
-            model=model,
-            system_prompt=_REVISION_SYSTEM_PROMPT,
-            user_prompt=prompt,
+        model_kwargs = personalization_completion_kwargs(model)
+        raw = call_with_transient_retries(
+            lambda prompt=prompt, model_kwargs=model_kwargs: prompt_to_text(
+                model=model,
+                system_prompt=_REVISION_SYSTEM_PROMPT,
+                user_prompt=prompt,
+                max_tokens=2048,
+                **model_kwargs,
+            ),
+            operation="personalization.revise_label",
         )
         revised = parse_json_object(raw)
         observation = (
@@ -482,13 +497,17 @@ def _revise_disagreement(
                 target_user_intent=user_intent,
             )
         if attempt < retries:
-            prompt = "\n\n".join(
-                (
-                    base_prompt,
-                    "Your previous response was invalid. Return only one JSON object "
-                    'with non-empty string fields "observation" and "user_intent".',
-                    f"Invalid previous response:\n{str(raw)[-4000:]}",
-                )
+            prompt = bounded_text(
+                "\n\n".join(
+                    (
+                        base_prompt,
+                        "Your previous response was invalid. Return only one JSON "
+                        'object with non-empty string fields "observation" and '
+                        '"user_intent".',
+                        f"Invalid previous response:\n{str(raw)[-4000:]}",
+                    )
+                ),
+                MAX_REVISION_PROMPT_CHARS,
             )
 
     raise ValueError(

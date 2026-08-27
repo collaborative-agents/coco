@@ -1272,7 +1272,7 @@ def test_disagreement_model_revises_observation_and_intent(tmp_path, monkeypatch
 
     calls = []
 
-    def fake_prompt_to_text(*, model, system_prompt, user_prompt):
+    def fake_prompt_to_text(*, model, system_prompt, user_prompt, **_kwargs):
         calls.append((model, system_prompt, user_prompt))
         polarity = "yes" if "Derived need_support label: yes" in user_prompt else "no"
         return json.dumps(
@@ -1363,7 +1363,7 @@ def test_disagreement_revision_limit_bounds_llm_calls(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_prompt_to_text(*, model, system_prompt, user_prompt):
+    def fake_prompt_to_text(*, model, system_prompt, user_prompt, **_kwargs):
         calls.append(user_prompt)
         return json.dumps(
             {
@@ -1449,7 +1449,7 @@ def test_disagreement_revision_without_limit_revises_all(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_prompt_to_text(*, model, system_prompt, user_prompt):
+    def fake_prompt_to_text(*, model, system_prompt, user_prompt, **_kwargs):
         calls.append(user_prompt)
         return json.dumps(
             {
@@ -1528,7 +1528,7 @@ def test_disagreement_revision_retries_invalid_responses(tmp_path, monkeypatch):
     )
     prompts = []
 
-    def fake_prompt_to_text(*, model, system_prompt, user_prompt):
+    def fake_prompt_to_text(*, model, system_prompt, user_prompt, **_kwargs):
         prompts.append(user_prompt)
         return next(responses)
 
@@ -1557,7 +1557,7 @@ def test_disagreement_revision_retries_invalid_responses(tmp_path, monkeypatch):
 def test_disagreement_revision_raises_after_retries(tmp_path, monkeypatch):
     calls = []
 
-    def fake_prompt_to_text(*, model, system_prompt, user_prompt):
+    def fake_prompt_to_text(*, model, system_prompt, user_prompt, **_kwargs):
         calls.append(user_prompt)
         return "still not json"
 
@@ -1576,3 +1576,36 @@ def test_disagreement_revision_raises_after_retries(tmp_path, monkeypatch):
         )
 
     assert len(calls) == 2
+
+
+def test_disagreement_revision_bounds_output_and_disables_qwen_thinking(
+    tmp_path, monkeypatch
+):
+    captured = {}
+
+    def fake_prompt_to_text(**kwargs):
+        captured.update(kwargs)
+        return json.dumps(
+            {
+                "observation": "Revised observation.",
+                "user_intent": "Revised intent.",
+            }
+        )
+
+    monkeypatch.setattr(
+        "personalization.labeling.prompt_to_text",
+        fake_prompt_to_text,
+    )
+    records = _write_single_disagreement(tmp_path)
+
+    revise_label_disagreements(
+        records,
+        label_records(records),
+        model="hosted_vllm/qwen3.5-9b",
+        retries=0,
+    )
+
+    assert captured["max_tokens"] == 2048
+    assert captured["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }

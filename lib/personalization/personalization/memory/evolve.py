@@ -26,6 +26,7 @@ from typing import Any
 from personalization.memory.roles import curate, generate, infer_memory, reflect
 from personalization.memory.state import SectionedMemory
 from personalization.schemas import LabeledMoment
+from personalization.utils.llm_resilience import transient_llm_error
 
 
 @dataclass(slots=True)
@@ -169,6 +170,7 @@ class SelfEvolvingLearner:
         self.epochs_completed = 0
         self.last_utility: float | None = None
         self.target_reached = False
+        self.skipped_batches: list[dict[str, Any]] = []
 
     # -- roles ------------------------------------------------------------- #
 
@@ -253,6 +255,7 @@ class SelfEvolvingLearner:
             self.epochs_completed = int(checkpoint.get("epochs_completed", 0))
             self.last_utility = checkpoint.get("last_utility")
             self.target_reached = bool(checkpoint.get("target_reached", False))
+            self.skipped_batches = list(checkpoint.get("skipped_batches") or [])
             if checkpoint.get("status") == "complete":
                 if log:
                     print(
@@ -317,6 +320,7 @@ class SelfEvolvingLearner:
                     "epochs_completed": self.epochs_completed,
                     "last_utility": self.last_utility,
                     "target_reached": self.target_reached,
+                    "skipped_batches": self.skipped_batches,
                     "memory": self.memory.to_json(),
                 },
             )
@@ -343,38 +347,82 @@ class SelfEvolvingLearner:
                     continue
                 batch = [moments[i] for i in order[start : start + cfg.batch_size]]
                 memory_text = self.memory.render_evolved(with_ids=True)
+                memory_before_batch = self.memory.to_json()
                 batch_started = time.perf_counter()
+                try:
+                    results = self._generate_batch(batch, memory_text)
+                    batch_stats = UtilityStats()
+                    batch_stats.add(results)
 
-                results = self._generate_batch(batch, memory_text)
-                batch_stats = UtilityStats()
-                batch_stats.add(results)
+                    wrong = [r for r in results if not r["correct"]]
+                    right = [r for r in results if r["correct"]][: cfg.reflect_correct]
+                    reflections = self._reflect_batch(wrong + right, memory_text)
+                    for r in reflections:
+                        self.memory.vote(
+                            r.get("helpful_bullet_ids", []),
+                            r.get("harmful_bullet_ids", []),
+                        )
+
+                    n_applied = (
+                        self.memory.apply_ops(
+                            curate(
+                                self.evolution_model,
+                                self.memory,
+                                reflections,
+                                max_ops=cfg.max_ops_per_batch,
+                                max_tokens=cfg.role_max_tokens,
+                            ),
+                            max_ops=cfg.max_ops_per_batch,
+                        )
+                        if reflections
+                        else 0
+                    )
+                    n_dropped = self.memory.refine(max_bullets=cfg.max_bullets)
+                except Exception as error:
+                    if not transient_llm_error(error):
+                        raise
+                    # A batch is atomic: discard votes/ops applied before a later
+                    # role exhausted its retries, then checkpoint past the batch.
+                    self.memory = SectionedMemory.from_json(memory_before_batch)
+                    skipped = {
+                        "event": "batch_skipped",
+                        "epoch": epoch,
+                        "batch": batch_no,
+                        "moment_count": len(batch),
+                        "moment_ids": [
+                            str(getattr(moment, "moment_id", index))
+                            for index, moment in enumerate(batch)
+                        ],
+                        "error_type": type(error).__name__,
+                        "error": str(error)[-4000:],
+                        "batch_duration_s": round(
+                            time.perf_counter() - batch_started, 2
+                        ),
+                    }
+                    self.skipped_batches.append(skipped)
+                    checkpoint_run(
+                        status="running",
+                        next_epoch=epoch,
+                        next_batch=batch_no + 1,
+                        epoch_stats=epoch_stats,
+                        n_seen=n_seen,
+                        n_correct=n_correct,
+                    )
+                    if log_fh:
+                        log_fh.write(json.dumps(skipped) + "\n")
+                        log_fh.flush()
+                    if log:
+                        print(
+                            f"[epoch {epoch} batch {batch_no}] skipped after "
+                            f"exhausted transient retries: {type(error).__name__}: "
+                            f"{error}",
+                            file=sys.stderr,
+                        )
+                    continue
+
                 epoch_stats.add(results)
                 n_seen += len(results)
                 n_correct += sum(r["correct"] for r in results)
-
-                wrong = [r for r in results if not r["correct"]]
-                right = [r for r in results if r["correct"]][: cfg.reflect_correct]
-                reflections = self._reflect_batch(wrong + right, memory_text)
-                for r in reflections:
-                    self.memory.vote(
-                        r.get("helpful_bullet_ids", []), r.get("harmful_bullet_ids", [])
-                    )
-
-                n_applied = (
-                    self.memory.apply_ops(
-                        curate(
-                            self.evolution_model,
-                            self.memory,
-                            reflections,
-                            max_ops=cfg.max_ops_per_batch,
-                            max_tokens=cfg.role_max_tokens,
-                        ),
-                        max_ops=cfg.max_ops_per_batch,
-                    )
-                    if reflections
-                    else 0
-                )
-                n_dropped = self.memory.refine(max_bullets=cfg.max_bullets)
                 batch_duration_s = round(time.perf_counter() - batch_started, 2)
 
                 rec = {
@@ -507,6 +555,7 @@ class SelfEvolvingLearner:
                     "epochs_completed": self.epochs_completed,
                     "last_utility": self.last_utility,
                     "target_reached": self.target_reached,
+                    "skipped_batches": self.skipped_batches,
                     "memory": self.memory.to_json(),
                 },
             )

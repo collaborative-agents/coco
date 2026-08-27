@@ -358,6 +358,9 @@ def test_evolve_deletes_period_images_only_after_success(tmp_path, monkeypatch):
 
     class FakeLearner:
         def __init__(self, **_kwargs):
+            config = _kwargs["config"]
+            assert config.gen_max_tokens == 2048
+            assert config.role_max_tokens == 4096
             self.memory = SectionedMemory()
             self.memory.apply_ops(
                 [
