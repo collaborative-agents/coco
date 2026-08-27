@@ -623,6 +623,9 @@ def prompt_to_text_with_metrics(
     image_paths: list[str] | None = None,
     operation: str | None = None,
     extra_body: dict | None = None,
+    max_tokens: int = 8192,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
+    | None = None,
 ) -> tuple[str, LLMCallMetrics]:
     """Convenience wrapper that also returns normalized call metrics."""
     messages = _build_prompt_messages(
@@ -633,9 +636,10 @@ def prompt_to_text_with_metrics(
     response, metrics = chat_completion(
         messages,
         model=model,
-        max_tokens=8192,
+        max_tokens=max_tokens,
         operation=operation,
         extra_body=extra_body,
+        reasoning_effort=reasoning_effort,
     )
     return _response_text(response), metrics
 
@@ -646,6 +650,9 @@ def prompt_to_text(
     user_prompt: str,
     image_paths: list[str] | None = None,
     extra_body: dict | None = None,
+    max_tokens: int = 8192,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
+    | None = None,
 ) -> str:
     """Convenience wrapper: system + user prompt (+ optional images) -> reply text.
 
@@ -658,5 +665,7 @@ def prompt_to_text(
         user_prompt=user_prompt,
         image_paths=image_paths,
         extra_body=extra_body,
+        max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
     )
     return response

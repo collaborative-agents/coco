@@ -134,6 +134,44 @@ describe('deferred suggestion context', () => {
     expect(editor).toHaveStyle({ height: '60px', overflowY: 'hidden' });
   });
 
+  it('does not send when Enter confirms text from an IME', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'send-chat-message') {
+        return { guidance: 'Response' };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    const editor = screen.getByPlaceholderText(/Ask the tutor/);
+    fireEvent.change(editor, { target: { value: 'English' } });
+
+    fireEvent.keyDown(editor, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(editor, { key: 'Enter', keyCode: 229 });
+
+    expect(editor).toHaveValue('English');
+    expect(invoke).not.toHaveBeenCalledWith(
+      'send-chat-message',
+      expect.anything(),
+    );
+
+    fireEvent.keyDown(editor, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'send-chat-message',
+        expect.objectContaining({ userText: 'English' }),
+      );
+    });
+  });
+
   it('shows editable model settings when no saved configuration is available', async () => {
     (window as any).electron = {
       ipcRenderer: {

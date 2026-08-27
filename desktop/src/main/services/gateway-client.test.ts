@@ -141,4 +141,35 @@ describe('CocoGatewayClient', () => {
       }),
     );
   });
+
+  it('delivers personalization lifecycle events to the dedicated endpoint', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValue(jsonResponse({ success: true }));
+    const client = new CocoGatewayClient({
+      gatewayUrl: 'https://study.example',
+      fetchImpl,
+    });
+    client.setAuthSession('token');
+
+    await client.deliver({
+      id: 'operation-run-1',
+      type: 'personalization_run',
+      createdAt: '2026-01-01T00:00:00Z',
+      payload: {
+        _id: 'event-1',
+        run_id: 'run-1',
+        job: 'evolve',
+        state: 'completed',
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://study.example/api/storage/personalization-run-events',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer token' }),
+      }),
+    );
+  });
 });

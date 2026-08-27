@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import log from 'electron-log';
@@ -10,6 +11,17 @@ export type PersonalizationRunOutcome =
   | 'no_work'
   | 'preempted'
   | 'failed';
+
+export interface PersonalizationRunEvent {
+  runId: string;
+  job: PersonalizationJob;
+  state: 'started' | PersonalizationRunOutcome;
+  occurredAt: number;
+  startedAt: number;
+  durationMs?: number;
+  exitCode?: number;
+  signal?: string;
+}
 
 export interface PersonalizationFatalError {
   job: PersonalizationJob;
@@ -115,6 +127,7 @@ export interface PersonalizationSchedulerOptions {
     job: PersonalizationJob,
     outcome: PersonalizationRunOutcome,
   ) => void;
+  onRunEvent?: (event: PersonalizationRunEvent) => void;
   onFatalError?: (error: PersonalizationFatalError) => void;
 }
 
@@ -366,6 +379,8 @@ export class PersonalizationScheduler {
   }
 
   private run(job: PersonalizationJob) {
+    const runId = randomUUID();
+    const startedAt = Date.now();
     const base = this.command(job);
     const useNice = process.platform !== 'win32';
     const command = useNice ? 'nice' : base.command;
@@ -386,10 +401,37 @@ export class PersonalizationScheduler {
     });
     this.active = child;
     this.activeJob = job;
-    this.activeStartedAt = Date.now();
+    this.activeStartedAt = startedAt;
     this.activeOutput = '';
     let recentStderr = '';
     let spawnErrorReported = false;
+    let terminalEventReported = false;
+    this.notifyRunEvent({
+      runId,
+      job,
+      state: 'started',
+      occurredAt: startedAt,
+      startedAt,
+    });
+    const reportTerminalEvent = (
+      state: PersonalizationRunOutcome,
+      exitCode?: number,
+      signal?: string,
+    ) => {
+      if (terminalEventReported) return;
+      terminalEventReported = true;
+      const occurredAt = Date.now();
+      this.notifyRunEvent({
+        runId,
+        job,
+        state,
+        occurredAt,
+        startedAt,
+        durationMs: Math.max(0, occurredAt - startedAt),
+        ...(typeof exitCode === 'number' ? { exitCode } : {}),
+        ...(signal ? { signal } : {}),
+      });
+    };
     child.stdout?.on('data', (chunk) => {
       const message = String(chunk).trim();
       if (message) {
@@ -415,6 +457,7 @@ export class PersonalizationScheduler {
         failureType: 'spawn_error',
         message: error.message,
       });
+      reportTerminalEvent('failed');
     });
     child.on('exit', (code, signal) => {
       if (this.active === child) this.active = null;
@@ -463,6 +506,11 @@ export class PersonalizationScheduler {
           ...(signal ? { signal } : {}),
         });
       }
+      reportTerminalEvent(
+        outcome,
+        typeof code === 'number' ? code : undefined,
+        signal ?? undefined,
+      );
       this.notifyJobFinished(job, outcome);
       if (!this.stopped) setTimeout(() => this.tick(), 1_000);
     });
@@ -481,6 +529,14 @@ export class PersonalizationScheduler {
       this.options.onFatalError?.(error);
     } catch (handlerError) {
       log.warn('[Personalization] fatal-error handler failed', handlerError);
+    }
+  }
+
+  private notifyRunEvent(event: PersonalizationRunEvent) {
+    try {
+      this.options.onRunEvent?.(event);
+    } catch (handlerError) {
+      log.warn('[Personalization] run-event handler failed', handlerError);
     }
   }
 

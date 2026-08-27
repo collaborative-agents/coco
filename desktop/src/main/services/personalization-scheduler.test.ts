@@ -1,7 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { PersonalizationScheduler } from './personalization-scheduler';
+import {
+  PersonalizationScheduler,
+  type PersonalizationRunEvent,
+} from './personalization-scheduler';
 
 describe('PersonalizationScheduler status', () => {
   let root: string;
@@ -221,5 +224,41 @@ describe('PersonalizationScheduler status', () => {
       message: 'worker failed',
       exitCode: 1,
     });
+  });
+
+  it('forwards every personalization run lifecycle state', () => {
+    const onRunEvent = jest.fn();
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot: path.join(root, 'personalization'),
+      memoryRoot: root,
+      model: 'provider/model',
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+      onRunEvent,
+    });
+    const schedulerInternals = scheduler as unknown as {
+      notifyRunEvent: (event: PersonalizationRunEvent) => void;
+    };
+    const states: PersonalizationRunEvent['state'][] = [
+      'started',
+      'completed',
+      'no_work',
+      'preempted',
+      'failed',
+    ];
+
+    states.forEach((state, index) => {
+      schedulerInternals.notifyRunEvent({
+        runId: 'run-1',
+        job: 'evolve',
+        state,
+        occurredAt: 1_000 + index,
+        startedAt: 1_000,
+      });
+    });
+
+    expect(onRunEvent.mock.calls.map(([event]) => event.state)).toEqual(states);
   });
 });

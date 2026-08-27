@@ -182,6 +182,8 @@ def test_prompt_to_text_with_metrics_propagates_tokens_and_latency(monkeypatch):
     def fake_completion(messages, *args, **kwargs):
         assert messages[0].role == "system"
         assert messages[1].role == "user"
+        assert kwargs["max_tokens"] == 2048
+        assert kwargs["reasoning_effort"] == "none"
         return (
             LiteLLMMessage(role="assistant", content=[TextContent(text="guidance")]),
             TokenUsage(
@@ -199,6 +201,8 @@ def test_prompt_to_text_with_metrics_propagates_tokens_and_latency(monkeypatch):
         system_prompt="You are helpful.",
         user_prompt="Help me.",
         operation="tutor",
+        max_tokens=2048,
+        reasoning_effort="none",
     )
 
     assert text == "guidance"

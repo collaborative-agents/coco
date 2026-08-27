@@ -31,7 +31,8 @@ export type GatewayOperationType =
   | 'session_end'
   | 'message'
   | 'interaction_batch'
-  | 'fatal_error';
+  | 'fatal_error'
+  | 'personalization_run';
 
 export interface GatewayQueuedOperation {
   id: string;
@@ -163,6 +164,13 @@ export class CocoGatewayClient {
       case 'fatal_error':
         await this.request(
           '/api/storage/fatal-errors',
+          'POST',
+          operation.payload,
+        );
+        return;
+      case 'personalization_run':
+        await this.request(
+          '/api/storage/personalization-run-events',
           'POST',
           operation.payload,
         );

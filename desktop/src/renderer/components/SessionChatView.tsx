@@ -2131,7 +2131,9 @@ export default function SessionChatView() {
     });
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    const isImeComposing =
+      e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
+    if (e.key === 'Enter' && !e.shiftKey && !isImeComposing) {
       e.preventDefault();
       handleSend();
     }

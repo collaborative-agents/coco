@@ -49,6 +49,7 @@ import type { TutorStreamEvent } from './services/tutor-stream';
 import {
   PersonalizationScheduler,
   type PersonalizationFatalError,
+  type PersonalizationRunEvent,
 } from './services/personalization-scheduler';
 import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { DailyMemoryDraftService } from './services/daily-memory-drafts';
@@ -459,7 +460,8 @@ const queueGatewayOperation = (
     | 'session_end'
     | 'message'
     | 'interaction_batch'
-    | 'fatal_error',
+    | 'fatal_error'
+    | 'personalization_run',
   payload: Record<string, unknown>,
 ) => {
   if (!gatewayOutbox) return;
@@ -533,6 +535,28 @@ const queueFatalError = (
       ? { restart_attempt: error.restartAttempt }
       : {}),
     ...(error.job ? { job: error.job } : {}),
+  });
+};
+
+const queuePersonalizationRunEvent = (event: PersonalizationRunEvent): void => {
+  const model = configuredModelForFatalError('personalization');
+  queueGatewayOperation('personalization_run', {
+    _id: randomUUID(),
+    run_id: event.runId,
+    occurred_at: new Date(event.occurredAt).toISOString(),
+    started_at: new Date(event.startedAt).toISOString(),
+    job: event.job,
+    state: event.state,
+    app_run_id: appRunId,
+    app_version: app.getVersion(),
+    ...(model ? { model } : {}),
+    ...(typeof event.durationMs === 'number'
+      ? { duration_ms: event.durationMs }
+      : {}),
+    ...(typeof event.exitCode === 'number'
+      ? { exit_code: event.exitCode }
+      : {}),
+    ...(event.signal ? { signal: event.signal } : {}),
   });
 };
 
@@ -4555,6 +4579,7 @@ const startObserver = () => {
       onFatalError: (error: PersonalizationFatalError) => {
         queueFatalError('personalization', error);
       },
+      onRunEvent: queuePersonalizationRunEvent,
       onJobFinished: (job, outcome) => {
         if (job !== 'evolve') return;
         if (outcome === 'completed') {
