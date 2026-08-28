@@ -51,8 +51,25 @@ const knowledgeRequests = {
       status: 'pending',
       created_at: '2026-08-27T12:00:00Z',
       updated_at: '2026-08-27T12:00:00Z',
+      answer: null as string | null,
     },
   ],
+  outgoing: [],
+};
+
+const ownerFriendships = {
+  friends: [
+    {
+      friendship_id: 'participant-1:participant-3',
+      participant_id: 'Participant-3',
+      status: 'accepted',
+      created_at: '2026-08-27T12:00:00Z',
+      updated_at: '2026-08-27T12:00:00Z',
+      unread_count: 0,
+      last_message: null,
+    },
+  ],
+  incoming: [],
   outgoing: [],
 };
 
@@ -113,7 +130,11 @@ describe('FriendsView', () => {
   });
 
   it('asks a friend for a consent-gated knowledge answer', async () => {
-    const invoke = jest.fn((channel: string) => {
+    let currentKnowledgeRequests: {
+      incoming: typeof knowledgeRequests.incoming;
+      outgoing: typeof knowledgeRequests.incoming;
+    } = { incoming: [], outgoing: [] };
+    const invoke = jest.fn((channel: string, ...args: string[]) => {
       if (channel === 'social-list-friendships') {
         return Promise.resolve(friendships);
       }
@@ -121,7 +142,20 @@ describe('FriendsView', () => {
         return Promise.resolve({ messages: [] });
       }
       if (channel === 'social-list-knowledge-requests') {
-        return Promise.resolve({ incoming: [], outgoing: [] });
+        return Promise.resolve(currentKnowledgeRequests);
+      }
+      if (channel === 'social-request-knowledge') {
+        currentKnowledgeRequests = {
+          incoming: [],
+          outgoing: [
+            {
+              ...knowledgeRequests.incoming[0],
+              requester_id: 'Participant-1',
+              owner_id: args[0],
+              question: args[1],
+            },
+          ],
+        };
       }
       return Promise.resolve({ success: true });
     });
@@ -155,18 +189,37 @@ describe('FriendsView', () => {
     expect(
       await screen.findByText('Question sent to Participant-2 for approval.'),
     ).toBeInTheDocument();
+    expect(screen.getByText('✦ Coco memory request')).toBeInTheDocument();
+    expect(screen.getByText('What helped you focus?')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for approval')).toBeInTheDocument();
   });
 
   it('generates a local draft and sends the owner-edited answer', async () => {
-    const invoke = jest.fn((channel: string) => {
+    let currentKnowledgeRequests = knowledgeRequests;
+    const invoke = jest.fn((channel: string, ...args: string[]) => {
       if (channel === 'social-list-friendships') {
-        return Promise.resolve({ friends: [], incoming: [], outgoing: [] });
+        return Promise.resolve(ownerFriendships);
+      }
+      if (channel === 'social-list-messages') {
+        return Promise.resolve({ messages: [] });
       }
       if (channel === 'social-list-knowledge-requests') {
-        return Promise.resolve(knowledgeRequests);
+        return Promise.resolve(currentKnowledgeRequests);
       }
       if (channel === 'social-draft-knowledge-answer') {
         return Promise.resolve({ answer: 'Use the tutor draft.' });
+      }
+      if (channel === 'social-answer-knowledge-request') {
+        currentKnowledgeRequests = {
+          incoming: [
+            {
+              ...knowledgeRequests.incoming[0],
+              status: 'answered',
+              answer: args[1],
+            },
+          ],
+          outgoing: [],
+        };
       }
       return Promise.resolve({ success: true });
     });
@@ -178,6 +231,12 @@ describe('FriendsView', () => {
     });
 
     render(<FriendsView onClose={jest.fn()} />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /Participant-3.*Coco request/i,
+      }),
+    );
+    expect(screen.getByText('✦ Coco memory request')).toBeInTheDocument();
     expect(
       await screen.findByText('What study routine worked best for you?'),
     ).toBeInTheDocument();
@@ -200,6 +259,13 @@ describe('FriendsView', () => {
         'I edited this before sharing it.',
       ),
     );
+    expect(await screen.findByText('Answer sent')).toBeInTheDocument();
+    expect(
+      screen.getByText('I edited this before sharing it.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Answer to Participant-3'),
+    ).not.toBeInTheDocument();
   });
 
   it('shows background unread messages and requests on the Friends button', () => {

@@ -46,8 +46,14 @@ interface KnowledgeRequest {
   created_at: string;
   updated_at: string;
   answer?: string | null;
+  answered_at?: string | null;
   answer_read_at?: string | null;
+  declined_at?: string | null;
 }
+
+type ConversationTimelineItem =
+  | { kind: 'message'; timestamp: string; message: DirectMessage }
+  | { kind: 'knowledge'; timestamp: string; request: KnowledgeRequest };
 
 interface KnowledgeRequestList {
   incoming: KnowledgeRequest[];
@@ -207,11 +213,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
   },
   actions: { display: 'flex', gap: 5 },
-  stackedCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'stretch',
-  },
   question: {
     color: '#374151',
     fontSize: 12.5,
@@ -233,6 +234,48 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: `1px solid ${BORDER}`,
     padding: 10,
     background: '#f8fafc',
+  },
+  knowledgeTimelineCard: {
+    width: '94%',
+    boxSizing: 'border-box',
+    alignSelf: 'center',
+    border: '1px solid #bfdbfe',
+    borderLeft: `4px solid ${ACCENT}`,
+    borderRadius: 11,
+    padding: '10px 11px',
+    background: '#eff6ff',
+    boxShadow: '0 1px 2px rgba(32, 74, 121, 0.08)',
+  },
+  knowledgeTimelineHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  knowledgeLabel: {
+    color: ACCENT,
+    fontSize: 10.5,
+    fontWeight: 700,
+    letterSpacing: '0.02em',
+  },
+  knowledgeStatus: {
+    borderRadius: 10,
+    padding: '2px 7px',
+    background: '#dbeafe',
+    color: ACCENT,
+    fontSize: 9.5,
+    fontWeight: 700,
+  },
+  knowledgeFriendCue: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    borderRadius: 8,
+    padding: '2px 6px',
+    background: '#dbeafe',
+    color: ACCENT,
+    fontSize: 9.5,
+    fontWeight: 700,
   },
   empty: {
     padding: '18px 8px',
@@ -338,10 +381,14 @@ function knowledgeRequestId(request: KnowledgeRequest): string {
   return request._id;
 }
 
-function knowledgeRequestStatus(request: KnowledgeRequest): string {
-  if (request.status === 'pending') return 'Waiting for approval';
-  if (request.status === 'declined') return 'They chose not to answer';
-  return 'Answered';
+function sameParticipant(first: string, second: string): boolean {
+  return first.trim().toLowerCase() === second.trim().toLowerCase();
+}
+
+function directMessageId(message: DirectMessage): string {
+  // Mongo-compatible API payloads use `_id` consistently.
+  // eslint-disable-next-line no-underscore-dangle
+  return message._id;
 }
 
 export function FriendsButton({
@@ -515,10 +562,13 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
   }, [messages]);
 
   useEffect(() => {
-    if (selectedFriend) return;
+    if (!selectedFriend) return;
     knowledgeRequests.outgoing
       .filter(
-        (request) => request.status === 'answered' && !request.answer_read_at,
+        (request) =>
+          request.status === 'answered' &&
+          !request.answer_read_at &&
+          sameParticipant(request.owner_id, selectedFriend.participant_id),
       )
       .forEach((request) => {
         window.electron?.ipcRenderer
@@ -526,6 +576,18 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
             'social-mark-knowledge-answer-read',
             knowledgeRequestId(request),
           )
+          .then(() => {
+            const readAt = new Date().toISOString();
+            setKnowledgeRequests((current) => ({
+              ...current,
+              outgoing: current.outgoing.map((item) =>
+                knowledgeRequestId(item) === knowledgeRequestId(request)
+                  ? { ...item, answer_read_at: readAt }
+                  : item,
+              ),
+            }));
+            return undefined;
+          })
           .catch(() => undefined);
       });
   }, [knowledgeRequests.outgoing, selectedFriend]);
@@ -691,6 +753,30 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
 
   if (selectedFriend) {
     const normalizedFriendId = selectedFriend.participant_id.toLowerCase();
+    const conversationKnowledgeRequests = [
+      ...knowledgeRequests.incoming.filter((request) =>
+        sameParticipant(request.requester_id, selectedFriend.participant_id),
+      ),
+      ...knowledgeRequests.outgoing.filter((request) =>
+        sameParticipant(request.owner_id, selectedFriend.participant_id),
+      ),
+    ];
+    const timelineItems: ConversationTimelineItem[] = [
+      ...messages.map((message) => ({
+        kind: 'message' as const,
+        timestamp: message.created_at,
+        message,
+      })),
+      ...conversationKnowledgeRequests.map((request) => ({
+        kind: 'knowledge' as const,
+        timestamp: request.updated_at,
+        request,
+      })),
+    ].sort(
+      (first, second) =>
+        new Date(first.timestamp).getTime() -
+        new Date(second.timestamp).getTime(),
+    );
     return (
       <div style={styles.root}>
         <div style={styles.header}>
@@ -767,17 +853,179 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
             </form>
           )}
           <div style={styles.messageList} ref={messageListRef}>
-            {messages.length === 0 && (
+            {timelineItems.length === 0 && (
               <div style={styles.empty}>No messages yet. Say hello.</div>
             )}
-            {messages.map((message) => {
+            {timelineItems.map((item) => {
+              if (item.kind === 'knowledge') {
+                const { request } = item;
+                const requestId = knowledgeRequestId(request);
+                const isIncoming = sameParticipant(
+                  request.requester_id,
+                  selectedFriend.participant_id,
+                );
+                const isEditing = editingKnowledgeId === requestId;
+                const isDrafting = draftingKnowledgeId === requestId;
+                const isSending = knowledgeSendingId === requestId;
+                let status = 'Waiting for approval';
+                if (request.status === 'answered') {
+                  status = isIncoming ? 'Answer sent' : 'Coco replied';
+                } else if (request.status === 'declined') {
+                  status = isIncoming ? 'You declined' : 'Declined';
+                } else if (isIncoming) {
+                  status = 'Needs your approval';
+                }
+                return (
+                  <div key={requestId} style={styles.knowledgeTimelineCard}>
+                    <div style={styles.knowledgeTimelineHeader}>
+                      <span style={styles.knowledgeLabel}>
+                        ✦ Coco memory request
+                      </span>
+                      <span style={styles.knowledgeStatus}>{status}</span>
+                    </div>
+                    <div style={styles.question}>{request.question}</div>
+
+                    {request.status === 'pending' &&
+                      isIncoming &&
+                      !isEditing && (
+                        <>
+                          <div
+                            style={{
+                              ...styles.preview,
+                              marginTop: 6,
+                              whiteSpace: 'normal',
+                            }}
+                          >
+                            Approve to let Coco retrieve relevant memory for a
+                            draft. Nothing is shared until you review and send
+                            it.
+                          </div>
+                          <div style={{ ...styles.actions, marginTop: 8 }}>
+                            <button
+                              type="button"
+                              style={styles.primaryButton}
+                              disabled={isDrafting || isSending}
+                              onClick={() => draftKnowledgeAnswer(request)}
+                            >
+                              {isDrafting ? 'Drafting…' : 'Approve & draft'}
+                            </button>
+                            <button
+                              type="button"
+                              style={styles.secondaryButton}
+                              disabled={isDrafting || isSending}
+                              onClick={() => declineKnowledgeRequest(request)}
+                            >
+                              {isSending ? 'Declining…' : 'Decline'}
+                            </button>
+                          </div>
+                        </>
+                      )}
+
+                    {request.status === 'pending' &&
+                      isIncoming &&
+                      isEditing && (
+                        <>
+                          <textarea
+                            aria-label={`Answer to ${request.requester_id}`}
+                            style={{
+                              ...styles.textarea,
+                              width: '100%',
+                              boxSizing: 'border-box',
+                              marginTop: 8,
+                            }}
+                            maxLength={4_000}
+                            value={knowledgeAnswerDraft}
+                            onChange={(event) =>
+                              setKnowledgeAnswerDraft(event.target.value)
+                            }
+                          />
+                          <div
+                            style={{
+                              ...styles.preview,
+                              marginTop: 5,
+                              whiteSpace: 'normal',
+                            }}
+                          >
+                            Review and edit this draft. Only the answer you send
+                            is shared.
+                          </div>
+                          <div style={{ ...styles.actions, marginTop: 8 }}>
+                            <button
+                              type="button"
+                              style={styles.primaryButton}
+                              disabled={
+                                !knowledgeAnswerDraft.trim() || isSending
+                              }
+                              onClick={() => sendKnowledgeAnswer(request)}
+                            >
+                              {isSending ? 'Sending…' : 'Send answer'}
+                            </button>
+                            <button
+                              type="button"
+                              style={styles.secondaryButton}
+                              disabled={isSending}
+                              onClick={() => {
+                                setEditingKnowledgeId('');
+                                setKnowledgeAnswerDraft('');
+                              }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              style={styles.secondaryButton}
+                              disabled={isSending}
+                              onClick={() => declineKnowledgeRequest(request)}
+                            >
+                              Decline
+                            </button>
+                          </div>
+                        </>
+                      )}
+
+                    {request.status === 'pending' && !isIncoming && (
+                      <div style={{ ...styles.preview, marginTop: 6 }}>
+                        Your friend will decide whether Coco may use their
+                        memory.
+                      </div>
+                    )}
+
+                    {request.status === 'answered' && request.answer && (
+                      <>
+                        <div style={{ ...styles.preview, marginTop: 7 }}>
+                          {isIncoming
+                            ? 'Your approved reply'
+                            : `${selectedFriend.participant_id}'s approved reply`}
+                        </div>
+                        <div
+                          style={{
+                            ...styles.answer,
+                            border: '1px solid #dbeafe',
+                            background: '#fff',
+                          }}
+                        >
+                          {request.answer}
+                        </div>
+                      </>
+                    )}
+
+                    {request.status === 'declined' && (
+                      <div style={{ ...styles.preview, marginTop: 6 }}>
+                        No memory or answer was shared.
+                      </div>
+                    )}
+                    <div style={{ ...styles.timestamp, textAlign: 'right' }}>
+                      {messageTime(request.updated_at)}
+                    </div>
+                  </div>
+                );
+              }
+
+              const { message } = item;
               const fromFriend = message.sender_id === normalizedFriendId;
-              // Mongo-compatible API payloads use `_id` consistently.
-              // eslint-disable-next-line no-underscore-dangle
-              const messageId = message._id;
               return (
                 <div
-                  key={messageId}
+                  key={directMessageId(message)}
                   style={fromFriend ? styles.friendMessage : styles.ownMessage}
                 >
                   <div
@@ -859,110 +1107,6 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
         {notice && <div style={styles.success}>{notice}</div>}
         {loading && <div style={styles.empty}>Loading friends…</div>}
 
-        {!loading &&
-          knowledgeRequests.incoming.some(
-            (request) => request.status === 'pending',
-          ) && (
-            <>
-              <div style={styles.sectionTitle}>Questions for your Coco</div>
-              {knowledgeRequests.incoming
-                .filter((request) => request.status === 'pending')
-                .map((request) => {
-                  const requestId = knowledgeRequestId(request);
-                  const isEditing = editingKnowledgeId === requestId;
-                  const isDrafting = draftingKnowledgeId === requestId;
-                  const isSending = knowledgeSendingId === requestId;
-                  return (
-                    <div
-                      key={requestId}
-                      style={{ ...styles.card, ...styles.stackedCard }}
-                    >
-                      <span style={styles.preview}>
-                        From {request.requester_id}
-                      </span>
-                      <span style={{ ...styles.question, marginTop: 4 }}>
-                        {request.question}
-                      </span>
-                      {!isEditing && (
-                        <span style={{ ...styles.preview, marginTop: 5 }}>
-                          Approve to let Coco use your private local memory for
-                          a draft. Your raw memory and unsent draft are never
-                          sent to your friend or the study server.
-                        </span>
-                      )}
-                      {isEditing ? (
-                        <>
-                          <textarea
-                            aria-label={`Answer to ${request.requester_id}`}
-                            style={{ ...styles.textarea, marginTop: 8 }}
-                            maxLength={4_000}
-                            value={knowledgeAnswerDraft}
-                            onChange={(event) =>
-                              setKnowledgeAnswerDraft(event.target.value)
-                            }
-                          />
-                          <span style={{ ...styles.preview, marginTop: 5 }}>
-                            Review and edit this draft. Only the answer you send
-                            is shared.
-                          </span>
-                          <span style={{ ...styles.actions, marginTop: 8 }}>
-                            <button
-                              type="button"
-                              style={styles.primaryButton}
-                              disabled={
-                                !knowledgeAnswerDraft.trim() || isSending
-                              }
-                              onClick={() => sendKnowledgeAnswer(request)}
-                            >
-                              {isSending ? 'Sending…' : 'Send answer'}
-                            </button>
-                            <button
-                              type="button"
-                              style={styles.secondaryButton}
-                              disabled={isSending}
-                              onClick={() => {
-                                setEditingKnowledgeId('');
-                                setKnowledgeAnswerDraft('');
-                              }}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              style={styles.secondaryButton}
-                              disabled={isSending}
-                              onClick={() => declineKnowledgeRequest(request)}
-                            >
-                              Decline
-                            </button>
-                          </span>
-                        </>
-                      ) : (
-                        <span style={{ ...styles.actions, marginTop: 8 }}>
-                          <button
-                            type="button"
-                            style={styles.primaryButton}
-                            disabled={isDrafting || isSending}
-                            onClick={() => draftKnowledgeAnswer(request)}
-                          >
-                            {isDrafting ? 'Drafting…' : 'Approve & draft'}
-                          </button>
-                          <button
-                            type="button"
-                            style={styles.secondaryButton}
-                            disabled={isDrafting || isSending}
-                            onClick={() => declineKnowledgeRequest(request)}
-                          >
-                            {isSending ? 'Declining…' : 'Decline'}
-                          </button>
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-            </>
-          )}
-
         {!loading && friendships.incoming.length > 0 && (
           <>
             <div style={styles.sectionTitle}>Requests</div>
@@ -1006,29 +1150,87 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
                 Add a study participant to start messaging.
               </div>
             ) : (
-              friendships.friends.map((friend) => (
-                <button
-                  key={friend.friendship_id}
-                  type="button"
-                  style={{ ...styles.card, ...styles.friendButton }}
-                  onClick={() => openConversation(friend)}
-                >
-                  <span style={styles.avatar}>
-                    {participantInitial(friend.participant_id)}
-                  </span>
-                  <span style={styles.cardText}>
-                    <span style={styles.participant}>
-                      {friend.participant_id}
+              friendships.friends.map((friend) => {
+                const incomingKnowledgeRequests =
+                  knowledgeRequests.incoming.filter((request) =>
+                    sameParticipant(
+                      request.requester_id,
+                      friend.participant_id,
+                    ),
+                  );
+                const outgoingKnowledgeRequests =
+                  knowledgeRequests.outgoing.filter((request) =>
+                    sameParticipant(request.owner_id, friend.participant_id),
+                  );
+                const pendingKnowledgeRequests =
+                  incomingKnowledgeRequests.filter(
+                    (request) => request.status === 'pending',
+                  );
+                const unreadKnowledgeAnswers = outgoingKnowledgeRequests.filter(
+                  (request) =>
+                    request.status === 'answered' && !request.answer_read_at,
+                );
+                const latestKnowledgeRequest = [
+                  ...incomingKnowledgeRequests,
+                  ...outgoingKnowledgeRequests,
+                ].sort(
+                  (first, second) =>
+                    new Date(second.updated_at).getTime() -
+                    new Date(first.updated_at).getTime(),
+                )[0];
+                const knowledgeAttention =
+                  pendingKnowledgeRequests.length +
+                  unreadKnowledgeAnswers.length;
+                const totalAttention =
+                  (friend.unread_count || 0) + knowledgeAttention;
+                let preview = friend.last_message?.content || 'No messages yet';
+                let showKnowledgeCue = false;
+                if (pendingKnowledgeRequests[0]) {
+                  preview = `Coco request: ${pendingKnowledgeRequests[0].question}`;
+                  showKnowledgeCue = true;
+                } else if (unreadKnowledgeAnswers[0]) {
+                  preview = `New Coco reply: ${unreadKnowledgeAnswers[0].question}`;
+                  showKnowledgeCue = true;
+                } else if (
+                  latestKnowledgeRequest &&
+                  (!friend.last_message ||
+                    new Date(latestKnowledgeRequest.updated_at).getTime() >=
+                      new Date(friend.last_message.created_at).getTime())
+                ) {
+                  preview = `Coco ${latestKnowledgeRequest.status}: ${latestKnowledgeRequest.question}`;
+                  showKnowledgeCue = true;
+                }
+                return (
+                  <button
+                    key={friend.friendship_id}
+                    type="button"
+                    style={{
+                      ...styles.card,
+                      ...styles.friendButton,
+                      ...(showKnowledgeCue
+                        ? { borderColor: '#bfdbfe', background: '#f8fbff' }
+                        : {}),
+                    }}
+                    onClick={() => openConversation(friend)}
+                  >
+                    <span style={styles.avatar}>
+                      {participantInitial(friend.participant_id)}
                     </span>
-                    <span style={styles.preview}>
-                      {friend.last_message?.content || 'No messages yet'}
+                    <span style={styles.cardText}>
+                      <span style={styles.participant}>
+                        {friend.participant_id}
+                      </span>
+                      <span style={styles.preview}>{preview}</span>
                     </span>
-                  </span>
-                  {(friend.unread_count || 0) > 0 && (
-                    <span style={styles.badge}>{friend.unread_count}</span>
-                  )}
-                </button>
-              ))
+                    {showKnowledgeCue && (
+                      <span style={styles.knowledgeFriendCue}>✦ Coco</span>
+                    )}
+                    {totalAttention > 0 && (
+                      <span style={styles.badge}>{totalAttention}</span>
+                    )}
+                  </button>
+                );
+              })
             )}
           </>
         )}
@@ -1047,29 +1249,6 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
                   </span>
                   <span style={styles.preview}>Waiting for acceptance</span>
                 </span>
-              </div>
-            ))}
-          </>
-        )}
-
-        {!loading && knowledgeRequests.outgoing.length > 0 && (
-          <>
-            <div style={styles.sectionTitle}>Questions you asked</div>
-            {knowledgeRequests.outgoing.map((request) => (
-              <div
-                key={knowledgeRequestId(request)}
-                style={{ ...styles.card, ...styles.stackedCard }}
-              >
-                <span style={styles.preview}>For {request.owner_id}</span>
-                <span style={{ ...styles.question, marginTop: 4 }}>
-                  {request.question}
-                </span>
-                <span style={{ ...styles.preview, marginTop: 5 }}>
-                  {knowledgeRequestStatus(request)}
-                </span>
-                {request.status === 'answered' && request.answer && (
-                  <span style={styles.answer}>{request.answer}</span>
-                )}
               </div>
             ))}
           </>

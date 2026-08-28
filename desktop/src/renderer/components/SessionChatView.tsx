@@ -2396,6 +2396,35 @@ export default function SessionChatView() {
       {showFriends && <FriendsView onClose={() => setShowFriends(false)} />}
       {showSettings && (
         <div style={S.settings}>
+          <div style={S.groupLabel}>Desktop</div>
+          <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
+            <input
+              id="hide-desktop-avatar"
+              type="checkbox"
+              checked={editHideAvatar}
+              disabled={avatarSaving}
+              onChange={(e) => void updateAvatarVisibility(e.target.checked)}
+            />
+            <span>
+              <strong style={S.toggleTitle}>Hide desktop avatar</strong>
+              <span style={S.toggleHelp}>
+                Keep Coco in the system tray and show proactive suggestions as
+                notifications.
+              </span>
+            </span>
+          </label>
+          {avatarSaving && (
+            <div style={{ ...S.helpText, marginTop: -8 }}>Applying…</div>
+          )}
+          {avatarSaveError && (
+            <div
+              style={{ color: '#b91c1c', fontSize: 11.5, margin: '-8px 0 12px' }}
+            >
+              {avatarSaveError}
+            </div>
+          )}
+          <div style={S.sectionDivider} />
+
           <TrainingScreenshotRetentionNotice
             info={trainingScreenshotRetention}
             onOpenFolder={(folderPath) =>
@@ -2858,33 +2887,6 @@ export default function SessionChatView() {
                 </div>
               )}
               <div style={S.sectionDivider} />
-          <div style={S.groupLabel}>Desktop</div>
-          <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
-            <input
-              id="hide-desktop-avatar"
-              type="checkbox"
-              checked={editHideAvatar}
-              disabled={avatarSaving}
-              onChange={(e) => void updateAvatarVisibility(e.target.checked)}
-            />
-            <span>
-              <strong style={S.toggleTitle}>Hide desktop avatar</strong>
-              <span style={S.toggleHelp}>
-                Keep Coco in the system tray and show proactive suggestions as
-                notifications.
-              </span>
-            </span>
-          </label>
-          {avatarSaving && (
-            <div style={{ ...S.helpText, marginTop: -8 }}>Applying…</div>
-          )}
-          {avatarSaveError && (
-            <div style={{ color: '#b91c1c', fontSize: 11.5, margin: '-8px 0 12px' }}>
-              {avatarSaveError}
-            </div>
-          )}
-
-          <div style={S.sectionDivider} />
 
           <div style={S.groupLabel}>Agent mode</div>
           <div style={S.chips}>
