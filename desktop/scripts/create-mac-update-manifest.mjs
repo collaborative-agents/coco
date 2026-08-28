@@ -39,9 +39,9 @@ export default function createMacUpdateManifest({
   const zipPaths = collectFiles(artifactsDir).filter((path) =>
     /-mac\.zip$/.test(basename(path)),
   );
-  if (zipPaths.length !== 2) {
+  if (zipPaths.length < 1 || zipPaths.length > 2) {
     throw new Error(
-      `Expected exactly two macOS update ZIPs (arm64 and x64), found ${zipPaths.length}.`,
+      `Expected one or two macOS update ZIPs (arm64 and/or x64), found ${zipPaths.length}.`,
     );
   }
 
@@ -73,8 +73,9 @@ export default function createMacUpdateManifest({
     })
     .sort((left, right) => Number(left.arm64) - Number(right.arm64));
 
-  if (files.filter((file) => file.arm64).length !== 1) {
-    throw new Error('Expected one arm64 ZIP and one x64 ZIP.');
+  const arm64Count = files.filter((file) => file.arm64).length;
+  if (arm64Count > 1 || files.length - arm64Count > 1) {
+    throw new Error('Expected at most one arm64 ZIP and one x64 ZIP.');
   }
 
   const legacyFile = files.find((file) => !file.arm64) ?? files[0];

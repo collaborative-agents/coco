@@ -39,6 +39,34 @@ test('creates one manifest for arm64 and x64 differential updates', () => {
   assert.equal((manifest.match(/sha512:/g) ?? []).length, 3);
 });
 
+test('creates a manifest when only the arm64 update is packaged', () => {
+  const { root, x64Zip } = fixture();
+  unlinkSync(x64Zip);
+  unlinkSync(`${x64Zip}.blockmap`);
+  const outputPath = join(root, 'latest-mac.yml');
+
+  createMacUpdateManifest({ artifactsDir: root, outputPath, version: '0.1.1' });
+
+  const manifest = readFileSync(outputPath, 'utf8');
+  assert.match(manifest, /coco-0\.1\.1-arm64-mac\.zip/);
+  assert.doesNotMatch(manifest, /coco-0\.1\.1-mac\.zip/);
+  assert.equal((manifest.match(/sha512:/g) ?? []).length, 2);
+});
+
+test('creates a manifest when only the x64 update is packaged', () => {
+  const { root, armZip } = fixture();
+  unlinkSync(armZip);
+  unlinkSync(`${armZip}.blockmap`);
+  const outputPath = join(root, 'latest-mac.yml');
+
+  createMacUpdateManifest({ artifactsDir: root, outputPath, version: '0.1.1' });
+
+  const manifest = readFileSync(outputPath, 'utf8');
+  assert.doesNotMatch(manifest, /coco-0\.1\.1-arm64-mac\.zip/);
+  assert.match(manifest, /coco-0\.1\.1-mac\.zip/);
+  assert.equal((manifest.match(/sha512:/g) ?? []).length, 2);
+});
+
 test('rejects a release when a differential blockmap is missing', () => {
   const { root, x64Zip } = fixture();
   unlinkSync(`${x64Zip}.blockmap`);

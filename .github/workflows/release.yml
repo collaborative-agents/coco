@@ -12,6 +12,21 @@ on:
         description: "What's new in this version (Markdown supported)"
         required: true
         type: string
+      package_macos_arm64:
+        description: "Package macOS for Apple Silicon"
+        required: true
+        default: true
+        type: boolean
+      package_macos_x64:
+        description: "Package macOS for Intel"
+        required: true
+        default: true
+        type: boolean
+      package_windows:
+        description: "Package Windows for x64"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -58,9 +73,33 @@ jobs:
       - name: Test macOS update manifest tooling
         run: node --test desktop/scripts/create-mac-update-manifest.test.mjs
 
-      - id: matrix
-        run: |
-          echo 'result={"include":[{"os":"macos-15","platform":"macos","arch":"arm64"},{"os":"macos-15-intel","platform":"macos-x64","arch":"x64"},{"os":"windows-latest","platform":"windows","arch":"x64"}]}' >> $GITHUB_OUTPUT
+      - name: Build package matrix
+        id: matrix
+        uses: actions/github-script@v7
+        env:
+          PACKAGE_MACOS_ARM64: ${{ inputs.package_macos_arm64 }}
+          PACKAGE_MACOS_X64: ${{ inputs.package_macos_x64 }}
+          PACKAGE_WINDOWS: ${{ inputs.package_windows }}
+        with:
+          script: |
+            const targets = [];
+
+            if (process.env.PACKAGE_MACOS_ARM64 === "true") {
+              targets.push({ os: "macos-15", platform: "macos", arch: "arm64" });
+            }
+            if (process.env.PACKAGE_MACOS_X64 === "true") {
+              targets.push({ os: "macos-15-intel", platform: "macos-x64", arch: "x64" });
+            }
+            if (process.env.PACKAGE_WINDOWS === "true") {
+              targets.push({ os: "windows-latest", platform: "windows", arch: "x64" });
+            }
+
+            if (targets.length === 0) {
+              core.setFailed("Select at least one platform to package");
+              return;
+            }
+
+            return { include: targets };
 
   package:
     needs: prepare
@@ -277,6 +316,7 @@ jobs:
           path: artifacts
 
       - name: Create combined macOS update manifest
+        if: ${{ inputs.package_macos_arm64 || inputs.package_macos_x64 }}
         env:
           RELEASE_VERSION: ${{ github.event.inputs.version }}
         run: |
