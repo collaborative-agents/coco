@@ -402,6 +402,57 @@ def test_daily_review_is_stateless_and_requires_todays_memory(monkeypatch):
     assert ts._chat_messages == existing_messages
 
 
+def test_knowledge_answer_is_stateless_and_uses_normal_memory_tools(monkeypatch):
+    ts = _make_tutor_system()
+    ts.set_memory("Uses VS Code and prefers a small extension set.")
+    ts._chat_messages = [{"role": "user", "content": "Private chat history"}]
+    captured = {}
+    metrics = {"operation": "knowledge_answer", "tool_calls": []}
+
+    class FakeMemoryAgent:
+        def __init__(
+            self,
+            model,
+            prompt,
+            enable_memory_tool=True,
+            enable_screen_tool=True,
+        ):
+            captured.update(
+                {
+                    "model": model,
+                    "prompt": prompt,
+                    "enable_memory_tool": enable_memory_tool,
+                    "enable_screen_tool": enable_screen_tool,
+                }
+            )
+
+        def chat_with_metrics(self, messages, image_paths=None, operation="tutor"):
+            captured["messages"] = messages
+            captured["image_paths"] = image_paths
+            captured["operation"] = operation
+            return "I use VS Code with a small extension set.", metrics
+
+    monkeypatch.setattr("proactive_tutor.tutor_system.TutorAgent", FakeMemoryAgent)
+    existing_messages = list(ts._chat_messages)
+
+    answer, returned_metrics = ts.generate_knowledge_answer_with_metrics(
+        "Which editor setup works for you?"
+    )
+
+    assert answer == "I use VS Code with a small extension set."
+    assert returned_metrics is metrics
+    serialized = json.dumps(captured["messages"])
+    assert "Uses VS Code" in serialized
+    assert "Which editor setup" in serialized
+    assert "normal memory tools" in serialized
+    assert "Private chat history" not in serialized
+    assert captured["enable_memory_tool"] is True
+    assert captured["enable_screen_tool"] is False
+    assert captured["operation"] == "knowledge_answer"
+    assert captured["image_paths"] is None
+    assert ts._chat_messages == existing_messages
+
+
 if __name__ == "__main__":
     import sys
 

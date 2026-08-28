@@ -434,6 +434,7 @@ class TutorAgent:
         messages: list[dict[str, Any]],
         image_paths=None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        operation: str = "tutor",
     ) -> tuple[str, LLMCallMetrics]:
         """Run a conventional chat while preserving each message boundary."""
         working_messages = self._prepare_initial_chat_messages(messages)
@@ -441,7 +442,7 @@ class TutorAgent:
             working_messages,
             image_paths=image_paths,
             on_event=on_event,
-            operation="tutor",
+            operation=operation,
             max_tool_calls=None,
         )
 

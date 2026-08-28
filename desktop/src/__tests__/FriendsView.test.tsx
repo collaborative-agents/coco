@@ -1,0 +1,245 @@
+import React from 'react';
+import '@testing-library/jest-dom';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
+import FriendsView, { FriendsButton } from '../renderer/components/FriendsView';
+import type { ElectronHandler } from '../main/preload';
+
+const friendships = {
+  friends: [
+    {
+      friendship_id: 'participant-1:participant-2',
+      participant_id: 'Participant-2',
+      status: 'accepted',
+      created_at: '2026-08-27T12:00:00Z',
+      updated_at: '2026-08-27T12:00:00Z',
+      unread_count: 1,
+      last_message: {
+        _id: 'message-1',
+        sender_id: 'participant-2',
+        recipient_id: 'participant-1',
+        content: 'Want to compare study notes?',
+        created_at: '2026-08-27T12:01:00Z',
+      },
+    },
+  ],
+  incoming: [
+    {
+      friendship_id: 'participant-1:participant-3',
+      participant_id: 'Participant-3',
+      status: 'pending',
+      direction: 'incoming',
+      created_at: '2026-08-27T12:00:00Z',
+      updated_at: '2026-08-27T12:00:00Z',
+    },
+  ],
+  outgoing: [],
+};
+
+const knowledgeRequests = {
+  incoming: [
+    {
+      _id: 'knowledge-1',
+      requester_id: 'Participant-3',
+      owner_id: 'Participant-1',
+      question: 'What study routine worked best for you?',
+      status: 'pending',
+      created_at: '2026-08-27T12:00:00Z',
+      updated_at: '2026-08-27T12:00:00Z',
+    },
+  ],
+  outgoing: [],
+};
+
+describe('FriendsView', () => {
+  it('accepts requests, opens a conversation, and sends messages', async () => {
+    const invoke = jest.fn((channel: string) => {
+      if (channel === 'social-list-friendships') {
+        return Promise.resolve(friendships);
+      }
+      if (channel === 'social-list-messages') {
+        return Promise.resolve({
+          messages: [friendships.friends[0].last_message],
+        });
+      }
+      if (channel === 'social-list-knowledge-requests') {
+        return Promise.resolve({ incoming: [], outgoing: [] });
+      }
+      return Promise.resolve({ success: true });
+    });
+    const on = jest.fn(() => jest.fn());
+    Object.defineProperty(window, 'electron', {
+      configurable: true,
+      value: {
+        ipcRenderer: { invoke, on },
+      } as unknown as ElectronHandler,
+    });
+
+    render(<FriendsView onClose={jest.fn()} />);
+
+    expect(await screen.findByText('Wants to add you')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'social-accept-friend',
+        'participant-1:participant-3',
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Participant-2.*Want to compare/i }),
+    );
+    expect(
+      await screen.findByText('Want to compare study notes?'),
+    ).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith('social-mark-read', 'Participant-2');
+
+    fireEvent.change(screen.getByLabelText('Message Participant-2'), {
+      target: { value: 'Yes, sounds good.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'social-send-message',
+        'Participant-2',
+        'Yes, sounds good.',
+      ),
+    );
+  });
+
+  it('asks a friend for a consent-gated knowledge answer', async () => {
+    const invoke = jest.fn((channel: string) => {
+      if (channel === 'social-list-friendships') {
+        return Promise.resolve(friendships);
+      }
+      if (channel === 'social-list-messages') {
+        return Promise.resolve({ messages: [] });
+      }
+      if (channel === 'social-list-knowledge-requests') {
+        return Promise.resolve({ incoming: [], outgoing: [] });
+      }
+      return Promise.resolve({ success: true });
+    });
+    Object.defineProperty(window, 'electron', {
+      configurable: true,
+      value: {
+        ipcRenderer: { invoke, on: jest.fn(() => jest.fn()) },
+      } as unknown as ElectronHandler,
+    });
+
+    render(<FriendsView onClose={jest.fn()} />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /Participant-2.*Want to compare/i,
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Ask their Coco' }));
+    fireEvent.change(
+      screen.getByLabelText("Question for Participant-2's Coco"),
+      { target: { value: 'What helped you focus?' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Request answer' }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'social-request-knowledge',
+        'Participant-2',
+        'What helped you focus?',
+      ),
+    );
+    expect(
+      await screen.findByText('Question sent to Participant-2 for approval.'),
+    ).toBeInTheDocument();
+  });
+
+  it('generates a local draft and sends the owner-edited answer', async () => {
+    const invoke = jest.fn((channel: string) => {
+      if (channel === 'social-list-friendships') {
+        return Promise.resolve({ friends: [], incoming: [], outgoing: [] });
+      }
+      if (channel === 'social-list-knowledge-requests') {
+        return Promise.resolve(knowledgeRequests);
+      }
+      if (channel === 'social-draft-knowledge-answer') {
+        return Promise.resolve({ answer: 'Use the tutor draft.' });
+      }
+      return Promise.resolve({ success: true });
+    });
+    Object.defineProperty(window, 'electron', {
+      configurable: true,
+      value: {
+        ipcRenderer: { invoke, on: jest.fn(() => jest.fn()) },
+      } as unknown as ElectronHandler,
+    });
+
+    render(<FriendsView onClose={jest.fn()} />);
+    expect(
+      await screen.findByText('What study routine worked best for you?'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve & draft' }));
+    expect(invoke).toHaveBeenCalledWith(
+      'social-draft-knowledge-answer',
+      'What study routine worked best for you?',
+    );
+
+    const answer = await screen.findByLabelText('Answer to Participant-3');
+    fireEvent.change(answer, {
+      target: { value: 'I edited this before sharing it.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'social-answer-knowledge-request',
+        'knowledge-1',
+        'I edited this before sharing it.',
+      ),
+    );
+  });
+
+  it('shows background unread messages and requests on the Friends button', () => {
+    let inboxListener: ((value: unknown) => void) | undefined;
+    const on = jest.fn(
+      (channel: string, listener: (value: unknown) => void) => {
+        if (channel === 'social-inbox-updated') inboxListener = listener;
+        return jest.fn();
+      },
+    );
+    Object.defineProperty(window, 'electron', {
+      configurable: true,
+      value: {
+        ipcRenderer: { on },
+      } as unknown as ElectronHandler,
+    });
+
+    render(
+      <FriendsButton
+        active={false}
+        onClick={jest.fn()}
+        style={{}}
+        activeStyle={{}}
+      />,
+    );
+    act(() => {
+      inboxListener?.({
+        friendships,
+        knowledgeRequests,
+        unreadCount: 2,
+        incomingRequestCount: 1,
+        incomingKnowledgeRequestCount: 1,
+        unreadKnowledgeAnswerCount: 1,
+        updatedAt: '2026-08-27T12:00:00Z',
+      });
+    });
+
+    expect(
+      screen.getByRole('button', { name: 'Friends and messages (5 new)' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+  });
+});

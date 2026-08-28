@@ -134,6 +134,15 @@ export class CocoGatewayClient {
     return credential;
   }
 
+  /** Authenticated request surface for feature-specific Gateway clients. */
+  async requestJson(
+    path: string,
+    method: 'GET' | 'POST' | 'PATCH',
+    body?: object,
+  ): Promise<Record<string, unknown>> {
+    return this.request(path, method, body);
+  }
+
   async deliver(operation: GatewayQueuedOperation): Promise<void> {
     switch (operation.type) {
       case 'session_start':

@@ -89,3 +89,23 @@ def test_user_name_endpoint_updates_tutor_context(monkeypatch) -> None:
     )
 
     assert selected == ["Ada"]
+
+
+def test_knowledge_answer_endpoint_uses_stateless_tutor_method(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeTutor:
+        def generate_knowledge_answer_with_metrics(self, question: str):
+            calls.append(question)
+            return "Owner-reviewed draft", {"operation": "knowledge_answer"}
+
+    monkeypatch.setattr(tutor_server, "tutor", FakeTutor())
+
+    response = asyncio.run(
+        tutor_server.knowledge_answer(
+            tutor_server.KnowledgeAnswerRequest(question="What setup works?")
+        )
+    )
+
+    assert calls == ["What setup works?"]
+    assert response.guidance == "Owner-reviewed draft"

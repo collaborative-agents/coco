@@ -113,6 +113,10 @@ class MemoryRequest(BaseModel):
     memory: str
 
 
+class KnowledgeAnswerRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1_000)
+
+
 class ConversationMessage(BaseModel):
     role: str
     text: str
@@ -518,6 +522,21 @@ async def daily_review():
         return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
     except Exception as e:
         logger.error(f"Error generating daily review: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/review/knowledge-answer", response_model=GuidanceResponse)
+async def knowledge_answer(req: KnowledgeAnswerRequest):
+    """Draft an owner-reviewed answer without changing tutor conversation state."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    try:
+        guidance, llm_metrics = await asyncio.to_thread(
+            tutor.generate_knowledge_answer_with_metrics, req.question
+        )
+        return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
+    except Exception as e:
+        logger.error(f"Error generating knowledge answer: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

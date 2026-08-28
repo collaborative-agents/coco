@@ -16,6 +16,7 @@ import {
   encodeCustomAgent,
 } from './observation-types';
 import type { LLMCallMetrics, TutorToolCall } from './observation-types';
+import FriendsView, { FriendsButton } from './FriendsView';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -312,7 +313,13 @@ const S: Record<string, React.CSSProperties> = {
     color: '#111827',
   },
   contentViewport: { flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' },
-  scalableContent: { display: 'flex', flexDirection: 'column', minHeight: 0, transformOrigin: 'top left' },
+  scalableContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    transformOrigin: 'top left',
+    position: 'relative',
+  },
   header: {
     display: 'flex', alignItems: 'center', gap: 8, padding: '9px 10px',
     background: '#f9fafb', borderBottom: `1px solid ${BORDER}`,
@@ -904,6 +911,7 @@ export default function SessionChatView() {
   const [contentZoomFactor, setContentZoomFactor] = useState(1);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showFriends, setShowFriends] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(false);
   const [conversations, setConversations] = useState<SavedConversation[]>([]);
@@ -2082,6 +2090,7 @@ export default function SessionChatView() {
 
   const handleNewSession = async () => {
     if (sending || startingNewSession) return;
+    setShowFriends(false);
     setStartingNewSession(true);
     try {
       await window.electron?.ipcRenderer.invoke('start-new-chat-session', {
@@ -2093,6 +2102,7 @@ export default function SessionChatView() {
   };
 
   const openHistory = async () => {
+    setShowFriends(false);
     setShowSettings(false);
     setReviewing(null);
     setShowHistory(true);
@@ -2294,6 +2304,7 @@ export default function SessionChatView() {
               title={chatHealthTitle}
               aria-label={`${chatHealthLabel}. Open Settings`}
               onClick={() => {
+                setShowFriends(false);
                 setShowHistory(false);
                 setReviewing(null);
                 setShowSettings(true);
@@ -2321,6 +2332,17 @@ export default function SessionChatView() {
           >
             {startingNewSession ? 'Starting…' : '+ New'}
           </button>
+          <FriendsButton
+            active={showFriends}
+            style={S.iconBtn}
+            activeStyle={S.iconBtnActive}
+            onClick={() => {
+              setShowSettings(false);
+              setShowHistory(false);
+              setReviewing(null);
+              setShowFriends((value) => !value);
+            }}
+          />
           <button
             type="button"
             style={{ ...S.iconBtn, ...(showHistory ? S.iconBtnActive : {}) }}
@@ -2335,6 +2357,7 @@ export default function SessionChatView() {
             style={{ ...S.iconBtn, ...(showSettings ? S.iconBtnActive : {}) }}
             title="Settings"
             onClick={() => {
+              setShowFriends(false);
               setShowHistory(false);
               setReviewing(null);
               setShowSettings((v) => !v);
@@ -2370,6 +2393,7 @@ export default function SessionChatView() {
           }}
         >
 
+      {showFriends && <FriendsView onClose={() => setShowFriends(false)} />}
       {showSettings && (
         <div style={S.settings}>
           <TrainingScreenshotRetentionNotice

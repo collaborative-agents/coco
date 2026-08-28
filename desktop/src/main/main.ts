@@ -57,6 +57,14 @@ import { DailyMemoryDraftService } from './services/daily-memory-drafts';
 import { HiddenAvatarVisibility } from './services/hidden-avatar-visibility';
 import { CocoGatewayClient } from './services/gateway-client';
 import GatewayOutbox from './services/gateway-outbox';
+import KnowledgeAnswerService, {
+  registerKnowledgeAnswerIpcHandler,
+} from './services/knowledge-answer-service';
+import SocialBackgroundPoller from './services/social-background-poller';
+import {
+  registerSocialIpcHandlers,
+  SocialService,
+} from './services/social-service';
 import { sanitizeFatalErrorMessage } from './services/fatal-error-telemetry';
 import {
   clearAuthSession,
@@ -459,6 +467,17 @@ let pendingAuthLaunch: 'signin' | 'signup' | null = null;
 let gatewayClient: CocoGatewayClient | null = null;
 let gatewayOutbox: GatewayOutbox | null = null;
 let telemetryFlushTimer: ReturnType<typeof setInterval> | null = null;
+const socialService = new SocialService(() => gatewayClient);
+const knowledgeAnswerService = new KnowledgeAnswerService(readLocalMemory);
+const socialBackgroundPoller = new SocialBackgroundPoller(
+  socialService,
+  (snapshot) => {
+    if (chatWindow && !chatWindow.isDestroyed()) {
+      chatWindow.webContents.send('social-inbox-updated', snapshot);
+    }
+  },
+  log,
+);
 const endedGatewaySessions = new Set<string>();
 const gatewayExposureIds = new Map<string, string>();
 let currentSessionId: string | null = null;
@@ -991,6 +1010,10 @@ const createChatWindow = () => {
   chatWindow.webContents.on('did-finish-load', () => {
     chatWindow?.webContents.setZoomFactor(1);
     reportChatContentZoom();
+    const socialSnapshot = socialBackgroundPoller.latestSnapshot();
+    if (socialSnapshot) {
+      chatWindow?.webContents.send('social-inbox-updated', socialSnapshot);
+    }
   });
 
   // Closing hides rather than destroys so the in-memory conversation survives
@@ -4338,6 +4361,7 @@ const initializeGatewayParticipant = (participantId: string): void => {
   currentUserId = participantId;
   isAuthenticated = true;
   if (!gatewayClient) return;
+  socialBackgroundPoller.start();
   gatewayOutbox = new GatewayOutbox(
     app.getPath('userData'),
     participantId,
@@ -4411,6 +4435,8 @@ ipcMain.handle('auth-signup', (_event, credentials: DesktopAuthCredentials) =>
 ipcMain.handle('auth-signin', (_event, credentials: DesktopAuthCredentials) =>
   authenticate('signin', credentials),
 );
+registerSocialIpcHandlers(ipcMain, socialService);
+registerKnowledgeAnswerIpcHandler(ipcMain, knowledgeAnswerService);
 
 ipcMain.removeAllListeners('authentication-ui-complete');
 ipcMain.on('authentication-ui-complete', () => {
@@ -4512,6 +4538,7 @@ app.on('will-quit', () => {
   // Unregister all shortcuts
   globalShortcut.unregisterAll();
   eveningPersonalizationScheduler?.stop();
+  socialBackgroundPoller.stop();
   if (telemetryFlushTimer) clearInterval(telemetryFlushTimer);
 });
 
