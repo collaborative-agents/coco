@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import GroupsView from './GroupsView';
 
 interface DirectMessage {
   _id: string;
@@ -76,6 +77,9 @@ interface SocialInboxSnapshot {
   incomingRequestCount: number;
   incomingKnowledgeRequestCount: number;
   unreadKnowledgeAnswerCount: number;
+  unreadGroupCount?: number;
+  groupInvitationCount?: number;
+  unreadAnnouncementCount?: number;
   updatedAt: string;
 }
 
@@ -413,7 +417,10 @@ export function FriendsButton({
           snapshot.unreadCount +
             snapshot.incomingRequestCount +
             (snapshot.incomingKnowledgeRequestCount || 0) +
-            (snapshot.unreadKnowledgeAnswerCount || 0),
+            (snapshot.unreadKnowledgeAnswerCount || 0) +
+            (snapshot.unreadGroupCount || 0) +
+            (snapshot.groupInvitationCount || 0) +
+            (snapshot.unreadAnnouncementCount || 0),
         );
       },
     );
@@ -424,8 +431,8 @@ export function FriendsButton({
 
   const countLabel = attentionCount > 99 ? '99+' : String(attentionCount);
   const title = attentionCount
-    ? `Friends and messages (${attentionCount} new)`
-    : 'Friends and messages';
+    ? `Social and messages (${attentionCount} new)`
+    : 'Social and messages';
   return (
     <button
       type="button"
@@ -1129,12 +1136,14 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
   return (
     <div style={styles.root}>
       <div style={styles.header}>
-        <span style={styles.title}>Friends</span>
+        <span style={styles.title}>Social</span>
         <button type="button" style={styles.back} onClick={onClose}>
           Back to Coco
         </button>
       </div>
       <div style={styles.body}>
+        <GroupsView />
+        <div style={styles.sectionTitle}>Add a friend</div>
         <form style={styles.addForm} onSubmit={submitFriendRequest}>
           <input
             aria-label="Friend participant ID"

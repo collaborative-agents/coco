@@ -121,6 +121,93 @@ describe('SocialService', () => {
     );
   });
 
+  it('routes group membership, chat, settings, reports, and announcements', async () => {
+    const requestJson = jest.fn().mockResolvedValue({ success: true });
+    const service = new SocialService(
+      () => ({ requestJson }) as unknown as CocoGatewayClient,
+    );
+
+    await service.listGroupInbox();
+    await service.acceptGroupInvitation('invite/1');
+    await service.declineGroupInvitation('invite/2');
+    await service.listGroupMembers('group/1');
+    await service.listGroupMessages('group/1', 12);
+    await service.sendGroupMessage('group/1', 'hello group');
+    await service.markGroupRead('group/1', 13);
+    await service.setGroupMuted('group/1', true);
+    await service.leaveGroup('group/1');
+    await service.markAnnouncementRead('announcement/1');
+    await service.reportGroup('group/1', 'spam', 'review', 'message/1');
+
+    expect(requestJson).toHaveBeenCalledWith('/api/social/group-inbox', 'GET');
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/social/group-invitations/invite%2F1/accept',
+      'POST',
+    );
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/social/groups/group%2F1/messages?before_sequence=12',
+      'GET',
+    );
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/social/groups/group%2F1/messages',
+      'POST',
+      { _id: expect.any(String), content: 'hello group' },
+    );
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/social/groups/group%2F1/reports',
+      'POST',
+      {
+        _id: expect.any(String),
+        reason: 'spam',
+        details: 'review',
+        message_id: 'message/1',
+      },
+    );
+  });
+
+  it('routes study-admin group operations through protected API paths', async () => {
+    const requestJson = jest.fn().mockResolvedValue({ groups: [] });
+    const service = new SocialService(
+      () => ({ requestJson }) as unknown as CocoGatewayClient,
+    );
+
+    await service.listAdminGroups();
+    await service.createAdminGroup('Study group', 'Description', ['p-1']);
+    await service.updateAdminGroup('group:1', { status: 'archived' });
+    await service.inviteAdminGroup('group:1', ['p-2']);
+    await service.revokeGroupInvitation('invite:1');
+    await service.sendGroupAnnouncement('group:1', 'Group update');
+    await service.sendStudyAnnouncement('Study update', 'Everyone sees this');
+    await service.listAdminGroupReports();
+    await service.reviewAdminGroupReport('report:1', 'reviewed');
+
+    expect(requestJson).toHaveBeenCalledWith('/api/admin/groups', 'GET');
+    expect(requestJson).toHaveBeenCalledWith('/api/admin/groups', 'POST', {
+      name: 'Study group',
+      description: 'Description',
+      participant_ids: ['p-1'],
+    });
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/admin/group-invitations/invite%3A1/revoke',
+      'PATCH',
+    );
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/admin/announcements',
+      'POST',
+      {
+        _id: expect.any(String),
+        title: 'Study update',
+        content: 'Everyone sees this',
+      },
+    );
+    expect(requestJson).toHaveBeenCalledWith('/api/admin/group-reports', 'GET');
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/admin/group-reports/report%3A1',
+      'PATCH',
+      { status: 'reviewed' },
+    );
+  });
+
   it('publishes background inbox totals from friendship polling', async () => {
     const service = {
       listFriendships: jest.fn().mockResolvedValue({
@@ -138,6 +225,15 @@ describe('SocialService', () => {
           { status: 'answered', answer_read_at: '2026-08-27T12:00:00Z' },
         ],
       }),
+      listGroupInbox: jest.fn().mockResolvedValue({
+        groups: [{ unread_count: 4 }],
+        invitations: [{}],
+        announcements: [{ read_at: null }],
+        unread_group_count: 4,
+        invitation_count: 1,
+        unread_announcement_count: 1,
+        can_administer: false,
+      }),
     } as unknown as SocialService;
     const publish = jest.fn();
     const poller = new SocialBackgroundPoller(service, publish);
@@ -150,6 +246,9 @@ describe('SocialService', () => {
         incomingRequestCount: 1,
         incomingKnowledgeRequestCount: 1,
         unreadKnowledgeAnswerCount: 1,
+        unreadGroupCount: 4,
+        groupInvitationCount: 1,
+        unreadAnnouncementCount: 1,
       }),
     );
     expect(publish).toHaveBeenCalledWith(snapshot);
@@ -168,6 +267,15 @@ describe('SocialService', () => {
         incoming: [],
         outgoing: [],
       }),
+      listGroupInbox: jest.fn().mockResolvedValue({
+        groups: [],
+        invitations: [],
+        announcements: [],
+        unread_group_count: 0,
+        invitation_count: 0,
+        unread_announcement_count: 0,
+        can_administer: false,
+      }),
     } as unknown as SocialService;
     const poller = new SocialBackgroundPoller(
       service,
@@ -181,15 +289,18 @@ describe('SocialService', () => {
       await poller.refresh();
       expect(service.listFriendships).toHaveBeenCalledTimes(1);
       expect(service.listKnowledgeRequests).toHaveBeenCalledTimes(1);
+      expect(service.listGroupInbox).toHaveBeenCalledTimes(1);
 
       jest.advanceTimersByTime(1_000);
       await poller.refresh();
       expect(service.listFriendships).toHaveBeenCalledTimes(2);
       expect(service.listKnowledgeRequests).toHaveBeenCalledTimes(2);
+      expect(service.listGroupInbox).toHaveBeenCalledTimes(2);
 
       poller.stop();
       jest.advanceTimersByTime(1_000);
       expect(service.listFriendships).toHaveBeenCalledTimes(2);
+      expect(service.listGroupInbox).toHaveBeenCalledTimes(2);
     } finally {
       poller.stop();
       jest.useRealTimers();

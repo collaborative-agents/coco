@@ -1,3 +1,4 @@
+/* eslint no-underscore-dangle: off */
 import { SocialAvatarNotificationTracker } from './social-avatar-notifications';
 import type { SocialInboxSnapshot } from './social-service';
 
@@ -94,7 +95,7 @@ describe('SocialAvatarNotificationTracker', () => {
 
     expect(tracker.next(inbox)).toEqual({
       kind: 'summary',
-      title: 'New from Friends',
+      title: 'New in Social',
       message: 'You have 2 new messages and requests.',
       count: 2,
     });
@@ -126,5 +127,56 @@ describe('SocialAvatarNotificationTracker', () => {
     answered.knowledgeRequests.outgoing[0].answer_read_at =
       '2026-08-28T12:01:00Z';
     expect(tracker.next(answered)).toBeNull();
+  });
+
+  it('alerts once for an unmuted group and suppresses muted group messages', () => {
+    const tracker = new SocialAvatarNotificationTracker();
+    const inbox = snapshot({
+      groupInbox: {
+        groups: [
+          {
+            group_id: 'group-1',
+            name: 'Calculus group',
+            description: '',
+            status: 'active',
+            member_count: 3,
+            unread_count: 2,
+            last_read_sequence: 1,
+            muted: false,
+            joined_at: '2026-08-28T11:00:00Z',
+            last_message: {
+              _id: 'group-message-1',
+              group_id: 'group-1',
+              sequence: 3,
+              sender_id: 'participant-2',
+              sender_label: 'participant-2',
+              sender_type: 'participant',
+              message_type: 'message',
+              content: 'Hello group',
+              created_at: '2026-08-28T12:00:00Z',
+            },
+          },
+        ],
+        invitations: [],
+        announcements: [],
+        unread_group_count: 2,
+        invitation_count: 0,
+        unread_announcement_count: 0,
+        can_administer: false,
+      },
+    });
+
+    expect(tracker.next(inbox)).toEqual(
+      expect.objectContaining({
+        kind: 'group-message',
+        title: 'Calculus group',
+        count: 2,
+      }),
+    );
+    expect(tracker.next(inbox)).toBeNull();
+
+    inbox.groupInbox!.groups[0].muted = true;
+    inbox.groupInbox!.groups[0].last_message!._id = 'group-message-2';
+    expect(tracker.next(inbox)).toBeNull();
   });
 });

@@ -53,11 +53,13 @@ export default class SocialBackgroundPoller {
     this.inFlight = Promise.all([
       this.service.listFriendships(),
       this.service.listKnowledgeRequests(),
+      this.service.listGroupInbox(),
     ])
-      .then(([friendships, knowledgeRequests]) => {
+      .then(([friendships, knowledgeRequests, groupInbox]) => {
         const snapshot: SocialInboxSnapshot = {
           friendships,
           knowledgeRequests,
+          groupInbox,
           unreadCount: friendships.friends.reduce(
             (total, friend) => total + (friend.unread_count || 0),
             0,
@@ -70,6 +72,9 @@ export default class SocialBackgroundPoller {
             (request) =>
               request.status === 'answered' && !request.answer_read_at,
           ).length,
+          unreadGroupCount: groupInbox.unread_group_count,
+          groupInvitationCount: groupInbox.invitation_count,
+          unreadAnnouncementCount: groupInbox.unread_announcement_count,
           updatedAt: new Date().toISOString(),
         };
         this.snapshot = snapshot;

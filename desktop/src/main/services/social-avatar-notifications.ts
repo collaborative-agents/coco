@@ -6,6 +6,9 @@ export type SocialAvatarNotificationKind =
   | 'friend-request'
   | 'knowledge-request'
   | 'knowledge-answer'
+  | 'group-message'
+  | 'group-invitation'
+  | 'admin-announcement'
   | 'summary';
 
 export interface SocialAvatarNotification {
@@ -40,7 +43,7 @@ export class SocialAvatarNotificationTracker {
     if (fresh.length > 1) {
       return {
         kind: 'summary',
-        title: 'New from Friends',
+        title: 'New in Social',
         message: `You have ${fresh.length} new messages and requests.`,
         count: fresh.length,
       };
@@ -106,12 +109,51 @@ export class SocialAvatarNotificationTracker {
         count: 1,
         timestamp: request.answered_at || request.updated_at,
       }));
+    const groupMessages = (snapshot.groupInbox?.groups || []).flatMap(
+      (group) => {
+        if (!group.unread_count || !group.last_message || group.muted)
+          return [];
+        return [
+          {
+            key: `group-message:${group.last_message._id}`,
+            kind: 'group-message' as const,
+            title: group.name,
+            message: `${group.unread_count} new group ${group.unread_count === 1 ? 'message' : 'messages'}.`,
+            count: group.unread_count,
+            timestamp: group.last_message.created_at,
+          },
+        ];
+      },
+    );
+    const groupInvitations = (snapshot.groupInbox?.invitations || []).map(
+      (invitation) => ({
+        key: `group-invitation:${invitation.invitation_id}`,
+        kind: 'group-invitation' as const,
+        title: 'Group invitation',
+        message: `The study team invited you to ${invitation.group_name}.`,
+        count: 1,
+        timestamp: invitation.created_at,
+      }),
+    );
+    const announcements = (snapshot.groupInbox?.announcements || [])
+      .filter((announcement) => !announcement.read_at)
+      .map((announcement) => ({
+        key: `admin-announcement:${announcement._id}`,
+        kind: 'admin-announcement' as const,
+        title: announcement.title,
+        message: 'New announcement from the study team.',
+        count: 1,
+        timestamp: announcement.created_at,
+      }));
 
     return [
       ...directMessages,
       ...friendRequests,
       ...knowledgeRequests,
       ...knowledgeAnswers,
+      ...groupMessages,
+      ...groupInvitations,
+      ...announcements,
     ].sort(
       (left, right) =>
         new Date(right.timestamp).getTime() -

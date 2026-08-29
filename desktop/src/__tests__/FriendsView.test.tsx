@@ -312,7 +312,7 @@ describe('FriendsView', () => {
     });
 
     expect(
-      screen.getByRole('button', { name: 'Friends and messages (5 new)' }),
+      screen.getByRole('button', { name: 'Social and messages (5 new)' }),
     ).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
   });
