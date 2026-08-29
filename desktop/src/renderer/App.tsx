@@ -539,6 +539,16 @@ function PetView() {
   // pinned: it never auto-hides and can only be closed with the × button.
   const bubblePinnedRef = useRef(false);
 
+  const reportSocialNotificationClosed = (
+    current: BubbleState | null = bubbleRef.current,
+  ) => {
+    if (current?.socialNotification) {
+      window.electron?.ipcRenderer.sendMessage(
+        'social-avatar-notification-closed',
+      );
+    }
+  };
+
   useEffect(() => {
     bubbleRef.current = bubble;
   }, [bubble]);
@@ -565,6 +575,7 @@ function PetView() {
       }
       setBubble((b) => (b ? { ...b, fadingOut: true } : null));
       fadeTimer.current = setTimeout(() => {
+        reportSocialNotificationClosed(current);
         setBubble(null);
         setMood('idle');
       }, FADE_MS);
@@ -687,6 +698,7 @@ function PetView() {
     if (result?.success) {
       setCocoSleeping(result.sleeping === true);
       if (result.sleeping) {
+        reportSocialNotificationClosed();
         setBubble(null);
         setMood('sleep');
       } else {
@@ -745,6 +757,7 @@ function PetView() {
     const cleanupSuspend = window.electron?.ipcRenderer.on(
       'system-suspend',
       () => {
+        reportSocialNotificationClosed();
         if (hideTimer.current) clearTimeout(hideTimer.current);
         if (fadeTimer.current) clearTimeout(fadeTimer.current);
         if (pulseTimer.current) clearTimeout(pulseTimer.current);
@@ -809,6 +822,7 @@ function PetView() {
         // notification flow — they are not avatar states. Skip them here so
         // PetSprite never receives an unknown mood.
         if (!(incomingStatus in STATUS_TO_MOOD)) return;
+        reportSocialNotificationClosed();
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
         const phrase = pickPhrase(incomingStatus, seed);
@@ -899,6 +913,64 @@ function PetView() {
     };
   }, []);
 
+  // Social inbox alerts use the avatar even when the normal avatar is hidden.
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on(
+      'social-avatar-notification',
+      (data: unknown) => {
+        const notification = data as {
+          title?: unknown;
+          message?: unknown;
+          participantId?: unknown;
+        };
+        const title = String(notification?.title ?? '').trim();
+        const message = String(notification?.message ?? '').trim();
+        if (!title || !message) return;
+
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        if (fadeTimer.current) clearTimeout(fadeTimer.current);
+        if (pulseTimer.current) clearTimeout(pulseTimer.current);
+        bubbleHoverRef.current = false;
+        bubblePinnedRef.current = false;
+
+        setBubble({
+          status: 'ai_struggle',
+          phrase: '',
+          fadingOut: false,
+          socialNotification: {
+            title,
+            message,
+            participantId:
+              typeof notification.participantId === 'string'
+                ? notification.participantId
+                : undefined,
+          },
+        });
+        setMood('tool');
+
+        pulseKeyRef.current += 1;
+        setPulse({ status: 'ai_struggle', key: pulseKeyRef.current });
+        pulseTimer.current = setTimeout(() => setPulse(null), PULSE_MS);
+        scheduleBubbleHide(TUTOR_HOLD_MS);
+      },
+    );
+    const cleanupDismiss = window.electron?.ipcRenderer.on(
+      'dismiss-social-avatar-notification',
+      () => {
+        if (!bubbleRef.current?.socialNotification) return;
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        if (fadeTimer.current) clearTimeout(fadeTimer.current);
+        bubbleRef.current = null;
+        setBubble(null);
+        setMood('idle');
+      },
+    );
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+      if (typeof cleanupDismiss === 'function') cleanupDismiss();
+    };
+  }, []);
+
   // ── Tier 3: tutor notification routed from main when webapp is hidden ────────
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -906,6 +978,8 @@ function PetView() {
       (data: any) => {
         const message = String((data as { message?: unknown })?.message ?? '');
         if (!message) return;
+
+        reportSocialNotificationClosed();
 
         // Tier 3 replaces any in-flight observation, including Tier 2.
         if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -939,6 +1013,13 @@ function PetView() {
   // is an explicit "I need help anyway": a false-negative signal.
   const handleClick = (e?: SyntheticEvent) => {
     e?.stopPropagation?.();
+    if (bubble?.socialNotification) {
+      reportSocialNotificationClosed(bubble);
+      setBubble(null);
+      setMood('idle');
+      window.electron?.ipcRenderer.sendMessage('open-social-inbox');
+      return;
+    }
     if (bubble && !bubble.tutorMessage && !bubble.showHelpButton) {
       window.electron?.ipcRenderer.sendMessage('training-feedback', {
         kind: 'need_help',
@@ -1061,17 +1142,21 @@ function PetView() {
   const handleDismiss = () => {
     if (!bubble) return;
     bubblePinnedRef.current = false;
-    window.electron?.ipcRenderer.sendMessage('training-feedback', {
-      kind: 'dismiss',
-      surface: 'bubble',
-      observation_id: bubble.observationId ?? null,
-      status: bubble.status,
-      text: bubble.rawObservation ?? null,
-    });
+    const socialNotification = bubble.socialNotification;
+    if (!socialNotification) {
+      window.electron?.ipcRenderer.sendMessage('training-feedback', {
+        kind: 'dismiss',
+        surface: 'bubble',
+        observation_id: bubble.observationId ?? null,
+        status: bubble.status,
+        text: bubble.rawObservation ?? null,
+      });
+    }
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
     setBubble((b) => (b ? { ...b, fadingOut: true } : null));
     fadeTimer.current = setTimeout(() => {
+      if (socialNotification) reportSocialNotificationClosed(bubble);
       setBubble(null);
       setMood('idle');
     }, FADE_MS);
@@ -1114,7 +1199,14 @@ function PetView() {
 
   // Tier 3: user wants to read the full tutor guidance — open main window.
   const handleViewConversation = () => {
-    window.electron?.ipcRenderer.sendMessage('open-main-window');
+    if (bubble?.socialNotification) {
+      reportSocialNotificationClosed(bubble);
+      setBubble(null);
+      setMood('idle');
+      window.electron?.ipcRenderer.sendMessage('open-social-inbox');
+    } else {
+      window.electron?.ipcRenderer.sendMessage('open-main-window');
+    }
   };
 
   const loadHistoricalSuggestion = async (

@@ -16,11 +16,19 @@
   background: #fff;
   box-shadow: 0 12px 40px rgba(20, 45, 74, 0.2);
   color: #172033;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
 
 .auth-header {
   text-align: center;
+  /* The auth window is frameless, so its non-interactive header is the
+     primary drag handle. */
+  -webkit-app-region: drag;
+  cursor: grab;
+  user-select: none;
+}
+.auth-header:active {
+  cursor: grabbing;
 }
 .auth-header h1 {
   margin: 0 0 6px;
@@ -55,6 +63,7 @@
   border-radius: 10px;
   background: #eef2f7;
   margin-bottom: 20px;
+  -webkit-app-region: no-drag;
 }
 .auth-tabs button {
   border: 0;
@@ -75,6 +84,7 @@
 .auth-form {
   display: flex;
   flex-direction: column;
+  -webkit-app-region: no-drag;
 }
 .auth-form > label:not(.auth-checkbox) {
   color: #36445a;

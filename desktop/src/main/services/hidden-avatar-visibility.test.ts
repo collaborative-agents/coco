@@ -12,4 +12,14 @@ describe('HiddenAvatarVisibility', () => {
     visibility.setVisible('daily-memory-review', false);
     expect(visibility.shouldShowWindow()).toBe(false);
   });
+
+  it('keeps a hidden avatar revealed until its social alert closes', () => {
+    const visibility = new HiddenAvatarVisibility();
+
+    visibility.setVisible('social-notification', true);
+    expect(visibility.shouldShowWindow()).toBe(true);
+
+    visibility.setVisible('social-notification', false);
+    expect(visibility.shouldShowWindow()).toBe(false);
+  });
 });

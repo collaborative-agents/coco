@@ -62,6 +62,10 @@ import KnowledgeAnswerService, {
 } from './services/knowledge-answer-service';
 import SocialBackgroundPoller from './services/social-background-poller';
 import {
+  SocialAvatarNotificationTracker,
+  type SocialAvatarNotification,
+} from './services/social-avatar-notifications';
+import {
   registerSocialIpcHandlers,
   SocialService,
 } from './services/social-service';
@@ -298,6 +302,11 @@ let tray: Tray | null = null;
 let hideAvatarMode = false;
 let avatarRendererReady = false;
 let pendingOpenHistory = false;
+let pendingOpenSocialInbox = false;
+let pendingSocialAvatarNotification: SocialAvatarNotification | null = null;
+let revealSocialAvatarNotification:
+  | ((notification: SocialAvatarNotification) => void)
+  | null = null;
 const hiddenAvatarVisibility = new HiddenAvatarVisibility();
 const observationSleepGuard = new ObservationSleepGuard();
 let personalizationScheduler: PersonalizationScheduler | null = null;
@@ -469,11 +478,20 @@ let gatewayOutbox: GatewayOutbox | null = null;
 let telemetryFlushTimer: ReturnType<typeof setInterval> | null = null;
 const socialService = new SocialService(() => gatewayClient);
 const knowledgeAnswerService = new KnowledgeAnswerService(readLocalMemory);
+const socialAvatarNotificationTracker = new SocialAvatarNotificationTracker();
 const socialBackgroundPoller = new SocialBackgroundPoller(
   socialService,
   (snapshot) => {
     if (chatWindow && !chatWindow.isDestroyed()) {
       chatWindow.webContents.send('social-inbox-updated', snapshot);
+    }
+    const notification = socialAvatarNotificationTracker.next(snapshot);
+    const chatOpen =
+      chatWindow !== null &&
+      !chatWindow.isDestroyed() &&
+      chatWindow.isVisible();
+    if (notification && !chatOpen) {
+      revealSocialAvatarNotification?.(notification);
     }
   },
   log,
@@ -839,6 +857,12 @@ function syncHiddenAvatarWindowVisibility(): void {
   }
 }
 
+function dismissSocialAvatarNotification(): void {
+  pendingSocialAvatarNotification = null;
+  hiddenAvatarVisibility.setVisible('social-notification', false);
+  syncHiddenAvatarWindowVisibility();
+}
+
 // ── Onboarding window ─────────────────────────────────────────────────────────
 // Shown once on first launch (when coco-profile.json doesn't exist yet).
 // Centered modal; after the user completes or skips it, the profile is written
@@ -934,6 +958,18 @@ const createAvatarWindow = () => {
   });
 
   // (notification is screen-pinned; no need to reposition on move)
+};
+
+revealSocialAvatarNotification = (notification) => {
+  pendingSocialAvatarNotification = notification;
+  hiddenAvatarVisibility.setVisible('social-notification', true);
+  createAvatarWindow();
+  syncHiddenAvatarWindowVisibility();
+  if (!avatarWindow || avatarWindow.isDestroyed() || !avatarRendererReady) {
+    return;
+  }
+  avatarWindow.webContents.send('social-avatar-notification', notification);
+  pendingSocialAvatarNotification = null;
 };
 
 // ── Chat window (local tutor session) ─────────────────────────────────────────
@@ -1056,6 +1092,13 @@ const showChatPanel = () => {
   chatWindow.show();
   chatWindow.focus();
 
+  // Once chat is visible, the social inbox is directly accessible and no
+  // longer needs to keep a hidden avatar temporarily revealed.
+  dismissSocialAvatarNotification();
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send('dismiss-social-avatar-notification');
+  }
+
   // Chat is already the user's active support surface. Cancel suggestions that
   // have not been revealed yet and prevent an in-flight hidden-avatar request
   // from surfacing after the chat opens. A suggestion the user explicitly
@@ -1087,6 +1130,20 @@ const showChatPanel = () => {
 const isChatPanelOpen = (): boolean =>
   chatWindow !== null && !chatWindow.isDestroyed() &&
   chatWindow.isVisible();
+
+function openSocialInbox(): void {
+  pendingOpenSocialInbox = true;
+  dismissSocialAvatarNotification();
+  showChatPanel();
+  if (
+    chatWindow &&
+    !chatWindow.isDestroyed() &&
+    hotkeyRendererReady
+  ) {
+    pendingOpenSocialInbox = false;
+    chatWindow.webContents.send('open-social-inbox');
+  }
+}
 
 const clearImagePreviewState = (target: BrowserWindow) => {
   if (imagePreviewWindow !== target) return;
@@ -2297,6 +2354,10 @@ ipcMain.removeAllListeners('hotkey-capture-ready');
 ipcMain.on('hotkey-capture-ready', () => {
   hotkeyRendererReady = true;
   flushHotkeyCaptures();
+  if (pendingOpenSocialInbox && chatWindow && !chatWindow.isDestroyed()) {
+    pendingOpenSocialInbox = false;
+    chatWindow.webContents.send('open-social-inbox');
+  }
 });
 
 // Pet click / "open chat". If a session is already active, reopen its chat
@@ -2305,6 +2366,14 @@ ipcMain.on('hotkey-capture-ready', () => {
 ipcMain.removeAllListeners('open-main-window');
 ipcMain.on('open-main-window', () => {
   openCoco().catch((err) => log.warn(`[Chat] Could not open Coco: ${err}`));
+});
+
+ipcMain.removeAllListeners('open-social-inbox');
+ipcMain.on('open-social-inbox', () => openSocialInbox());
+
+ipcMain.removeAllListeners('social-avatar-notification-closed');
+ipcMain.on('social-avatar-notification-closed', () => {
+  dismissSocialAvatarNotification();
 });
 
 // "Help me with this" on a proactive bubble.
@@ -2850,6 +2919,13 @@ ipcMain.removeAllListeners('avatar-renderer-ready');
 ipcMain.on('avatar-renderer-ready', () => {
   avatarRendererReady = true;
   if (pendingOpenHistory) openHistory();
+  if (pendingSocialAvatarNotification && avatarWindow) {
+    avatarWindow.webContents.send(
+      'social-avatar-notification',
+      pendingSocialAvatarNotification,
+    );
+    pendingSocialAvatarNotification = null;
+  }
 });
 
 // ── Proactive session IPC handlers ────────────────────────────────────────────

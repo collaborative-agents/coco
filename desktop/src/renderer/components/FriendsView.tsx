@@ -53,7 +53,16 @@ interface KnowledgeRequest {
 
 type ConversationTimelineItem =
   | { kind: 'message'; timestamp: string; message: DirectMessage }
-  | { kind: 'knowledge'; timestamp: string; request: KnowledgeRequest };
+  | {
+      kind: 'knowledge-request';
+      timestamp: string;
+      request: KnowledgeRequest;
+    }
+  | {
+      kind: 'knowledge-answer';
+      timestamp: string;
+      request: KnowledgeRequest;
+    };
 
 interface KnowledgeRequestList {
   incoming: KnowledgeRequest[];
@@ -220,25 +229,15 @@ const styles: Record<string, React.CSSProperties> = {
     overflowWrap: 'anywhere',
     whiteSpace: 'pre-wrap',
   },
-  answer: {
-    marginTop: 7,
-    borderRadius: 8,
-    padding: '8px 9px',
-    background: '#f3f4f6',
-    color: '#374151',
-    fontSize: 12,
-    lineHeight: 1.4,
-    whiteSpace: 'pre-wrap',
-  },
   knowledgePanel: {
     borderBottom: `1px solid ${BORDER}`,
     padding: 10,
     background: '#f8fafc',
   },
   knowledgeTimelineCard: {
-    width: '94%',
+    width: 'auto',
+    maxWidth: '82%',
     boxSizing: 'border-box',
-    alignSelf: 'center',
     border: '1px solid #bfdbfe',
     borderLeft: `4px solid ${ACCENT}`,
     borderRadius: 11,
@@ -767,11 +766,22 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
         timestamp: message.created_at,
         message,
       })),
-      ...conversationKnowledgeRequests.map((request) => ({
-        kind: 'knowledge' as const,
-        timestamp: request.updated_at,
-        request,
-      })),
+      ...conversationKnowledgeRequests.flatMap((request) => [
+        {
+          kind: 'knowledge-request' as const,
+          timestamp: request.created_at,
+          request,
+        },
+        ...(request.status === 'answered' && request.answer
+          ? [
+              {
+                kind: 'knowledge-answer' as const,
+                timestamp: request.answered_at || request.updated_at,
+                request,
+              },
+            ]
+          : []),
+      ]),
     ].sort(
       (first, second) =>
         new Date(first.timestamp).getTime() -
@@ -857,7 +867,56 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
               <div style={styles.empty}>No messages yet. Say hello.</div>
             )}
             {timelineItems.map((item) => {
-              if (item.kind === 'knowledge') {
+              if (item.kind === 'knowledge-answer') {
+                const { request } = item;
+                const isIncoming = sameParticipant(
+                  request.requester_id,
+                  selectedFriend.participant_id,
+                );
+                const answerFromFriend = !isIncoming;
+                return (
+                  <div
+                    key={`${knowledgeRequestId(request)}:answer`}
+                    data-message-kind="knowledge-answer"
+                    data-message-owner={answerFromFriend ? 'friend' : 'self'}
+                    style={
+                      answerFromFriend
+                        ? styles.friendMessage
+                        : styles.ownMessage
+                    }
+                  >
+                    <div
+                      style={
+                        answerFromFriend
+                          ? styles.friendBubble
+                          : styles.ownBubble
+                      }
+                    >
+                      <div
+                        style={{
+                          marginBottom: 4,
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                          opacity: 0.82,
+                        }}
+                      >
+                        ✦ Approved Coco reply
+                      </div>
+                      {request.answer}
+                    </div>
+                    <div
+                      style={{
+                        ...styles.timestamp,
+                        textAlign: answerFromFriend ? 'left' : 'right',
+                      }}
+                    >
+                      {messageTime(request.answered_at || request.updated_at)}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (item.kind === 'knowledge-request') {
                 const { request } = item;
                 const requestId = knowledgeRequestId(request);
                 const isIncoming = sameParticipant(
@@ -876,7 +935,15 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
                   status = 'Needs your approval';
                 }
                 return (
-                  <div key={requestId} style={styles.knowledgeTimelineCard}>
+                  <div
+                    key={`${requestId}:request`}
+                    data-message-kind="knowledge-request"
+                    data-message-owner={isIncoming ? 'friend' : 'self'}
+                    style={{
+                      ...styles.knowledgeTimelineCard,
+                      alignSelf: isIncoming ? 'flex-start' : 'flex-end',
+                    }}
+                  >
                     <div style={styles.knowledgeTimelineHeader}>
                       <span style={styles.knowledgeLabel}>
                         ✦ Coco memory request
@@ -990,32 +1057,13 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
                       </div>
                     )}
 
-                    {request.status === 'answered' && request.answer && (
-                      <>
-                        <div style={{ ...styles.preview, marginTop: 7 }}>
-                          {isIncoming
-                            ? 'Your approved reply'
-                            : `${selectedFriend.participant_id}'s approved reply`}
-                        </div>
-                        <div
-                          style={{
-                            ...styles.answer,
-                            border: '1px solid #dbeafe',
-                            background: '#fff',
-                          }}
-                        >
-                          {request.answer}
-                        </div>
-                      </>
-                    )}
-
                     {request.status === 'declined' && (
                       <div style={{ ...styles.preview, marginTop: 6 }}>
                         No memory or answer was shared.
                       </div>
                     )}
                     <div style={{ ...styles.timestamp, textAlign: 'right' }}>
-                      {messageTime(request.updated_at)}
+                      {messageTime(request.created_at)}
                     </div>
                   </div>
                 );

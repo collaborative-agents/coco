@@ -1848,6 +1848,19 @@ export default function SessionChatView() {
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on(
+      'open-social-inbox',
+      () => {
+        setShowSettings(false);
+        setShowHistory(false);
+        setReviewing(null);
+        setShowFriends(true);
+      },
+    );
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
   const saveMemory = async () => {
     const res = await window.electron?.ipcRenderer.invoke('save-memory', { memory: memoryDraft });
     if ((res as { success?: boolean })?.success) {

@@ -1,4 +1,7 @@
-export type HiddenAvatarSurface = 'history' | 'daily-memory-review';
+export type HiddenAvatarSurface =
+  | 'history'
+  | 'daily-memory-review'
+  | 'social-notification';
 
 /** Tracks the exceptional surfaces allowed to reveal a hidden avatar window. */
 export class HiddenAvatarVisibility {

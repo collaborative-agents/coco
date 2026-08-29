@@ -601,6 +601,38 @@ describe('deferred suggestion context', () => {
     expect(screen.getByText('Health')).toBeInTheDocument();
   });
 
+  it('opens the Friends panel from an avatar notification', async () => {
+    const listeners = new Map<string, (data?: unknown) => void>();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data?: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async (channel: string) => {
+          if (channel === 'social-list-friendships') {
+            return { friends: [], incoming: [], outgoing: [] };
+          }
+          if (channel === 'social-list-knowledge-requests') {
+            return { incoming: [], outgoing: [] };
+          }
+          return null;
+        }),
+      },
+    };
+
+    render(<SessionChatView />);
+    await act(async () => {
+      listeners.get('open-social-inbox')?.();
+    });
+
+    expect(screen.getAllByText('Friends').length).toBeGreaterThan(0);
+    expect(
+      screen.getByPlaceholderText('Add by participant ID'),
+    ).toBeInTheDocument();
+  });
+
   it('opens and resumes a past conversation from the chat header', async () => {
     const invoke = jest.fn(async (channel: string) => {
       if (channel === 'get-chat-conversations') {

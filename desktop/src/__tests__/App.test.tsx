@@ -41,6 +41,42 @@ describe('App', () => {
     expect(screen.queryByText('Heads up')).not.toBeInTheDocument();
   });
 
+  it('shows a social avatar alert and opens the Friends inbox', () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const sendMessage = jest.fn();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: (channel: string, callback: (...args: unknown[]) => void) => {
+          listeners.set(channel, callback);
+          return () => listeners.delete(channel);
+        },
+        sendMessage,
+        invoke: jest.fn().mockResolvedValue([]),
+      },
+    };
+
+    render(<App />);
+    act(() => {
+      listeners.get('social-avatar-notification')?.({
+        title: 'New message',
+        message: 'participant-2 sent you a message.',
+        participantId: 'participant-2',
+      });
+    });
+
+    expect(screen.getByText('New message')).toBeInTheDocument();
+    expect(
+      screen.getByText('participant-2 sent you a message.'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Open Friends →'));
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'social-avatar-notification-closed',
+    );
+    expect(sendMessage).toHaveBeenCalledWith('open-social-inbox');
+    expect(screen.queryByText('New message')).not.toBeInTheDocument();
+  });
+
   it('clears an unrevealed proactive bubble when Coco chat opens', () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     (window as any).electron = {

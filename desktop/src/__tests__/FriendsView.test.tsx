@@ -190,7 +190,11 @@ describe('FriendsView', () => {
       await screen.findByText('Question sent to Participant-2 for approval.'),
     ).toBeInTheDocument();
     expect(screen.getByText('✦ Coco memory request')).toBeInTheDocument();
-    expect(screen.getByText('What helped you focus?')).toBeInTheDocument();
+    expect(
+      screen
+        .getByText('What helped you focus?')
+        .closest('[data-message-kind="knowledge-request"]'),
+    ).toHaveAttribute('data-message-owner', 'self');
     expect(screen.getByText('Waiting for approval')).toBeInTheDocument();
   });
 
@@ -238,8 +242,10 @@ describe('FriendsView', () => {
     );
     expect(screen.getByText('✦ Coco memory request')).toBeInTheDocument();
     expect(
-      await screen.findByText('What study routine worked best for you?'),
-    ).toBeInTheDocument();
+      (
+        await screen.findByText('What study routine worked best for you?')
+      ).closest('[data-message-kind="knowledge-request"]'),
+    ).toHaveAttribute('data-message-owner', 'friend');
     fireEvent.click(screen.getByRole('button', { name: 'Approve & draft' }));
     expect(invoke).toHaveBeenCalledWith(
       'social-draft-knowledge-answer',
@@ -261,8 +267,10 @@ describe('FriendsView', () => {
     );
     expect(await screen.findByText('Answer sent')).toBeInTheDocument();
     expect(
-      screen.getByText('I edited this before sharing it.'),
-    ).toBeInTheDocument();
+      screen
+        .getByText('I edited this before sharing it.')
+        .closest('[data-message-kind="knowledge-answer"]'),
+    ).toHaveAttribute('data-message-owner', 'self');
     expect(
       screen.queryByLabelText('Answer to Participant-3'),
     ).not.toBeInTheDocument();

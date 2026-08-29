@@ -159,6 +159,11 @@ body,
   --bubble-accent-soft: rgba(99, 102, 241, 0.18);
 }
 
+.observation-bubble.is-social {
+  --bubble-accent: #2563eb;
+  --bubble-accent-soft: rgba(37, 99, 235, 0.22);
+}
+
 .observation-bubble.is-leaving {
   opacity: 0;
   transform: translateY(2px) scale(0.98);
