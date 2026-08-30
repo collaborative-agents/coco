@@ -46,10 +46,13 @@ def test_memory_tool_is_limited_to_everyday_support():
     student = TutorSystem(model_name=MODEL, scenario="student_learning")
 
     assert everyday.tutor_agent.enable_memory_tool is True
+    assert everyday.tutor_agent.enable_calendar_tools is True
     assert student.tutor_agent.enable_memory_tool is False
+    assert student.tutor_agent.enable_calendar_tools is False
 
     everyday.set_scenario("student_learning")
     assert everyday.tutor_agent.enable_memory_tool is False
+    assert everyday.tutor_agent.enable_calendar_tools is False
 
 
 def test_handle_problem_statement():

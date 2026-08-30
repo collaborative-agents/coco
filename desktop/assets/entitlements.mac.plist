@@ -6,7 +6,9 @@
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
   <!-- Required for microphone capture in signed Hardened Runtime builds. -->
-  <key>com.apple.security.device.audio-input</key>
-  <true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
 </dict>
 </plist>

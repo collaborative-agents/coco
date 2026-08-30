@@ -45,6 +45,7 @@ class TutorSystem:
             model_name,
             (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
             enable_memory_tool=scenario == "everyday_support",
+            enable_calendar_tools=scenario == "everyday_support",
         )
 
         self.problem_statement: str = ""
@@ -215,6 +216,7 @@ class TutorSystem:
             model_name,
             (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
             enable_memory_tool=self._scenario == "everyday_support",
+            enable_calendar_tools=self._scenario == "everyday_support",
         )
 
     def set_ai_tools(self, tool_ids: list[str]) -> None:
@@ -242,6 +244,7 @@ class TutorSystem:
             model_name,
             (prompts_dir / "tutor.txt").read_text(encoding="utf-8"),
             enable_memory_tool=scenario == "everyday_support",
+            enable_calendar_tools=scenario == "everyday_support",
         )
 
     @staticmethod

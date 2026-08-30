@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from external_api.litellm_api import (
     FunctionCall,
@@ -10,6 +11,7 @@ from external_api.litellm_api import (
 )
 from proactive_tutor.agents import tutor as tutor_module
 from proactive_tutor.agents.tutor import TutorAgent
+from proactive_tutor.tools import ToolDefinition, ToolProvider
 
 
 def _metrics(call_id: str, tokens: int = 5) -> dict:
@@ -187,6 +189,52 @@ def test_tool_rejects_non_mcp_tool_and_unexpected_arguments() -> None:
 
     assert wrong_tool["error"] == "tool is not available: unknown_tool"
     assert "unexpected arguments: path" in wrong_argument["error"]
+
+
+def test_tutor_accepts_a_provider_without_agent_changes() -> None:
+    class CalendarProvider(ToolProvider):
+        def definitions(self) -> list[ToolDefinition]:
+            return [
+                ToolDefinition(
+                    name="calendar_lookup",
+                    description="Look up calendar events.",
+                    parameters={
+                        "type": "object",
+                        "properties": {"date": {"type": "string"}},
+                        "required": ["date"],
+                        "additionalProperties": False,
+                    },
+                    source="test_calendar",
+                )
+            ]
+
+        def execute(
+            self,
+            name: str,
+            arguments: dict[str, Any],
+        ) -> dict[str, Any]:
+            return {"name": name, "events": [], **arguments}
+
+        def instructions(self) -> str:
+            return "Use calendar_lookup only for schedule questions."
+
+    agent = TutorAgent(
+        "test-model",
+        "system",
+        tool_provider=CalendarProvider(),
+    )
+
+    assert agent._tool_definitions()[0]["function"]["name"] == "calendar_lookup"
+    assert agent._execute_tool_call(
+        {"name": "calendar_lookup", "arguments": {"date": "2026-08-31"}}
+    ) == {
+        "name": "calendar_lookup",
+        "events": [],
+        "date": "2026-08-31",
+    }
+    assert (
+        "Use calendar_lookup" in agent._prepare_initial_chat_messages([])[0]["content"]
+    )
 
 
 def test_tutor_executes_memory_mcp_and_synthesizes_answer(monkeypatch) -> None:

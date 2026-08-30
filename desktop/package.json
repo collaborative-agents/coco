@@ -205,7 +205,9 @@
     ],
     "mac": {
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Coco uses the microphone for voice messages and, when you enable voice activation, to detect Coco wake phrases locally on this Mac."
+        "NSMicrophoneUsageDescription": "Coco uses the microphone for voice messages and, when you enable voice activation, to detect Coco wake phrases locally on this Mac.",
+        "NSCalendarsUsageDescription": "Coco reads your calendars only when you ask about your schedule or availability.",
+        "NSCalendarsFullAccessUsageDescription": "Coco reads your calendars only when you ask about your schedule or availability. Calendar changes are not enabled."
       },
       "icon": "assets/pet1.png",
       "forceCodeSigning": true,
