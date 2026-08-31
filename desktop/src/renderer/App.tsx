@@ -145,7 +145,7 @@ function PetMenuIcon({
 
 /**
  * Statuses that represent mid-friction observations (Tier 2).
- * These show a delayed "Help me with this" button.
+ * These are displayed only after the tutor has produced a useful suggestion.
  * Positive progress statuses are Tier 1 — no button. Observing updates are
  * recorded in Activity history without displaying a bubble.
  * Tutor guidance arrives via the tutor-notification IPC channel (Tier 3).
@@ -902,9 +902,7 @@ function PetView() {
           observation: rawObservation,
           ts: event.ts ?? Math.floor(Date.now() / 1000),
           observation_id: event.observation_id,
-          proactive_support: showHelpButton
-            ? { engaged: false, available: true }
-            : undefined,
+          proactive_support: showHelpButton ? { engaged: false } : undefined,
           llm_metrics: event.llm_metrics,
         };
         setRecords((prev) => {
@@ -923,6 +921,15 @@ function PetView() {
         // observations remain available in Activity history, but must not
         // replace its bubble, mood, pulse, or lifetime.
         if (bubblePinnedRef.current) return;
+
+        // A Tier-2 observer result is only a candidate for proactive support.
+        // Wait for the tutor's second-stage check before displaying anything.
+        if (showHelpButton) return;
+
+        // Like a hidden-avatar notification, an active proactive offer owns its
+        // surface until it is dismissed, hidden, or replaced by another ready
+        // offer. Ordinary observation/mood updates must not replace it.
+        if (bubbleRef.current?.showHelpButton) return;
 
         // "Watching" is ambient state rather than actionable information.
         // Keep it in Activity history, but do not create or replace a bubble.
@@ -947,17 +954,6 @@ function PetView() {
         setBubble({ status: incomingStatus, phrase, fadingOut: false, showHelpButton, rawObservation, observationId: event.observation_id });
         setMood(STATUS_TO_MOOD[incomingStatus]);
 
-        // Log that an actionable suggestion was actually shown, so the training
-        // stage can derive "ignore" (shown with no engage/dismiss) precisely.
-        if (showHelpButton) {
-          window.electron?.ipcRenderer.sendMessage('training-feedback', {
-            kind: 'shown',
-            surface: 'bubble',
-            observation_id: event.observation_id ?? null,
-            status: incomingStatus,
-          });
-        }
-
         // Pulse ring around the pet — incrementing the key restarts the CSS
         // animation even if it's the same status as before.
         pulseKeyRef.current += 1;
@@ -967,7 +963,82 @@ function PetView() {
         // After HOLD_MS: fade the bubble out and drop the pet back to idle.
         // (Paused while the pointer is over the bubble.)
         scheduleBubbleHide(HOLD_MS);
+      },
+    );
 
+    const cleanupReadySuggestion = window.electron?.ipcRenderer.on(
+      'proactive-suggestion-ready',
+      (rawData: unknown) => {
+        const data = rawData as {
+          title?: unknown;
+          observationId?: unknown;
+          status?: unknown;
+          rawObservation?: unknown;
+        };
+        const title = typeof data?.title === 'string' ? data.title.trim() : '';
+        const incomingStatus = data?.status as ObservationStatus;
+        if (
+          !title ||
+          !TIER2_STATUSES.has(incomingStatus) ||
+          bubblePinnedRef.current
+        ) {
+          return;
+        }
+
+        // Hidden notifications reject replacement while hovered. Apply the
+        // same rule to the shared avatar-bubble surface.
+        if (bubbleHoverRef.current && bubbleRef.current) return;
+
+        reportSocialNotificationClosed();
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        if (fadeTimer.current) clearTimeout(fadeTimer.current);
+        if (pulseTimer.current) clearTimeout(pulseTimer.current);
+        bubbleHoverRef.current = false;
+        bubblePinnedRef.current = false;
+
+        const nextBubble: BubbleState = {
+          status: incomingStatus,
+          phrase: title,
+          fadingOut: false,
+          showHelpButton: true,
+          rawObservation:
+            typeof data.rawObservation === 'string'
+              ? data.rawObservation
+              : undefined,
+          observationId:
+            typeof data.observationId === 'string'
+              ? data.observationId
+              : undefined,
+        };
+        bubbleRef.current = nextBubble;
+        setBubble(nextBubble);
+        setMood(STATUS_TO_MOOD[incomingStatus]);
+        setRecords((prev) =>
+          prev.map((record) =>
+            record.observation_id === nextBubble.observationId
+              ? {
+                  ...record,
+                  proactive_support: {
+                    ...(record.proactive_support ?? { engaged: false }),
+                    available: true,
+                  },
+                }
+              : record,
+          ),
+        );
+
+        window.electron?.ipcRenderer.sendMessage('training-feedback', {
+          kind: 'shown',
+          surface: 'bubble',
+          observation_id: nextBubble.observationId ?? null,
+          status: incomingStatus,
+          stage: 'offer',
+        });
+
+        pulseKeyRef.current += 1;
+        setPulse({ status: incomingStatus, key: pulseKeyRef.current });
+        pulseTimer.current = setTimeout(() => setPulse(null), PULSE_MS);
+        scheduleBubbleHide(HOLD_MS);
       },
     );
 
@@ -976,6 +1047,8 @@ function PetView() {
       if (typeof cleanupChatSuppression === 'function')
         cleanupChatSuppression();
       if (typeof cleanup === 'function') cleanup();
+      if (typeof cleanupReadySuggestion === 'function')
+        cleanupReadySuggestion();
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
       if (pulseTimer.current) clearTimeout(pulseTimer.current);

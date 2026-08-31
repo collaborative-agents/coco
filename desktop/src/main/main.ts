@@ -294,7 +294,10 @@ let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
 let revealedSuggestionOpen = false;
 let proactiveNotificationOpen = false;
-let latestHiddenSuggestionObservationId: string | undefined;
+// The newest proactive event eligible for presentation, regardless of whether
+// it will use the avatar bubble or the hidden-avatar notification surface.
+// Tutor requests may finish out of order, so only this id may be shown.
+let latestProactiveSuggestionObservationId: string | undefined;
 let onboardingWindow: BrowserWindow | null = null;
 let authWindow: BrowserWindow | null = null;
 let sessionSetupWindow: BrowserWindow | null = null;
@@ -1120,7 +1123,7 @@ const showChatPanel = () => {
   // have not been revealed yet and prevent an in-flight hidden-avatar request
   // from surfacing after the chat opens. A suggestion the user explicitly
   // revealed remains pinned until they close it themselves.
-  latestHiddenSuggestionObservationId = undefined;
+  latestProactiveSuggestionObservationId = undefined;
   if (avatarWindow && !avatarWindow.isDestroyed()) {
     avatarWindow.webContents.send('suppress-unrevealed-proactive-suggestion');
   }
@@ -1729,10 +1732,10 @@ const hasOpenRevealedSuggestion = (): boolean =>
 
 const showNotification = (payload: NotificationPayload): boolean => {
   if (payload.notifType !== 'proactive-suggestion') {
-    latestHiddenSuggestionObservationId = undefined;
+    latestProactiveSuggestionObservationId = undefined;
   }
   if (payload.notifType === 'proactive-suggestion' && isChatPanelOpen()) {
-    latestHiddenSuggestionObservationId = undefined;
+    latestProactiveSuggestionObservationId = undefined;
     log.info(
       '[Notification] Suppressed proactive suggestion while Coco chat is open.',
     );
@@ -3085,11 +3088,10 @@ function readProfile(): {
 }
 
 // ── Instant suggestion precompute cache ─────────────────────────────────────
-// When a Tier-2 proactive bubble appears we eagerly ask the tutor server for a
-// ready-to-use suggestion and cache the in-flight promise keyed by
-// observation_id. By the time the user clicks "Help me with this" (a few
-// seconds of reading later) the result is usually ready, so it can be revealed
-// instantly instead of waiting on a fresh LLM round-trip.
+// For each Tier-2 candidate, ask the tutor server for a ready-to-use suggestion
+// and cache the in-flight promise by observation_id. Nothing is presented until
+// this second-stage usefulness check succeeds, after which a click can reveal
+// the cached result instantly.
 const suggestionCache = new Map<
   string,
   {
@@ -3164,9 +3166,8 @@ function pruneSuggestionCache() {
   }
 }
 
-// Fire the suggestion request for a freshly shown Tier-2 observation and stash
-// the promise. Never throws — failures resolve to null so the click path falls
-// back to the existing chat flow.
+// Fire the suggestion request for a Tier-2 candidate and stash the promise.
+// Never throws — failures resolve to null and therefore produce no offer.
 function precomputeSuggestion(event: {
   observation_id?: string;
   observation?: string;
@@ -4941,8 +4942,10 @@ const startObserver = () => {
         event.observation_id = `synthetic-${Date.now()}-${syntheticObsSeq}`;
       }
 
-      // Forward ordinary observations as usual. Forward proactive events only
-      // when chat is not already serving as the active support surface.
+      // Forward observations for avatar mood and Activity history. Proactive
+      // events are deliberately not presented by this channel; the renderer
+      // waits for `proactive-suggestion-ready` after the tutor's second-stage
+      // usefulness check completes.
       if (
         !suppressProactiveSuggestionForChat &&
         !suppressProactiveSuggestionForCooldown &&
@@ -4973,10 +4976,9 @@ const startObserver = () => {
 
       const taskLabel = event.task_label;
 
-      // ── Eagerly precompute an instant suggestion for Tier-2 bubbles ───
-      // Fire the moment the bubble appears so it's ready by click time. Done
-      // regardless of session state, except while visible chat already provides
-      // support. The renderer falls back to chat only on a cache miss.
+      // ── Generate and validate proactive support before presenting it ─────
+      // Both avatar modes use this same readiness, staleness, and suppression
+      // gate. Only the final presentation surface differs.
       if (status && PRECOMPUTE_STATUSES.has(status)) {
         const suggestionIsAlreadyRevealed = hasOpenRevealedSuggestion();
         if (suppressProactiveSuggestionForChat) {
@@ -4990,18 +4992,17 @@ const startObserver = () => {
             '[Notification] Suspended proactive suggestions while a revealed suggestion is open.',
           );
         } else {
+          latestProactiveSuggestionObservationId = event.observation_id;
           const suggestionPromise = precomputeSuggestion(event);
-          if (hideAvatarMode && event.observation) {
+          if (event.observation) {
             const rawObservation = cleanObservation(event.observation);
-            latestHiddenSuggestionObservationId = event.observation_id;
             void suggestionPromise?.then((value) => {
-              // Hidden-avatar notifications preview the generated suggestion,
-              // rather than the observer diagnosis that led to it.
               if (
                 !value ||
                 value.kind === 'abstain' ||
-                !hideAvatarMode ||
-                latestHiddenSuggestionObservationId !== event.observation_id
+                isChatPanelOpen() ||
+                hasOpenRevealedSuggestion() ||
+                latestProactiveSuggestionObservationId !== event.observation_id
               ) {
                 return;
               }
@@ -5012,6 +5013,29 @@ const startObserver = () => {
                       availableTools: buildAvailableTools(value.targetTool),
                     }
                   : value;
+              if (!hideAvatarMode) {
+                if (
+                  avatarWindow &&
+                  !avatarWindow.isDestroyed() &&
+                  avatarRendererReady
+                ) {
+                  avatarWindow.webContents.send(
+                    'proactive-suggestion-ready',
+                    {
+                      title: suggestion.title,
+                      observationId: event.observation_id,
+                      status,
+                      rawObservation,
+                    },
+                  );
+                }
+                return;
+              }
+
+              // Hidden-avatar notifications and visible-avatar bubbles both
+              // preview this same generated title. The notification owns its
+              // shown feedback here; the avatar renderer reports shown only if
+              // it actually accepts the offer (for example, it may be hovered).
               const shown = showNotification({
                 message: suggestion.title,
                 actionLabel: 'Reveal full suggestion',
@@ -5110,7 +5134,7 @@ app
       systemSuspended = true;
       syncWakeWordService();
       observationSleepGuard.suspend();
-      latestHiddenSuggestionObservationId = undefined;
+      latestProactiveSuggestionObservationId = undefined;
       suggestionCache.clear();
       notificationHovered = false;
       revealedSuggestionOpen = false;
@@ -5127,7 +5151,7 @@ app
       systemSuspended = false;
       syncWakeWordService();
       observationSleepGuard.resume();
-      latestHiddenSuggestionObservationId = undefined;
+      latestProactiveSuggestionObservationId = undefined;
       suggestionCache.clear();
       notificationHovered = false;
       revealedSuggestionOpen = false;

@@ -9,7 +9,7 @@ export interface BubbleState {
   status: ObservationStatus;
   phrase: string;
   fadingOut: boolean;
-  /** Tier 2: show "Help me with this" button immediately. */
+  /** Tier 2: show "Help me with this" after a suggestion is ready. */
   showHelpButton?: boolean;
   /**
    * Raw observation text from the sensing server (cleaned of JSON wrappers /

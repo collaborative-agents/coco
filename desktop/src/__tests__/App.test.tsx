@@ -31,14 +31,23 @@ describe('App', () => {
       listeners.get('observation-update')?.({
         type: 'snapshot',
         observation: 'The user may have made an error.',
+        observation_id: 'obs-suspend',
         status: 'mistake',
         ts: Date.now() / 1000,
       });
+      listeners.get('proactive-suggestion-ready')?.({
+        title: 'Review the possible error',
+        observationId: 'obs-suspend',
+        status: 'mistake',
+        rawObservation: 'The user may have made an error.',
+      });
     });
-    expect(screen.getByText('Heads up')).toBeInTheDocument();
+    expect(screen.getByText('Review the possible error')).toBeInTheDocument();
 
     act(() => listeners.get('system-suspend')?.());
-    expect(screen.queryByText('Heads up')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Review the possible error'),
+    ).not.toBeInTheDocument();
   });
 
   it('shows a social avatar alert and opens the Friends inbox', () => {
@@ -95,30 +104,30 @@ describe('App', () => {
       listeners.get('observation-update')?.({
         type: 'snapshot',
         observation: 'The user may have made an error.',
+        observation_id: 'obs-chat-open',
         status: 'mistake',
         ts: Date.now() / 1000,
       });
+      listeners.get('proactive-suggestion-ready')?.({
+        title: 'Review the possible error',
+        observationId: 'obs-chat-open',
+        status: 'mistake',
+        rawObservation: 'The user may have made an error.',
+      });
     });
-    expect(screen.getByText('Heads up')).toBeInTheDocument();
+    expect(screen.getByText('Review the possible error')).toBeInTheDocument();
 
     act(() => {
       listeners.get('suppress-unrevealed-proactive-suggestion')?.();
     });
-    expect(screen.queryByText('Heads up')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Review the possible error'),
+    ).not.toBeInTheDocument();
   });
 
-  it('does not engage or open chat when the instant tutor abstains', async () => {
+  it('does not display a proactive offer before the tutor accepts it', () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const sendMessage = jest.fn();
-    const invoke = jest.fn((channel: string) => {
-      if (channel === 'get-coco-sleep-mode') {
-        return Promise.resolve({ sleeping: false });
-      }
-      if (channel === 'get-instant-suggestion') {
-        return Promise.resolve({ status: 'abstained' });
-      }
-      return Promise.resolve([]);
-    });
     (window as any).electron = {
       ipcRenderer: {
         on: (channel: string, callback: (...args: unknown[]) => void) => {
@@ -126,7 +135,7 @@ describe('App', () => {
           return () => listeners.delete(channel);
         },
         sendMessage,
-        invoke,
+        invoke: jest.fn().mockResolvedValue([]),
       },
     };
 
@@ -141,21 +150,70 @@ describe('App', () => {
       });
     });
 
-    fireEvent.click(screen.getByText('Help me with this'));
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('get-instant-suggestion', {
-        observationId: 'obs-abstain',
+    expect(screen.queryByText('Support available')).not.toBeInTheDocument();
+    expect(screen.queryByText('Help me with this')).not.toBeInTheDocument();
+    expect(sendMessage.mock.calls).not.toContainEqual([
+      'training-feedback',
+      expect.objectContaining({ kind: 'shown' }),
+    ]);
+  });
+
+  it('shows the generated offer and protects it from observation updates', () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const sendMessage = jest.fn();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: (channel: string, callback: (...args: unknown[]) => void) => {
+          listeners.set(channel, callback);
+          return () => listeners.delete(channel);
+        },
+        sendMessage,
+        invoke: jest.fn().mockResolvedValue([]),
+      },
+    };
+
+    render(<App />);
+    act(() => {
+      listeners.get('observation-update')?.({
+        type: 'snapshot',
+        observation: 'The draft could be clearer.',
+        observation_id: 'obs-ready',
+        status: 'support_needed',
+        ts: Date.now() / 1000,
+      });
+      listeners.get('proactive-suggestion-ready')?.({
+        title: 'Tighten the opening paragraph',
+        observationId: 'obs-ready',
+        status: 'support_needed',
+        rawObservation: 'The draft could be clearer.',
       });
     });
 
-    expect(sendMessage).not.toHaveBeenCalledWith(
-      'help-me-with-this',
-      expect.anything(),
-    );
-    expect(sendMessage.mock.calls).not.toContainEqual([
-      'training-feedback',
-      expect.objectContaining({ kind: 'engage' }),
-    ]);
+    expect(
+      screen.getByText('Tighten the opening paragraph'),
+    ).toBeInTheDocument();
+    expect(sendMessage).toHaveBeenCalledWith('training-feedback', {
+      kind: 'shown',
+      surface: 'bubble',
+      observation_id: 'obs-ready',
+      status: 'support_needed',
+      stage: 'offer',
+    });
+
+    act(() => {
+      listeners.get('observation-update')?.({
+        type: 'snapshot',
+        observation: 'The user continued editing.',
+        observation_id: 'obs-progress',
+        status: 'progress',
+        ts: Date.now() / 1000,
+      });
+    });
+
+    expect(
+      screen.getByText('Tighten the opening paragraph'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Progress')).not.toBeInTheDocument();
   });
 
   it('does not replace a pinned suggestion with incoming observations', async () => {
@@ -197,10 +255,18 @@ describe('App', () => {
         status: 'support_needed',
         ts: Date.now() / 1000,
       });
+      listeners.get('proactive-suggestion-ready')?.({
+        title: 'Review the report structure',
+        observationId: 'obs-pinned',
+        status: 'support_needed',
+        rawObservation: 'The report structure may need attention.',
+      });
     });
     fireEvent.click(screen.getByText('Help me with this'));
     expect(
-      await screen.findByText('Review the report structure'),
+      await screen.findByText(
+        'Move the summary before the supporting details.',
+      ),
     ).toBeInTheDocument();
 
     act(() => {
