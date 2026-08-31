@@ -59,6 +59,37 @@ body,
   transform: scale(0.78);
 }
 
+.pet-drag-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  z-index: 29;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: rgba(31, 41, 55, 0.9);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+  color: #fff;
+  font: 500 10.5px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  transform: translate(-50%, 3px);
+  transition:
+    opacity 140ms ease 450ms,
+    transform 140ms ease 450ms;
+}
+
+.pet-container:hover .pet-drag-hint {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.pet-container.has-open-actions .pet-drag-hint {
+  opacity: 0;
+  transition-delay: 0ms;
+}
+
 /* ── Observation thought-bubble ────────────────────────────────────────── */
 
 /* Status palette — accent color overridden per .status-* modifier. */

@@ -608,6 +608,25 @@ describe('deferred suggestion context', () => {
     expect(sendMessage).toHaveBeenCalledWith('auth-logout');
   });
 
+  it('keeps the Social and messages button the same size as other header buttons', () => {
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async () => null),
+      },
+    };
+
+    render(<SessionChatView />);
+    const socialButton = screen.getByRole('button', {
+      name: 'Social and messages',
+    });
+    const settingsButton = screen.getByTitle('Settings');
+
+    expect(socialButton).toHaveStyle({ width: '26px', height: '25px' });
+    expect(settingsButton).toHaveStyle({ width: '26px', height: '25px' });
+  });
+
   it('opens the settings panel from the tray event', async () => {
     const listeners = new Map<string, (data?: unknown) => void>();
     (window as any).electron = {

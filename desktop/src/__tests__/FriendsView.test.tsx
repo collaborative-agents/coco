@@ -311,9 +311,12 @@ describe('FriendsView', () => {
       });
     });
 
-    expect(
-      screen.getByRole('button', { name: 'Social and messages (5 new)' }),
-    ).toBeInTheDocument();
+    const socialButton = screen.getByRole('button', {
+      name: 'Social and messages (5 new)',
+    });
+    expect(socialButton).toBeInTheDocument();
+    expect(socialButton.querySelector('svg')).toHaveAttribute('width', '12');
+    expect(screen.queryByText('♡')).not.toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
   });
 });

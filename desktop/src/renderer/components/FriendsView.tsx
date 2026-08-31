@@ -6,6 +6,7 @@ import React, {
   useState,
 } from 'react';
 import GroupsView from './GroupsView';
+import { formatSocialTime, socialTimestampMs } from './social-time';
 
 interface DirectMessage {
   _id: string;
@@ -372,10 +373,7 @@ function participantInitial(participantId: string): string {
 }
 
 function messageTime(value: string): string {
-  const timestamp = new Date(value);
-  return Number.isNaN(timestamp.getTime())
-    ? ''
-    : timestamp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return formatSocialTime(value);
 }
 
 function knowledgeRequestId(request: KnowledgeRequest): string {
@@ -445,7 +443,20 @@ export function FriendsButton({
       aria-label={title}
       onClick={onClick}
     >
-      ♡
+      <svg
+        viewBox="0 0 24 24"
+        width="12"
+        height="12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+        style={{ display: 'block' }}
+      >
+        <path d="M20.8 4.7a5.5 5.5 0 0 0-7.8 0L12 5.8l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.4 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" />
+      </svg>
       {attentionCount > 0 && (
         <span
           style={{
@@ -791,8 +802,8 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
       ]),
     ].sort(
       (first, second) =>
-        new Date(first.timestamp).getTime() -
-        new Date(second.timestamp).getTime(),
+        socialTimestampMs(first.timestamp) -
+        socialTimestampMs(second.timestamp),
     );
     return (
       <div style={styles.root}>
@@ -1232,8 +1243,8 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
                   ...outgoingKnowledgeRequests,
                 ].sort(
                   (first, second) =>
-                    new Date(second.updated_at).getTime() -
-                    new Date(first.updated_at).getTime(),
+                    socialTimestampMs(second.updated_at) -
+                    socialTimestampMs(first.updated_at),
                 )[0];
                 const knowledgeAttention =
                   pendingKnowledgeRequests.length +
@@ -1251,8 +1262,8 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
                 } else if (
                   latestKnowledgeRequest &&
                   (!friend.last_message ||
-                    new Date(latestKnowledgeRequest.updated_at).getTime() >=
-                      new Date(friend.last_message.created_at).getTime())
+                    socialTimestampMs(latestKnowledgeRequest.updated_at) >=
+                      socialTimestampMs(friend.last_message.created_at))
                 ) {
                   preview = `Coco ${latestKnowledgeRequest.status}: ${latestKnowledgeRequest.question}`;
                   showKnowledgeCue = true;

@@ -18,12 +18,22 @@ const group = {
     _id: 'message-1',
     group_id: 'group-1',
     sequence: 1,
+    sender_id: 'participant-2',
     sender_label: 'participant-2',
     sender_type: 'participant' as const,
     message_type: 'message' as const,
     content: 'Want to compare answers?',
     created_at: '2026-08-28T12:01:00Z',
   },
+};
+
+const ownMessage = {
+  ...group.last_message,
+  _id: 'message-2',
+  sequence: 2,
+  sender_id: 'participant-1',
+  sender_label: 'participant-1',
+  content: 'My earlier answer was 42.',
 };
 
 function installElectron(invoke: jest.Mock) {
@@ -57,6 +67,9 @@ describe('GroupsView', () => {
       can_administer: false,
     };
     const invoke = jest.fn((channel: string) => {
+      if (channel === 'get-profile') {
+        return Promise.resolve({ participantId: 'Participant-1' });
+      }
       if (channel === 'social-list-group-inbox') return Promise.resolve(inbox);
       if (channel === 'social-accept-group-invitation') {
         inbox = {
@@ -67,7 +80,7 @@ describe('GroupsView', () => {
         };
       }
       if (channel === 'social-list-group-messages') {
-        return Promise.resolve({ messages: [group.last_message] });
+        return Promise.resolve({ messages: [group.last_message, ownMessage] });
       }
       if (channel === 'social-list-group-members') {
         return Promise.resolve({
@@ -102,7 +115,18 @@ describe('GroupsView', () => {
     expect(
       await screen.findByText('Want to compare answers?'),
     ).toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith('social-mark-group-read', 'group-1', 1);
+    await waitFor(() =>
+      expect(screen.getByText('My earlier answer was 42.')).toHaveStyle({
+        alignSelf: 'flex-end',
+      }),
+    );
+    expect(screen.getByText('Want to compare answers?')).toHaveStyle({
+      alignSelf: 'flex-start',
+    });
+    expect(
+      screen.queryByRole('button', { name: 'Report' }),
+    ).not.toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith('social-mark-group-read', 'group-1', 2);
 
     fireEvent.change(screen.getByLabelText(`Message ${group.name}`), {
       target: { value: 'My answer is 42.' },

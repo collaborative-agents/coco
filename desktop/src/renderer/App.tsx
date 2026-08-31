@@ -1473,9 +1473,12 @@ function PetView() {
       )}
       <div
         ref={petActionsRef}
-        className={`pet-container${cocoSleeping ? ' is-coco-sleeping' : ''}`}
+        className={`pet-container${cocoSleeping ? ' is-coco-sleeping' : ''}${actionsMenuOpen ? ' has-open-actions' : ''}`}
       >
         <PetSprite mood={cocoSleeping ? 'sleep' : mood} />
+        <span className="pet-drag-hint" aria-hidden>
+          Right-click for menu
+        </span>
 
         <button
           type="button"

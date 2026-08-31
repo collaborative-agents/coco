@@ -269,6 +269,7 @@ describe('App', () => {
     };
 
     render(<App />);
+    expect(screen.getByText('Right-click for menu')).toBeInTheDocument();
     expect(screen.queryByTitle('Open the chat')).not.toBeInTheDocument();
     fireEvent.click(screen.getByAltText('Desktop Pet'));
     expect(sendMessage).not.toHaveBeenCalledWith('open-main-window');

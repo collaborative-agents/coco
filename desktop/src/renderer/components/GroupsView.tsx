@@ -6,11 +6,13 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { formatSocialTime } from './social-time';
 
 interface GroupMessage {
   _id: string;
   group_id: string;
   sequence: number;
+  sender_id: string;
   sender_label: string;
   sender_type: 'participant' | 'admin';
   message_type: 'message' | 'announcement';
@@ -237,9 +239,20 @@ const S: Record<string, React.CSSProperties> = {
   message: {
     maxWidth: '86%',
     alignSelf: 'flex-start',
-    borderRadius: 10,
+    borderRadius: '4px 14px 14px 14px',
     padding: '8px 10px',
     background: '#f3f4f6',
+    color: '#1f2937',
+    fontSize: 12.5,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+  },
+  ownMessage: {
+    maxWidth: '86%',
+    alignSelf: 'flex-end',
+    borderRadius: '14px 14px 4px 14px',
+    padding: '8px 10px',
+    background: '#dbeafe',
     color: '#1f2937',
     fontSize: 12.5,
     whiteSpace: 'pre-wrap',
@@ -306,14 +319,12 @@ function splitParticipants(value: string): string[] {
 }
 
 function time(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? ''
-    : date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return formatSocialTime(value);
 }
 
 export default function GroupsView() {
   const [inbox, setInbox] = useState(EMPTY_INBOX);
+  const [currentParticipantId, setCurrentParticipantId] = useState('');
   const [selected, setSelected] = useState<GroupSummary | null>(null);
   const [messages, setMessages] = useState<GroupMessage[]>([]);
   const [members, setMembers] = useState<GroupMember[]>([]);
@@ -370,6 +381,17 @@ export default function GroupsView() {
 
   useEffect(() => {
     loadInbox();
+    window.electron?.ipcRenderer
+      .invoke('get-profile')
+      .then((profile) => {
+        const participantId = (profile as { participantId?: unknown } | null)
+          ?.participantId;
+        if (typeof participantId === 'string') {
+          setCurrentParticipantId(participantId.trim().toLowerCase());
+        }
+        return undefined;
+      })
+      .catch(() => undefined);
     const cleanup = window.electron?.ipcRenderer.on(
       'social-inbox-updated',
       (value) => {
@@ -701,40 +723,35 @@ export default function GroupsView() {
             {!messages.length && (
               <div style={S.preview}>No messages yet. Say hello.</div>
             )}
-            {messages.map((message) => (
-              <div
-                key={message._id}
-                style={
-                  message.message_type === 'announcement'
-                    ? S.announcementMessage
-                    : S.message
-                }
-              >
-                <div style={S.meta}>
-                  {message.message_type === 'announcement'
-                    ? '◆ Study team announcement'
-                    : message.sender_label}
-                  {' · '}
-                  {time(message.created_at)}
-                </div>
-                {message.content}
-                {message.message_type !== 'announcement' && (
-                  <button
-                    type="button"
+            {messages.map((message) => {
+              const isOwnMessage =
+                message.message_type === 'message' &&
+                Boolean(currentParticipantId) &&
+                message.sender_id.trim().toLowerCase() === currentParticipantId;
+              let messageStyle = S.message;
+              if (message.message_type === 'announcement') {
+                messageStyle = S.announcementMessage;
+              } else if (isOwnMessage) {
+                messageStyle = S.ownMessage;
+              }
+              return (
+                <div key={message._id} style={messageStyle}>
+                  <div
                     style={{
-                      ...S.back,
-                      display: 'block',
-                      marginTop: 4,
-                      padding: 0,
-                      fontSize: 9.5,
+                      ...S.meta,
+                      textAlign: isOwnMessage ? 'right' : 'left',
                     }}
-                    onClick={() => setReportingMessageId(message._id)}
                   >
-                    Report
-                  </button>
-                )}
-              </div>
-            ))}
+                    {message.message_type === 'announcement'
+                      ? '◆ Study team announcement'
+                      : message.sender_label}
+                    {' · '}
+                    {time(message.created_at)}
+                  </div>
+                  {message.content}
+                </div>
+              );
+            })}
           </div>
           {selected.status === 'active' ? (
             <form style={S.composer} onSubmit={sendMessage}>

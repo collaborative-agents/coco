@@ -339,7 +339,9 @@ const S: Record<string, React.CSSProperties> = {
   } as React.CSSProperties,
   iconBtn: {
     border: 'none', background: 'transparent', cursor: 'pointer',
-    fontSize: 15, color: '#9ca3af', padding: '3px 5px', borderRadius: 7,
+    width: 26, height: 25, display: 'inline-flex', alignItems: 'center',
+    justifyContent: 'center', flexShrink: 0, lineHeight: 1,
+    fontSize: 15, color: '#9ca3af', padding: 0, borderRadius: 7,
   },
   iconBtnActive: { background: ACCENT_BG, color: ACCENT },
   newSessionBtn: {
