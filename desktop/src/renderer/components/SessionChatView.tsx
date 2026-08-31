@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import trainingAnimation from '../../../assets/training.gif';
 import {
   startVoiceRecorder,
   type ActiveVoiceRecorder,
@@ -47,6 +48,7 @@ export interface TrainingScreenshotRetentionInfo {
 export interface PersonalizationStatusInfo {
   available: boolean;
   sleeping: boolean;
+  successfulUpdateCount: number;
   state:
     | 'idle'
     | 'running'
@@ -75,6 +77,13 @@ export interface PersonalizationStatusInfo {
     detail?: string;
   };
   nextEvolveAttemptAt?: number;
+  dailyRun?: {
+    scheduledHour: number;
+    lastStartedDate?: string;
+    lastCompletedDate?: string;
+    lastOutcome?: 'completed' | 'no_work';
+    lastCompletedAt?: number;
+  };
 }
 
 interface WakeWordSettingsInfo {
@@ -459,16 +468,39 @@ const S: Record<string, React.CSSProperties> = {
     border: '1px solid #f59e0b',
     borderRadius: 10,
     background: '#fffbeb',
-    padding: '10px 11px',
     color: '#78350f',
     fontSize: 11.5,
     lineHeight: 1.5,
+    overflow: 'hidden',
+  },
+  retentionToggle: {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    border: 'none',
+    background: 'transparent',
+    padding: '8px 10px',
+    color: '#92400e',
+    cursor: 'pointer',
+    fontFamily: FONT,
+    textAlign: 'left',
   },
   retentionTitle: {
     fontSize: 12.5,
     fontWeight: 700,
     color: '#92400e',
-    marginBottom: 4,
+  },
+  retentionChevron: {
+    width: 14,
+    height: 14,
+    flex: '0 0 auto',
+    transition: 'transform 150ms ease',
+  },
+  retentionBody: {
+    borderTop: '1px solid rgba(245, 158, 11, 0.35)',
+    padding: '8px 10px 10px',
   },
   retentionPath: {
     display: 'block',
@@ -522,6 +554,39 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 11,
     lineHeight: 1.45,
     marginTop: 4,
+  },
+  personalizationGrowth: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    border: `1px solid ${ACCENT_BORDER}`,
+    borderRadius: 9,
+    background: ACCENT_BG,
+    padding: '9px 10px',
+    marginBottom: 8,
+  },
+  personalizationGrowthAnimation: {
+    width: 72,
+    height: 48,
+    flex: '0 0 auto',
+    objectFit: 'contain',
+  },
+  personalizationGrowthTitle: {
+    color: ACCENT,
+    fontSize: 12.5,
+    fontWeight: 700,
+    lineHeight: 1.25,
+  },
+  personalizationGrowthCount: {
+    color: ACCENT,
+    fontSize: 15,
+    fontWeight: 700,
+    lineHeight: 1.4,
+  },
+  personalizationGrowthDetail: {
+    color: '#4b5563',
+    fontSize: 10.5,
+    lineHeight: 1.4,
   },
   personalizationProgressTrack: {
     height: 6,
@@ -581,28 +646,57 @@ export function TrainingScreenshotRetentionNotice({
   info: TrainingScreenshotRetentionInfo | null;
   onOpenFolder: (path: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!info?.enabled) return null;
   return (
     <div style={S.retentionNotice} role="note">
-      <div style={S.retentionTitle}>Screenshots are being retained</div>
-      The developer mode keeps local copies of screenshots, which can
-      consume significant disk space. To turn this off, add{' '}
-      <strong>COLLECT_TRAINING_SCREENSHOTS=0</strong> to:
-      <code style={S.retentionPath}>{info.configurationPath}</code>
-      Then restart Coco. Existing images are stored under:
-      <code style={S.retentionPath}>{info.screenshotPattern}</code>
-      Turning retention off does not remove older copies. Delete the
-      <strong> observer_screenshots</strong> folders when Coco is not running a
-      personalization update if you want to reclaim that space.
-      <div>
-        <button
-          type="button"
-          style={S.retentionButton}
-          onClick={() => onOpenFolder(info.recordsRoot)}
+      <button
+        type="button"
+        style={S.retentionToggle}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span style={S.retentionTitle}>You are currently in developer mode</span>
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          aria-hidden="true"
+          style={{
+            ...S.retentionChevron,
+            transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}
         >
-          Open local records folder
-        </button>
-      </div>
+          <path
+            d="m5 7.5 5 5 5-5"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+      {expanded && (
+        <div style={S.retentionBody}>
+          The developer mode keeps local copies of screenshots, which can
+          consume significant disk space. To turn this off, add{' '}
+          <strong>COLLECT_TRAINING_SCREENSHOTS=0</strong> to:
+          <code style={S.retentionPath}>{info.configurationPath}</code>
+          Then restart Coco. Existing images are stored under:
+          <code style={S.retentionPath}>{info.screenshotPattern}</code>
+          Turning retention off does not remove older copies. Delete the
+          <strong> observer_screenshots</strong> folders when Coco is not running
+          a personalization update if you want to reclaim that space.
+          <div>
+            <button
+              type="button"
+              style={S.retentionButton}
+              onClick={() => onOpenFolder(info.recordsRoot)}
+            >
+              Open local records folder
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -615,6 +709,48 @@ const PERSONALIZATION_JOB_LABELS = {
 
 function formatPersonalizationTime(timestamp: number, seconds = false): string {
   return new Date(seconds ? timestamp * 1000 : timestamp).toLocaleString();
+}
+
+function localDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function dailyPersonalizationStatus(
+  status: PersonalizationStatusInfo,
+  now = new Date(),
+): string {
+  const daily = status.dailyRun;
+  if (!daily) return 'Coco checks for a new update every day.';
+  const today = localDateKey(now);
+  const scheduledTime = new Date(now);
+  scheduledTime.setHours(daily.scheduledHour, 0, 0, 0);
+  const scheduleLabel = scheduledTime.toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  if (daily.lastCompletedDate === today) {
+    const completedTime = daily.lastCompletedAt
+      ? new Date(daily.lastCompletedAt).toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit',
+        })
+      : null;
+    if (daily.lastOutcome === 'no_work') {
+      return `Checked today${completedTime ? ` at ${completedTime}` : ''} — no new activity to learn from.`;
+    }
+    return `Latest growth completed today${completedTime ? ` at ${completedTime}` : ''}.`;
+  }
+  if (daily.lastStartedDate === today) {
+    return status.state === 'running'
+      ? 'Coco is growing now.'
+      : 'Today’s update has started.';
+  }
+  return now < scheduledTime
+    ? `Next daily growth check is at ${scheduleLabel}.`
+    : `Today’s growth check has not run yet (scheduled for ${scheduleLabel}).`;
 }
 
 export function PersonalizationStatusPanel({
@@ -679,6 +815,27 @@ export function PersonalizationStatusPanel({
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+      {status && (
+        <div style={S.personalizationGrowth}>
+          <img
+            src={trainingAnimation}
+            alt="Coco training"
+            style={S.personalizationGrowthAnimation}
+          />
+          <div>
+            <div style={S.personalizationGrowthTitle}>Coco’s growth</div>
+            <div style={S.personalizationGrowthCount}>
+              {status.successfulUpdateCount}{' '}
+              {status.successfulUpdateCount === 1
+                ? 'successful update'
+                : 'successful updates'}
+            </div>
+            <div style={S.personalizationGrowthDetail}>
+              {dailyPersonalizationStatus(status)}
+            </div>
+          </div>
+        </div>
+      )}
       {canShowProgress && (
         <>
           <div style={S.personalizationMeta}>
@@ -2450,6 +2607,25 @@ export default function SessionChatView() {
           </div>
           <div style={S.sectionDivider} />
 
+          <TrainingScreenshotRetentionNotice
+            info={trainingScreenshotRetention}
+            onOpenFolder={(folderPath) =>
+              window.electron?.ipcRenderer.sendMessage(
+                'shell-show-item-in-finder',
+                folderPath,
+              )}
+          />
+          <div style={S.groupLabel}>Personalization</div>
+          <div style={S.helpText}>
+            Coco-PE runs only while Coco is sleeping or the Mac is idle. It is
+            checkpointed and pauses immediately for interactive work.
+          </div>
+          <PersonalizationStatusPanel
+            status={personalizationStatus}
+            loading={personalizationStatusLoading}
+            onRefresh={() => void refreshPersonalizationStatus()}
+          />
+          <div style={S.sectionDivider} />
           <div style={S.groupLabel}>Desktop</div>
           <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
             <input
@@ -2477,26 +2653,6 @@ export default function SessionChatView() {
               {avatarSaveError}
             </div>
           )}
-          <div style={S.sectionDivider} />
-
-          <TrainingScreenshotRetentionNotice
-            info={trainingScreenshotRetention}
-            onOpenFolder={(folderPath) =>
-              window.electron?.ipcRenderer.sendMessage(
-                'shell-show-item-in-finder',
-                folderPath,
-              )}
-          />
-          <div style={S.groupLabel}>Personalization</div>
-          <div style={S.helpText}>
-            Coco-PE runs only while Coco is sleeping or the Mac is idle. It is
-            checkpointed and pauses immediately for interactive work.
-          </div>
-          <PersonalizationStatusPanel
-            status={personalizationStatus}
-            loading={personalizationStatusLoading}
-            onRefresh={() => void refreshPersonalizationStatus()}
-          />
           <div style={S.sectionDivider} />
           <div style={S.groupLabel}>Health</div>
           <div style={S.helpText}>

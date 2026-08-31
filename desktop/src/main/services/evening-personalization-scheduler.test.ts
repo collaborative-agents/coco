@@ -28,10 +28,31 @@ describe('EveningPersonalizationScheduler', () => {
     expect(await scheduler.checkNow()).toBe(true);
     expect(await scheduler.checkNow()).toBe(false);
     expect(onEvening).toHaveBeenCalledTimes(1);
+    expect(scheduler.getStatus()).toEqual(
+      expect.objectContaining({
+        scheduledHour: 18,
+        lastStartedDate: '2026-08-24',
+      }),
+    );
+
+    scheduler.markCompleted('completed');
+    expect(scheduler.getStatus()).toEqual(
+      expect.objectContaining({
+        lastCompletedDate: '2026-08-24',
+        lastOutcome: 'completed',
+        lastCompletedAt: now.getTime(),
+      }),
+    );
 
     now = new Date(2026, 7, 25, 18, 1);
     expect(await scheduler.checkNow()).toBe(true);
     expect(onEvening).toHaveBeenCalledTimes(2);
+    expect(scheduler.getStatus()).toEqual(
+      expect.objectContaining({
+        lastStartedDate: '2026-08-25',
+        lastCompletedDate: '2026-08-24',
+      }),
+    );
   });
 
   it('retries when the transition could not complete', async () => {

@@ -7,6 +7,17 @@ const EVENING_HOUR = 18;
 
 interface EveningState {
   lastTriggeredDate?: string;
+  lastCompletedDate?: string;
+  lastOutcome?: 'completed' | 'no_work';
+  lastCompletedAt?: number;
+}
+
+export interface EveningPersonalizationStatus {
+  scheduledHour: number;
+  lastStartedDate?: string;
+  lastCompletedDate?: string;
+  lastOutcome?: 'completed' | 'no_work';
+  lastCompletedAt?: number;
 }
 
 export interface EveningPersonalizationSchedulerOptions {
@@ -41,6 +52,33 @@ export class EveningPersonalizationScheduler {
     this.timer = null;
   }
 
+  getStatus(): EveningPersonalizationStatus {
+    const state = this.readState();
+    return {
+      scheduledHour: EVENING_HOUR,
+      ...(state.lastTriggeredDate && {
+        lastStartedDate: state.lastTriggeredDate,
+      }),
+      ...(state.lastCompletedDate && {
+        lastCompletedDate: state.lastCompletedDate,
+      }),
+      ...(state.lastOutcome && { lastOutcome: state.lastOutcome }),
+      ...(state.lastCompletedAt && {
+        lastCompletedAt: state.lastCompletedAt,
+      }),
+    };
+  }
+
+  markCompleted(outcome: 'completed' | 'no_work'): void {
+    const now = this.options.now?.() ?? new Date();
+    this.writeState({
+      ...this.readState(),
+      lastCompletedDate: EveningPersonalizationScheduler.localDateKey(now),
+      lastOutcome: outcome,
+      lastCompletedAt: now.getTime(),
+    });
+  }
+
   async checkNow(): Promise<boolean> {
     if (this.running) return false;
     const now = this.options.now?.() ?? new Date();
@@ -53,7 +91,7 @@ export class EveningPersonalizationScheduler {
     try {
       const completed = await this.options.onEvening();
       if (!completed) return false;
-      this.writeState({ lastTriggeredDate: date });
+      this.writeState({ ...this.readState(), lastTriggeredDate: date });
       return true;
     } catch (error) {
       log.warn(

@@ -2885,15 +2885,17 @@ ipcMain.handle('get-training-screenshot-retention', () => {
 });
 
 ipcMain.removeHandler('get-personalization-status');
-ipcMain.handle(
-  'get-personalization-status',
-  () =>
-  personalizationScheduler?.getStatus() ?? {
+ipcMain.handle('get-personalization-status', () => ({
+  ...(personalizationScheduler?.getStatus() ?? {
     available: false,
     sleeping: isCocoSleeping(),
+    successfulUpdateCount: 0,
     state: 'idle',
+  }),
+  dailyRun: eveningPersonalizationScheduler?.getStatus() ?? {
+    scheduledHour: 18,
   },
-);
+}));
 
 // ── Dynamic avatar-window resize ──────────────────────────────────────────────
 // Renderer asks for a new content size when the bubble or history panel
@@ -4810,6 +4812,7 @@ const startObserver = () => {
           wakeAfterEveningPersonalization &&
           (outcome === 'completed' || outcome === 'no_work')
         ) {
+          eveningPersonalizationScheduler?.markCompleted(outcome);
           wakeAfterEveningPersonalization = false;
           void setCocoSleepMode(false).then((result) => {
             if (result.success) {

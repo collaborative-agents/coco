@@ -1,6 +1,6 @@
 import React from 'react';
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import {
   PersonalizationStatusPanel,
   ToolCallCard,
@@ -110,7 +110,7 @@ describe('Training screenshot retention notice', () => {
       />,
     );
     expect(
-      screen.queryByText('Screenshots are being retained'),
+      screen.queryByText('You are currently in developer mode'),
     ).not.toBeInTheDocument();
 
     rerender(
@@ -120,8 +120,18 @@ describe('Training screenshot retention notice', () => {
       />,
     );
     expect(
-      screen.getByText('Screenshots are being retained'),
+      screen.getByText('You are currently in developer mode'),
     ).toBeInTheDocument();
+    const disclosure = screen.getByRole('button', {
+      name: 'You are currently in developer mode',
+    });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(
+      screen.queryByText(/COLLECT_TRAINING_SCREENSHOTS=0/),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
     expect(
       screen.getByText(/COLLECT_TRAINING_SCREENSHOTS=0/),
     ).toBeInTheDocument();
@@ -134,6 +144,12 @@ describe('Training screenshot retention notice', () => {
 
 describe('Personalization status', () => {
   it('shows live self-evolving prompt progress and checkpoint details', () => {
+    const now = new Date();
+    const today = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    ].join('-');
     render(
       <PersonalizationStatusPanel
         loading={false}
@@ -141,6 +157,7 @@ describe('Personalization status', () => {
         status={{
           available: true,
           sleeping: true,
+          successfulUpdateCount: 7,
           state: 'running',
           activeJob: 'evolve',
           checkpointStatus: 'running',
@@ -151,6 +168,13 @@ describe('Personalization status', () => {
             observationCount: 24,
             feedbackEventCount: 2,
           },
+          dailyRun: {
+            scheduledHour: 18,
+            lastStartedDate: today,
+            lastCompletedDate: today,
+            lastOutcome: 'completed',
+            lastCompletedAt: now.getTime(),
+          },
         }}
       />,
     );
@@ -158,10 +182,21 @@ describe('Personalization status', () => {
     expect(
       screen.getByText('Self-evolving prompt is running'),
     ).toBeInTheDocument();
-    expect(screen.getByText('8 of 20 samples processed · 40%')).toBeInTheDocument();
-    expect(screen.getByText('Checkpoint: running')).toBeInTheDocument();
     expect(
-      screen.getByRole('progressbar', { name: 'Self-evolving prompt progress' }),
+      screen.getByText('8 of 20 samples processed · 40%'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Checkpoint: running')).toBeInTheDocument();
+    expect(screen.getByText('7 successful updates')).toBeInTheDocument();
+    expect(
+      screen.getByRole('img', { name: 'Coco training' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Latest growth completed today/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('progressbar', {
+        name: 'Self-evolving prompt progress',
+      }),
     ).toHaveAttribute('aria-valuenow', '40');
   });
 });

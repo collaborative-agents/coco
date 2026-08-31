@@ -34,6 +34,7 @@ export interface PersonalizationFatalError {
 export interface PersonalizationStatus {
   available: boolean;
   sleeping: boolean;
+  successfulUpdateCount: number;
   state: 'idle' | 'running' | 'checkpointed' | PersonalizationRunOutcome;
   activeJob?: PersonalizationJob;
   activeStartedAt?: number;
@@ -102,6 +103,25 @@ function countJsonLines(filePath: string): number | undefined {
       .filter((line) => line.trim()).length;
   } catch {
     return undefined;
+  }
+}
+
+function countSuccessfulUpdates(memoryRoot: string): number {
+  const draftsRoot = path.join(memoryRoot, 'memory_drafts');
+  try {
+    const sourceRuns = new Set<string>();
+    fs.readdirSync(draftsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .forEach((entry) => {
+        const draft = readJson(
+          path.join(draftsRoot, entry.name, 'memory_draft.json'),
+        );
+        const sourceRunId = stringValue(draft?.source_run_id);
+        if (sourceRunId?.startsWith('desktop:')) sourceRuns.add(sourceRunId);
+      });
+    return sourceRuns.size;
+  } catch {
+    return 0;
   }
 }
 
@@ -279,6 +299,7 @@ export class PersonalizationScheduler {
     return {
       available: true,
       sleeping: this.sleeping,
+      successfulUpdateCount: countSuccessfulUpdates(this.options.memoryRoot),
       state,
       ...(this.activeJob && { activeJob: this.activeJob }),
       ...(this.activeStartedAt && { activeStartedAt: this.activeStartedAt }),

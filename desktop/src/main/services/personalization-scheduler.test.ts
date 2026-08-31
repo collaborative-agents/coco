@@ -70,6 +70,44 @@ describe('PersonalizationScheduler status', () => {
     );
   });
 
+  it('counts unique successful desktop personalization updates', () => {
+    const memoryRoot = path.join(root, 'memory');
+    const draftsRoot = path.join(memoryRoot, 'memory_drafts');
+    ['draft-1', 'draft-1-copy', 'draft-2', 'manual-draft'].forEach(
+      (draftId) => {
+        fs.mkdirSync(path.join(draftsRoot, draftId), { recursive: true });
+      },
+    );
+    fs.writeFileSync(
+      path.join(draftsRoot, 'draft-1', 'memory_draft.json'),
+      JSON.stringify({ source_run_id: 'desktop:run-1' }),
+    );
+    fs.writeFileSync(
+      path.join(draftsRoot, 'draft-1-copy', 'memory_draft.json'),
+      JSON.stringify({ source_run_id: 'desktop:run-1' }),
+    );
+    fs.writeFileSync(
+      path.join(draftsRoot, 'draft-2', 'memory_draft.json'),
+      JSON.stringify({ source_run_id: 'desktop:run-2' }),
+    );
+    fs.writeFileSync(
+      path.join(draftsRoot, 'manual-draft', 'memory_draft.json'),
+      JSON.stringify({ source_run_id: 'self-evolve:manual' }),
+    );
+
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot: path.join(root, 'personalization'),
+      memoryRoot,
+      model: 'provider/model',
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+    });
+
+    expect(scheduler.getStatus().successfulUpdateCount).toBe(2);
+  });
+
   it('writes raw multiline output to the dedicated personalization log', () => {
     const logPath = path.join(root, 'logs', 'personalization.log');
     const scheduler = new PersonalizationScheduler({
