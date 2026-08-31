@@ -25,6 +25,7 @@ export type Channels =
   | 'set-user-id'
   | 'auth-signup'
   | 'auth-signin'
+  | 'auth-logout'
   | 'authentication-ui-complete'
   | 'social-list-friendships'
   | 'social-request-friend'
@@ -69,6 +70,8 @@ export type Channels =
   | 'get-chat-content-zoom-factor'
   | 'chat-content-zoom-factor'
   | 'open-chat-settings'
+  | 'open-avatar-actions-menu'
+  | 'quit-app'
   // Proactive session flow
   | 'session-active'
   | 'show-session-setup'

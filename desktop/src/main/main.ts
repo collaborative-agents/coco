@@ -957,6 +957,22 @@ const createAvatarWindow = () => {
     return { action: 'deny' };
   });
 
+  // Native drag regions do not reliably dispatch DOM context-menu events. Use
+  // Electron's native hooks, then ask the renderer to reveal the same menu as
+  // the ellipsis button so both entry points stay visually and functionally
+  // consistent.
+  const revealActionsMenu = () => {
+    avatarWindow?.webContents.send('open-avatar-actions-menu');
+  };
+  avatarWindow.webContents.on('context-menu', (event) => {
+    event.preventDefault();
+    revealActionsMenu();
+  });
+  avatarWindow.on('system-context-menu', (event) => {
+    event.preventDefault();
+    revealActionsMenu();
+  });
+
   // (notification is screen-pinned; no need to reposition on move)
 };
 
@@ -1429,6 +1445,9 @@ const openChatSettings = () => {
 ipcMain.removeAllListeners('open-chat-settings');
 ipcMain.on('open-chat-settings', () => openChatSettings());
 
+ipcMain.removeAllListeners('quit-app');
+ipcMain.on('quit-app', () => app.quit());
+
 async function openCoco(): Promise<void> {
   if (isSessionActive && currentSessionId) {
     openChatForSession(currentSessionId, pendingTaskLabel || '');
@@ -1809,7 +1828,11 @@ const showNotification = (payload: NotificationPayload): boolean => {
 ipcMain.handle('get-profile', () => {
   try {
     const raw = fs.readFileSync(profilePath(), 'utf-8');
-    return JSON.parse(raw);
+    const profile = JSON.parse(raw);
+    return {
+      ...profile,
+      ...(currentUserId ? { participantId: currentUserId } : {}),
+    };
   } catch {
     return null;
   }
@@ -4511,6 +4534,17 @@ ipcMain.handle('auth-signup', (_event, credentials: DesktopAuthCredentials) =>
 ipcMain.handle('auth-signin', (_event, credentials: DesktopAuthCredentials) =>
   authenticate('signin', credentials),
 );
+ipcMain.removeAllListeners('auth-logout');
+ipcMain.on('auth-logout', () => {
+  try {
+    clearAuthSession(app.getPath('userData'));
+    log.info('[Auth] signed out; restarting at the authentication screen');
+    app.relaunch();
+    app.quit();
+  } catch (error) {
+    log.error(`[Auth] could not clear the saved session: ${String(error)}`);
+  }
+});
 registerSocialIpcHandlers(ipcMain, socialService);
 registerKnowledgeAnswerIpcHandler(ipcMain, knowledgeAnswerService);
 

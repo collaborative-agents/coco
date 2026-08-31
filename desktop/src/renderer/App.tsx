@@ -51,7 +51,7 @@ const WIN_HISTORY_H = 540;  // strip + summary + timeline + counts + feed
 const WIN_DAILY_REVIEW_W = 470;
 const WIN_DAILY_REVIEW_H = 560;
 const WIN_ACTION_MENU_W = 200;
-const WIN_ACTION_MENU_H = 315;
+const WIN_ACTION_MENU_H = 450;
 
 interface DailyMemoryDraft {
   draftId: string;
@@ -80,8 +80,15 @@ const MEMORY_SECTION_TITLES: Record<string, string> = {
 function PetMenuIcon({
   name,
 }: {
-  name: 'sleep' | 'wake' | 'history' | 'settings';
+  name: 'chat' | 'sleep' | 'wake' | 'history' | 'hide' | 'settings' | 'quit';
 }) {
+  if (name === 'chat') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path d="M4 5.5h16v11H9l-5 4v-15Z" />
+      </svg>
+    );
+  }
   if (name === 'sleep') {
     return (
       <svg viewBox="0 0 24 24" aria-hidden>
@@ -106,6 +113,21 @@ function PetMenuIcon({
       </svg>
     );
   }
+  if (name === 'hide') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path d="M3 3l18 18" />
+        <path d="M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 4.4A10.8 10.8 0 0 1 12 4.2c5.2 0 8.5 4.8 9.3 7.2a10 10 0 0 1-2.2 3.6M6.2 6.2a12 12 0 0 0-3.5 5.2c.8 2.4 4.1 7.2 9.3 7.2 1 0 1.9-.2 2.7-.5" />
+      </svg>
+    );
+  }
+  if (name === 'quit') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path d="M10 4H5v16h5M14 8l4 4-4 4M18 12H9" />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 24 24" aria-hidden>
       <path d="M9.6 3.2h4.8l.6 2.2 1.5.9 2.2-.6 2.4 4.1-1.6 1.6v1.7l1.6 1.6-2.4 4.1-2.2-.6-1.5.9-.6 2.2H9.6L9 19.1l-1.5-.9-2.2.6-2.4-4.1 1.6-1.6v-1.7L2.9 9.8l2.4-4.1 2.2.6L9 5.4l.6-2.2Z" />
@@ -117,7 +139,8 @@ function PetMenuIcon({
 /**
  * Statuses that represent mid-friction observations (Tier 2).
  * These show a delayed "Help me with this" button.
- * Positive statuses (progress, observing) are Tier 1 — no button.
+ * Positive progress statuses are Tier 1 — no button. Observing updates are
+ * recorded in Activity history without displaying a bubble.
  * Tutor guidance arrives via the tutor-notification IPC channel (Tier 3).
  */
 const TIER2_STATUSES = new Set<ObservationStatus>([
@@ -606,10 +629,18 @@ function PetView() {
       'open-observation-history',
       () => setShowHistory(true),
     );
+    const cleanupActionsMenu = window.electron?.ipcRenderer.on(
+      'open-avatar-actions-menu',
+      () => {
+        setShowHistory(false);
+        setActionsMenuOpen(true);
+      },
+    );
     window.electron?.ipcRenderer.sendMessage('avatar-renderer-ready');
     return () => {
       if (typeof cleanupToggle === 'function') cleanupToggle();
       if (typeof cleanupOpen === 'function') cleanupOpen();
+      if (typeof cleanupActionsMenu === 'function') cleanupActionsMenu();
     };
   }, []);
 
@@ -822,6 +853,43 @@ function PetView() {
         // notification flow — they are not avatar states. Skip them here so
         // PetSprite never receives an unknown mood.
         if (!(incomingStatus in STATUS_TO_MOOD)) return;
+
+        // Always mirror the observation into Activity history, even when a
+        // revealed suggestion currently owns the visible bubble.
+        const rawObservation = cleanObservation(event.observation);
+        const showHelpButton = TIER2_STATUSES.has(incomingStatus);
+        const record: ActivityRecord = {
+          status: incomingStatus,
+          need_support: event.need_support,
+          observation: rawObservation,
+          ts: event.ts ?? Math.floor(Date.now() / 1000),
+          observation_id: event.observation_id,
+          proactive_support: showHelpButton
+            ? { engaged: false, available: true }
+            : undefined,
+          llm_metrics: event.llm_metrics,
+        };
+        setRecords((prev) => {
+          if (
+            prev.length > 0 &&
+            prev[0].observation === record.observation &&
+            prev[0].status === record.status &&
+            prev[0].need_support === record.need_support
+          ) {
+            return prev;
+          }
+          return [record, ...prev];
+        });
+
+        // A revealed suggestion is explicitly pinned by the user. Incoming
+        // observations remain available in Activity history, but must not
+        // replace its bubble, mood, pulse, or lifetime.
+        if (bubblePinnedRef.current) return;
+
+        // "Watching" is ambient state rather than actionable information.
+        // Keep it in Activity history, but do not create or replace a bubble.
+        if (incomingStatus === 'observing') return;
+
         reportSocialNotificationClosed();
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
@@ -836,14 +904,6 @@ function PetView() {
         // this prevents a stale flag from pausing/pinning the new bubble forever.)
         bubbleHoverRef.current = false;
         bubblePinnedRef.current = false;
-
-        // Clean raw observation text for storage in bubble state.
-        // This is forwarded to the webapp when the user taps "Help me with this"
-        // so the chat thread shows what exactly the system noticed.
-        const rawObservation = cleanObservation(event.observation);
-
-        // Tier 2 statuses show the "Help me with this" button immediately.
-        const showHelpButton = TIER2_STATUSES.has(incomingStatus);
 
         // Show the bubble + matching pet animation.
         setBubble({ status: incomingStatus, phrase, fadingOut: false, showHelpButton, rawObservation, observationId: event.observation_id });
@@ -870,35 +930,6 @@ function PetView() {
         // (Paused while the pointer is over the bubble.)
         scheduleBubbleHide(HOLD_MS);
 
-        // ── Accumulate activity history ────────────────────────────────────
-        // Main has already persisted this event to disk; we mirror it into
-        // local state so the open panel updates live without a re-fetch.
-        const record: ActivityRecord = {
-          status: incomingStatus,
-          need_support: event.need_support,
-          observation: cleanObservation(event.observation),
-          ts: event.ts ?? Math.floor(Date.now() / 1000),
-          observation_id: event.observation_id,
-          proactive_support: showHelpButton
-            ? { engaged: false, available: true }
-            : undefined,
-          llm_metrics: event.llm_metrics,
-        };
-        // Prepend so the list is newest-first.
-        // Deduplicate: if the most recent record has the same text and
-        // status, skip it (handles SSE reconnect replays and server
-        // double-emits from the progress detector).
-        setRecords((prev) => {
-          if (
-            prev.length > 0 &&
-            prev[0].observation === record.observation &&
-            prev[0].status === record.status &&
-            prev[0].need_support === record.need_support
-          ) {
-            return prev;
-          }
-          return [record, ...prev];
-        });
       },
     );
 
@@ -1008,10 +1039,10 @@ function PetView() {
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
-  // Clicking the pet opens the chat. If a Tier-1 ("progress"/"observing") bubble
-  // is showing — i.e. the system offered no proactive suggestion — a pet click
-  // is an explicit "I need help anyway": a false-negative signal.
-  const handleClick = (e?: SyntheticEvent) => {
+  // Opening chat is an explicit menu action. If a Tier-1
+  // ("progress"/"observing") bubble is showing — i.e. the system offered no
+  // proactive suggestion — record the action as a false-negative signal.
+  const handleOpenChat = (e?: SyntheticEvent) => {
     e?.stopPropagation?.();
     if (bubble?.socialNotification) {
       reportSocialNotificationClosed(bubble);
@@ -1445,15 +1476,6 @@ function PetView() {
         className={`pet-container${cocoSleeping ? ' is-coco-sleeping' : ''}`}
       >
         <PetSprite mood={cocoSleeping ? 'sleep' : mood} />
-        <button
-          type="button"
-          className="open-button"
-          onClick={handleClick}
-          title="Open the chat"
-          aria-label="Open the chat"
-        >
-          <span aria-hidden>Open Coco</span>
-        </button>
 
         <button
           type="button"
@@ -1473,6 +1495,18 @@ function PetView() {
 
         {actionsMenuVisible && (
           <div className="pet-actions-menu" role="menu" aria-label="Coco actions">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                setActionsMenuOpen(false);
+                handleOpenChat(event);
+              }}
+            >
+              <PetMenuIcon name="chat" />
+              <span>Open Chat</span>
+            </button>
+            <div className="pet-actions-divider" role="separator" />
             <button
               type="button"
               role="menuitem"
@@ -1497,6 +1531,20 @@ function PetView() {
               <PetMenuIcon name="history" />
               <span>History</span>
             </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                event.stopPropagation();
+                setActionsMenuOpen(false);
+                window.electron?.ipcRenderer
+                  .invoke('update-avatar-visibility', { hideAvatar: true })
+                  .catch(() => undefined);
+              }}
+            >
+              <PetMenuIcon name="hide" />
+              <span>Hide Avatar</span>
+            </button>
             <div className="pet-actions-divider" role="separator" />
             <button
               type="button"
@@ -1509,6 +1557,18 @@ function PetView() {
             >
               <PetMenuIcon name="settings" />
               <span>Settings</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                event.stopPropagation();
+                setActionsMenuOpen(false);
+                window.electron?.ipcRenderer.sendMessage('quit-app');
+              }}
+            >
+              <PetMenuIcon name="quit" />
+              <span>Quit</span>
             </button>
           </div>
         )}

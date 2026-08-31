@@ -577,6 +577,37 @@ describe('deferred suggestion context', () => {
     });
   });
 
+  it('shows the signed-in user and logs out from Settings', async () => {
+    const sendMessage = jest.fn();
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-profile') {
+        return {
+          userName: 'Ada',
+          participantId: 'participant-1',
+          tutorScenario: 'everyday_support',
+          aiTools: [],
+          hideAvatar: false,
+        };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage,
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(screen.getByTitle('Settings'));
+
+    expect(await screen.findByText('Ada')).toBeInTheDocument();
+    expect(screen.getByText('Username: participant-1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Log out' }));
+    expect(sendMessage).toHaveBeenCalledWith('auth-logout');
+  });
+
   it('opens the settings panel from the tray event', async () => {
     const listeners = new Map<string, (data?: unknown) => void>();
     (window as any).electron = {

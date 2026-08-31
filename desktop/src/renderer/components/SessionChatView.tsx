@@ -435,6 +435,12 @@ const S: Record<string, React.CSSProperties> = {
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   // Settings panel (mirrors the onboarding toolkit step)
   settings: { borderBottom: `1px solid ${BORDER}`, background: '#ffffff', padding: '14px', maxHeight: 360, overflowY: 'auto' },
+  accountCard: { display: 'flex', alignItems: 'center', gap: 10, border: `1px solid ${BORDER}`, borderRadius: 10, background: '#f9fafb', padding: '9px 10px', marginBottom: 14 },
+  accountAvatar: { width: 30, height: 30, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: ACCENT_BG, color: ACCENT, fontSize: 13, fontWeight: 800 },
+  accountIdentity: { minWidth: 0, flex: 1 },
+  accountName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#374151', fontSize: 13, fontWeight: 700 },
+  accountId: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#9ca3af', fontSize: 10.5, marginTop: 1 },
+  logoutButton: { flexShrink: 0, border: '1px solid #fecaca', borderRadius: 7, background: '#fff', color: '#b91c1c', padding: '5px 9px', fontSize: 11.5, fontWeight: 700, fontFamily: FONT, cursor: 'pointer' },
   healthList: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 },
   healthRow: { display: 'flex', alignItems: 'flex-start', gap: 8, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px' },
   healthDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, marginTop: 4 },
@@ -963,6 +969,8 @@ export default function SessionChatView() {
   const [editHideAvatar, setEditHideAvatar] = useState(false);
   const [avatarSaving, setAvatarSaving] = useState(false);
   const [avatarSaveError, setAvatarSaveError] = useState('');
+  const [accountName, setAccountName] = useState('');
+  const [accountParticipantId, setAccountParticipantId] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
   // "+ Custom" tool forms (mirrors the onboarding toolkit step).
   const [showAddChatbot, setShowAddChatbot] = useState(false);
@@ -1517,6 +1525,12 @@ export default function SessionChatView() {
       .invoke('get-profile')
       .then((p: any) => {
         if (!p) return;
+        const participantId =
+          typeof p.participantId === 'string' ? p.participantId.trim() : '';
+        const preferredName =
+          typeof p.userName === 'string' ? p.userName.trim() : '';
+        setAccountParticipantId(participantId);
+        setAccountName(preferredName || participantId);
         const next = {
           scenario: typeof p.tutorScenario === 'string' ? p.tutorScenario : 'everyday_support',
           aiTools: Array.isArray(p.aiTools) ? p.aiTools : [],
@@ -2409,6 +2423,31 @@ export default function SessionChatView() {
       {showFriends && <FriendsView onClose={() => setShowFriends(false)} />}
       {showSettings && (
         <div style={S.settings}>
+          <div style={S.groupLabel}>Account</div>
+          <div style={S.accountCard}>
+            <div style={S.accountAvatar} aria-hidden>
+              {(accountName || '?').charAt(0).toUpperCase()}
+            </div>
+            <div style={S.accountIdentity}>
+              <div style={S.accountName}>{accountName || 'Coco user'}</div>
+              {accountParticipantId && (
+                <div style={S.accountId}>
+                  Username: {accountParticipantId}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              style={S.logoutButton}
+              onClick={() =>
+                window.electron?.ipcRenderer.sendMessage('auth-logout')
+              }
+            >
+              Log out
+            </button>
+          </div>
+          <div style={S.sectionDivider} />
+
           <div style={S.groupLabel}>Desktop</div>
           <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
             <input
