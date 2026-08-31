@@ -16,6 +16,7 @@ export type Channels =
   | 'set-notification-expanded'
   | 'observation-update'
   | 'proactive-suggestion-ready'
+  | 'avatar-suggestion-revealed-state'
   | 'suppress-unrevealed-proactive-suggestion'
   | 'system-suspend'
   | 'shell-show-item-in-finder'

@@ -283,6 +283,82 @@ describe('App', () => {
     expect(screen.queryByText('Watching')).not.toBeInTheDocument();
   });
 
+  it('closes a rated expanded suggestion with one dismiss click', async () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const sendMessage = jest.fn();
+    const invoke = jest.fn((channel: string) => {
+      if (channel === 'get-coco-sleep-mode') {
+        return Promise.resolve({ sleeping: false });
+      }
+      if (channel === 'get-instant-suggestion') {
+        return Promise.resolve({
+          status: 'ready',
+          suggestion: {
+            kind: 'content',
+            title: 'Improve the summary',
+            body: 'Lead with the main result.',
+            copyText: 'Lead with the main result.',
+          },
+        });
+      }
+      return Promise.resolve([]);
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: (channel: string, callback: (...args: unknown[]) => void) => {
+          listeners.set(channel, callback);
+          return () => listeners.delete(channel);
+        },
+        sendMessage,
+        invoke,
+      },
+    };
+
+    render(<App />);
+    act(() => {
+      listeners.get('observation-update')?.({
+        type: 'snapshot',
+        observation: 'The summary buries the result.',
+        observation_id: 'obs-rated-close',
+        status: 'support_needed',
+        ts: Date.now() / 1000,
+      });
+      listeners.get('proactive-suggestion-ready')?.({
+        title: 'Improve the summary',
+        observationId: 'obs-rated-close',
+        status: 'support_needed',
+        rawObservation: 'The summary buries the result.',
+      });
+    });
+    fireEvent.click(screen.getByText('Help me with this'));
+    expect(await screen.findByText('Lead with the main result.'))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Good suggestion' }));
+    expect(screen.getByText('Thanks for the feedback')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(screen.queryByText('Improve the summary')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Thanks for the feedback'),
+    ).not.toBeInTheDocument();
+    expect(sendMessage).toHaveBeenCalledWith(
+      'avatar-suggestion-revealed-state',
+      { revealed: true },
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      'avatar-suggestion-revealed-state',
+      { revealed: false },
+    );
+    expect(sendMessage.mock.calls).not.toContainEqual([
+      'training-feedback',
+      expect.objectContaining({
+        kind: 'dismiss',
+        observation_id: 'obs-rated-close',
+      }),
+    ]);
+  });
+
   it('records watching observations without showing a bubble', () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     (window as any).electron = {

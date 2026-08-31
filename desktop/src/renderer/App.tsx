@@ -1257,6 +1257,10 @@ function PetView() {
       // Pin the bubble: once the suggestion is revealed it stays until the user
       // closes it with ×. Cancel any pending auto-hide from the Tier-2 phase.
       bubblePinnedRef.current = true;
+      window.electron?.ipcRenderer.sendMessage(
+        'avatar-suggestion-revealed-state',
+        { revealed: true },
+      );
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
       setBubble((b) => (b ? { ...b, suggestion: res.suggestion, fadingOut: false } : null));
@@ -1279,13 +1283,22 @@ function PetView() {
     }, FADE_MS);
   };
 
-  // User explicitly dismissed the suggestion — a negative implicit-feedback
-  // label (perceived as intrusive / not useful). Fade out without engaging.
+  // An unrevealed offer dismisses with negative implicit feedback. Closing an
+  // expanded suggestion is just lifecycle cleanup and happens immediately.
   const handleDismiss = () => {
     if (!bubble) return;
+    const revealedSuggestion = bubble.suggestion != null;
     bubblePinnedRef.current = false;
+    if (revealedSuggestion) {
+      window.electron?.ipcRenderer.sendMessage(
+        'avatar-suggestion-revealed-state',
+        { revealed: false },
+      );
+    }
     const socialNotification = bubble.socialNotification;
-    if (!socialNotification) {
+    // Closing an expanded suggestion is not a rejection of the original offer;
+    // engagement and any explicit rating have already been recorded.
+    if (!socialNotification && !revealedSuggestion) {
       window.electron?.ipcRenderer.sendMessage('training-feedback', {
         kind: 'dismiss',
         surface: 'bubble',
@@ -1296,6 +1309,14 @@ function PetView() {
     }
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    if (revealedSuggestion) {
+      // An explicit × must close the whole expanded card in one click,
+      // including any local copy/rating confirmation rendered inside it.
+      bubbleRef.current = null;
+      setBubble(null);
+      setMood('idle');
+      return;
+    }
     setBubble((b) => (b ? { ...b, fadingOut: true } : null));
     fadeTimer.current = setTimeout(() => {
       if (socialNotification) reportSocialNotificationClosed(bubble);
@@ -1317,6 +1338,10 @@ function PetView() {
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
     bubblePinnedRef.current = false;
+    window.electron?.ipcRenderer.sendMessage(
+      'avatar-suggestion-revealed-state',
+      { revealed: false },
+    );
     setBubble(null);
     setMood('idle');
   };
@@ -1335,6 +1360,10 @@ function PetView() {
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
     bubblePinnedRef.current = false;
+    window.electron?.ipcRenderer.sendMessage(
+      'avatar-suggestion-revealed-state',
+      { revealed: false },
+    );
     setBubble(null);
     setMood('idle');
   };

@@ -48,7 +48,20 @@ TUTOR_HIDDEN_IMPORTS = COMMON_HIDDEN_IMPORTS + [
     "proactive_tutor",
     "memory",
     "memory_mcp.server",
+    "screen_context",
+    "screen_context.models",
+    "screen_context.projection",
+    "screen_context.providers.macos_ax",
 ]
+
+if platform.system() == "Darwin":
+    TUTOR_HIDDEN_IMPORTS += [
+        "EventKit",
+        "ApplicationServices",
+        "AppKit",
+        "Foundation",
+        "objc",
+    ]
 
 SENSING_HIDDEN_IMPORTS = COMMON_HIDDEN_IMPORTS + [
     # async DB / cache

@@ -293,6 +293,7 @@ let wakeWordCaptureWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
 let revealedSuggestionOpen = false;
+let revealedAvatarSuggestionOpen = false;
 let proactiveNotificationOpen = false;
 // The newest proactive event eligible for presentation, regardless of whether
 // it will use the avatar bubble or the hidden-avatar notification surface.
@@ -953,6 +954,7 @@ const createAvatarWindow = () => {
   avatarWindow.on('closed', () => {
     avatarWindow = null;
     avatarRendererReady = false;
+    revealedAvatarSuggestionOpen = false;
     hiddenAvatarVisibility.clear();
   });
 
@@ -1726,9 +1728,10 @@ type NotificationPayload = {
 let deferredNotificationPayload: NotificationPayload | null = null;
 
 const hasOpenRevealedSuggestion = (): boolean =>
-  revealedSuggestionOpen &&
-  notificationWindow !== null &&
-  !notificationWindow.isDestroyed();
+  revealedAvatarSuggestionOpen ||
+  (revealedSuggestionOpen &&
+    notificationWindow !== null &&
+    !notificationWindow.isDestroyed());
 
 const showNotification = (payload: NotificationPayload): boolean => {
   if (payload.notifType !== 'proactive-suggestion') {
@@ -3004,6 +3007,29 @@ ipcMain.on('avatar-renderer-ready', () => {
     pendingSocialAvatarNotification = null;
   }
 });
+
+ipcMain.removeAllListeners('avatar-suggestion-revealed-state');
+ipcMain.on(
+  'avatar-suggestion-revealed-state',
+  (event, { revealed }: { revealed?: boolean } = {}) => {
+    if (
+      !avatarWindow ||
+      avatarWindow.isDestroyed() ||
+      event.sender !== avatarWindow.webContents
+    ) {
+      return;
+    }
+    revealedAvatarSuggestionOpen = revealed === true;
+    if (revealedAvatarSuggestionOpen) {
+      // Invalidate tutor work that started before this suggestion was expanded.
+      // Those results must not appear immediately after the user closes it.
+      latestProactiveSuggestionObservationId = undefined;
+    }
+    log.info(
+      `[Suggestion] Avatar suggestion ${revealedAvatarSuggestionOpen ? 'pinned' : 'unpinned'}.`,
+    );
+  },
+);
 
 // ── Proactive session IPC handlers ────────────────────────────────────────────
 
@@ -5138,6 +5164,7 @@ app
       suggestionCache.clear();
       notificationHovered = false;
       revealedSuggestionOpen = false;
+      revealedAvatarSuggestionOpen = false;
       deferredNotificationPayload = null;
       notificationWindow?.destroy();
       if (avatarWindow && !avatarWindow.isDestroyed()) {
@@ -5155,6 +5182,7 @@ app
       suggestionCache.clear();
       notificationHovered = false;
       revealedSuggestionOpen = false;
+      revealedAvatarSuggestionOpen = false;
       deferredNotificationPayload = null;
       notificationWindow?.destroy();
       if (avatarWindow && !avatarWindow.isDestroyed()) {
