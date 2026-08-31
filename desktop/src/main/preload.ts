@@ -71,6 +71,9 @@ export type Channels =
   | 'chat-content-zoom-factor'
   | 'open-chat-settings'
   | 'open-avatar-actions-menu'
+  | 'avatar-drag-start'
+  | 'avatar-drag-move'
+  | 'avatar-drag-end'
   | 'quit-app'
   // Proactive session flow
   | 'session-active'

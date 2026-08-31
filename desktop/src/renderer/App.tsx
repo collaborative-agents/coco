@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type MouseEvent, type SyntheticEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type SyntheticEvent,
+} from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import './App.css';
 import ObservationBubble, {
@@ -545,6 +552,7 @@ function PetView() {
   >('idle');
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const petActionsRef = useRef<HTMLDivElement | null>(null);
+  const avatarDragPointerRef = useRef<number | null>(null);
 
   // Use refs so listener captures the latest cleanup targets without
   // re-subscribing every render.
@@ -643,6 +651,36 @@ function PetView() {
       if (typeof cleanupActionsMenu === 'function') cleanupActionsMenu();
     };
   }, []);
+
+  const beginAvatarDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.target as Element;
+    if (event.button !== 0 || target.closest('button, [role="menu"]')) {
+      return;
+    }
+    avatarDragPointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    window.electron?.ipcRenderer.sendMessage('avatar-drag-start', {
+      screenX: event.screenX,
+      screenY: event.screenY,
+    });
+  };
+
+  const moveAvatarDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (avatarDragPointerRef.current !== event.pointerId) return;
+    window.electron?.ipcRenderer.sendMessage('avatar-drag-move', {
+      screenX: event.screenX,
+      screenY: event.screenY,
+    });
+  };
+
+  const endAvatarDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (avatarDragPointerRef.current !== event.pointerId) return;
+    avatarDragPointerRef.current = null;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    }
+    window.electron?.ipcRenderer.sendMessage('avatar-drag-end');
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1474,6 +1512,15 @@ function PetView() {
       <div
         ref={petActionsRef}
         className={`pet-container${cocoSleeping ? ' is-coco-sleeping' : ''}${actionsMenuOpen ? ' has-open-actions' : ''}`}
+        onPointerDown={beginAvatarDrag}
+        onPointerMove={moveAvatarDrag}
+        onPointerUp={endAvatarDrag}
+        onPointerCancel={endAvatarDrag}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setShowHistory(false);
+          setActionsMenuOpen(true);
+        }}
       >
         <PetSprite mood={cocoSleeping ? 'sleep' : mood} />
         <span className="pet-drag-hint" aria-hidden>

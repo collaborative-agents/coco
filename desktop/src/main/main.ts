@@ -301,6 +301,7 @@ let sessionSetupWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let hideAvatarMode = false;
 let avatarRendererReady = false;
+let avatarDragOffset: { x: number; y: number } | null = null;
 let pendingOpenHistory = false;
 let pendingOpenSocialInbox = false;
 let pendingSocialAvatarNotification: SocialAvatarNotification | null = null;
@@ -2918,6 +2919,54 @@ ipcMain.on(
     });
   },
 );
+
+const validAvatarDragPoint = (
+  value: unknown,
+): value is { screenX: number; screenY: number } => {
+  const point = value as { screenX?: unknown; screenY?: unknown } | null;
+  return Number.isFinite(point?.screenX) && Number.isFinite(point?.screenY);
+};
+
+ipcMain.removeAllListeners('avatar-drag-start');
+ipcMain.on('avatar-drag-start', (event, value: unknown) => {
+  if (
+    !avatarWindow ||
+    avatarWindow.isDestroyed() ||
+    event.sender !== avatarWindow.webContents ||
+    !validAvatarDragPoint(value)
+  ) {
+    return;
+  }
+  const [windowX, windowY] = avatarWindow.getPosition();
+  avatarDragOffset = {
+    x: value.screenX - windowX,
+    y: value.screenY - windowY,
+  };
+});
+
+ipcMain.removeAllListeners('avatar-drag-move');
+ipcMain.on('avatar-drag-move', (event, value: unknown) => {
+  if (
+    !avatarWindow ||
+    avatarWindow.isDestroyed() ||
+    event.sender !== avatarWindow.webContents ||
+    !avatarDragOffset ||
+    !validAvatarDragPoint(value)
+  ) {
+    return;
+  }
+  avatarWindow.setPosition(
+    Math.round(value.screenX - avatarDragOffset.x),
+    Math.round(value.screenY - avatarDragOffset.y),
+  );
+});
+
+ipcMain.removeAllListeners('avatar-drag-end');
+ipcMain.on('avatar-drag-end', (event) => {
+  if (avatarWindow && event.sender === avatarWindow.webContents) {
+    avatarDragOffset = null;
+  }
+});
 
 ipcMain.removeAllListeners('activity-history-visibility');
 ipcMain.on(

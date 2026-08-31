@@ -38,7 +38,7 @@ body,
   width: 150px;
   height: 150px;
   flex-shrink: 0;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 .pet-image {
@@ -48,7 +48,7 @@ body,
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
   /* Animated packs use a shared canvas scale. Individual source images have
      different transparent bounds, so the awake sprite is normalized below. */
   transform: scale(0.9);
@@ -80,7 +80,7 @@ body,
     transform 140ms ease 450ms;
 }
 
-.pet-container:hover .pet-drag-hint {
+.pet-image:hover + .pet-drag-hint {
   opacity: 1;
   transform: translate(-50%, 0);
 }

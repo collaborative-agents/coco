@@ -253,6 +253,7 @@ describe('App', () => {
 
   it('uses the avatar as a drag surface and opens chat only from the menu', async () => {
     const sendMessage = jest.fn();
+    const listeners = new Map<string, (...args: unknown[]) => void>();
     const invoke = jest.fn(
       (channel: string, payload?: { sleeping?: boolean }) => {
         if (channel === 'get-coco-sleep-mode')
@@ -262,7 +263,12 @@ describe('App', () => {
     );
     (window as any).electron = {
       ipcRenderer: {
-        on: jest.fn(() => jest.fn()),
+        on: jest.fn(
+          (channel: string, callback: (...args: unknown[]) => void) => {
+            listeners.set(channel, callback);
+            return () => listeners.delete(channel);
+          },
+        ),
         sendMessage,
         invoke,
       },
@@ -270,8 +276,52 @@ describe('App', () => {
 
     render(<App />);
     expect(screen.getByText('Right-click for menu')).toBeInTheDocument();
+    expect(screen.getByTitle('More actions')).toHaveAttribute(
+      'aria-label',
+      'More actions',
+    );
+    const avatar = screen.getByAltText('Desktop Pet');
+    const container = avatar.closest('.pet-container');
+    const originalPointerEvent = Object.getOwnPropertyDescriptor(
+      window,
+      'PointerEvent',
+    );
+    Object.defineProperty(window, 'PointerEvent', {
+      configurable: true,
+      value: window.MouseEvent,
+    });
+    fireEvent.pointerDown(avatar, {
+      button: 0,
+      pointerId: 1,
+      screenX: 500,
+      screenY: 400,
+    });
+    fireEvent.pointerMove(container!, {
+      pointerId: 1,
+      screenX: 525,
+      screenY: 415,
+    });
+    fireEvent.pointerUp(container!, {
+      pointerId: 1,
+      screenX: 525,
+      screenY: 415,
+    });
+    expect(sendMessage).toHaveBeenCalledWith('avatar-drag-start', {
+      screenX: 500,
+      screenY: 400,
+    });
+    expect(sendMessage).toHaveBeenCalledWith('avatar-drag-move', {
+      screenX: 525,
+      screenY: 415,
+    });
+    expect(sendMessage).toHaveBeenCalledWith('avatar-drag-end');
+    if (originalPointerEvent) {
+      Object.defineProperty(window, 'PointerEvent', originalPointerEvent);
+    } else {
+      Reflect.deleteProperty(window, 'PointerEvent');
+    }
     expect(screen.queryByTitle('Open the chat')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByAltText('Desktop Pet'));
+    fireEvent.click(avatar);
     expect(sendMessage).not.toHaveBeenCalledWith('open-main-window');
 
     fireEvent.click(screen.getByTitle('More actions'));
@@ -350,9 +400,18 @@ describe('App', () => {
     };
 
     render(<App />);
+    fireEvent.contextMenu(screen.getByAltText('Desktop Pet'));
+
+    expect(
+      screen.getByRole('menu', { name: 'Coco actions' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('More actions'));
     act(() => listeners.get('open-avatar-actions-menu')?.());
 
-    expect(screen.getByRole('menu', { name: 'Coco actions' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('menu', { name: 'Coco actions' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('Open Chat')).toBeInTheDocument();
     expect(screen.getByText('Hide Avatar')).toBeInTheDocument();
     expect(screen.getByText('Quit')).toBeInTheDocument();
