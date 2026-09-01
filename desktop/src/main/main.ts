@@ -55,6 +55,7 @@ import {
 import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { DailyMemoryDraftService } from './services/daily-memory-drafts';
 import { HiddenAvatarVisibility } from './services/hidden-avatar-visibility';
+import configureFullscreenCompanionWindow from './services/fullscreen-companion-window';
 import { CocoGatewayClient } from './services/gateway-client';
 import GatewayOutbox from './services/gateway-outbox';
 import KnowledgeAnswerService, {
@@ -856,7 +857,9 @@ function syncHiddenAvatarWindowVisibility(): void {
     return;
   }
   if (hiddenAvatarVisibility.shouldShowWindow()) {
-    avatarWindow.show();
+    // Hidden-avatar alerts are passive companion UI. Reveal them in the
+    // current Space without taking keyboard focus from the user's app.
+    avatarWindow.showInactive();
   } else {
     avatarWindow.hide();
   }
@@ -938,6 +941,7 @@ const createAvatarWindow = () => {
     skipTaskbar: true,
     webPreferences: { preload: preloadPath() },
   });
+  configureFullscreenCompanionWindow(avatarWindow);
 
   avatarWindow.loadURL(resolveHtmlPath('index.html'));
 
@@ -947,7 +951,7 @@ const createAvatarWindow = () => {
     } else if (process.env.START_MINIMIZED) {
       avatarWindow?.minimize();
     } else {
-      avatarWindow?.show();
+      avatarWindow?.showInactive();
     }
   });
 
@@ -1798,13 +1802,16 @@ const showNotification = (payload: NotificationPayload): boolean => {
     skipTaskbar: true,
     webPreferences: { preload: preloadPath() },
   });
+  configureFullscreenCompanionWindow(notificationWindow);
 
   const url = `${resolveHtmlPath('index.html')}?view=notification`;
   proactiveNotificationOpen = payload.notifType === 'proactive-suggestion';
   notificationWindow.loadURL(url);
 
   notificationWindow.on('ready-to-show', () => {
-    notificationWindow?.show();
+    // Toasts should overlay the current app, including fullscreen apps,
+    // without pulling keyboard focus away from the user's work.
+    notificationWindow?.showInactive();
     notificationWindow?.webContents.send('notification', {
       ...payload,
       adjustable,
