@@ -390,6 +390,38 @@ describe('revealed notification lifecycle', () => {
 });
 
 describe('window controls', () => {
+  afterEach(() => {
+    delete (window as any).electron;
+  });
+
+  it('shows an expandable end-of-day review without a chat action', () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+      },
+    };
+
+    render(<NotificationView />);
+    act(() => {
+      listeners.get('notification')?.({
+        message: 'Here is your end-of-day review.',
+        adjustable: true,
+      });
+    });
+
+    expect(
+      screen.getByRole('button', { name: 'Expand notification' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Chat with Coco/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it('offers expand and collapse controls for an adjustable notification', () => {
     const onToggleExpanded = jest.fn();
     const { rerender } = render(

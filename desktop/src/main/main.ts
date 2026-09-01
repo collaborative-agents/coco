@@ -1713,7 +1713,7 @@ type NotifType =
 
 type NotificationPayload = {
   message: string;
-  actionLabel: string;
+  actionLabel?: string;
   vizState?: VizState;
   notifType?: NotifType;
   cancelLabel?: string;
@@ -1721,6 +1721,8 @@ type NotificationPayload = {
   status?: string;
   rawObservation?: string;
   suggestion?: ReadyInstantSuggestion;
+  /** Allow this card to expand even while the desktop avatar is visible. */
+  expandable?: boolean;
   /** Preserve important lifecycle messages until the current card is closed. */
   deferIfBusy?: boolean;
 };
@@ -1777,7 +1779,7 @@ const showNotification = (payload: NotificationPayload): boolean => {
   const { workArea } = screen.getPrimaryDisplay();
   const x = workArea.x + workArea.width - NOTIF_WIDTH - 16;
   const y = workArea.y + 16;
-  const adjustable = hideAvatarMode;
+  const adjustable = hideAvatarMode || payload.expandable === true;
 
   notificationWindow = new BrowserWindow({
     show: false,
@@ -2623,7 +2625,7 @@ async function runEveningPersonalizationTransition(): Promise<boolean> {
   ].join('\n\n');
   const payload: NotificationPayload = {
     message,
-    actionLabel: 'Chat with Coco',
+    expandable: true,
     deferIfBusy: true,
   };
   const shown = showNotification(payload);
@@ -2819,11 +2821,12 @@ ipcMain.on(
 ipcMain.removeAllListeners('set-notification-expanded');
 ipcMain.on(
   'set-notification-expanded',
-  (_event, { expanded }: { expanded?: boolean }) => {
+  (event, { expanded }: { expanded?: boolean }) => {
     if (
-      !hideAvatarMode ||
       !notificationWindow ||
-      notificationWindow.isDestroyed()
+      notificationWindow.isDestroyed() ||
+      event.sender !== notificationWindow.webContents ||
+      !notificationWindow.isResizable()
     ) {
       return;
     }
