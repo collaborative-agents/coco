@@ -493,7 +493,7 @@ describe('App', () => {
     });
   });
 
-  it('provides History, Settings, Hide Avatar, and Quit menu actions', async () => {
+  it('provides History, Settings, updates, Hide Avatar, and Quit menu actions', async () => {
     const sendMessage = jest.fn();
     const invoke = jest.fn((channel: string) =>
       Promise.resolve(
@@ -516,6 +516,10 @@ describe('App', () => {
     fireEvent.click(screen.getByTitle('More actions'));
     fireEvent.click(screen.getByText('Settings'));
     expect(sendMessage).toHaveBeenCalledWith('open-chat-settings');
+
+    fireEvent.click(screen.getByTitle('More actions'));
+    fireEvent.click(screen.getByText('Check for Updates'));
+    expect(sendMessage).toHaveBeenCalledWith('check-for-updates');
 
     fireEvent.click(screen.getByTitle('More actions'));
     fireEvent.click(screen.getByText('Hide Avatar'));

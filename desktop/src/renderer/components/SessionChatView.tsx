@@ -363,15 +363,15 @@ const S: Record<string, React.CSSProperties> = {
   historyTitle: { fontSize: 14, fontWeight: 700, color: '#374151' },
   historyBack: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 700, fontFamily: FONT },
   historyList: { flex: 1, overflowY: 'auto', padding: '8px 10px 12px', display: 'flex', flexDirection: 'column', gap: 6 },
-  historyItem: { width: '100%', border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 10, padding: '9px 10px', textAlign: 'left', cursor: 'pointer', fontFamily: FONT },
+  historyItem: { width: '100%', flexShrink: 0, border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 10, padding: '9px 10px', textAlign: 'left', cursor: 'pointer', fontFamily: FONT },
   historyItemTitle: { display: 'block', color: '#374151', fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   historyItemMeta: { display: 'block', color: '#9ca3af', fontSize: 10.5, marginTop: 2 },
   historyItemPreview: { display: 'block', color: '#6b7280', fontSize: 11.5, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   reviewBanner: { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: ACCENT_BG, borderBottom: `1px solid ${ACCENT_BORDER}`, color: ACCENT, fontSize: 11.5 },
   problem: { padding: '6px 14px', fontSize: 11, color: '#9ca3af', borderBottom: `1px solid #f3f4f6`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   list: { flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 },
-  userRow: { alignSelf: 'flex-end', maxWidth: '85%' },
-  tutorRow: { alignSelf: 'flex-start', maxWidth: '92%', display: 'flex', gap: 8 },
+  userRow: { alignSelf: 'flex-end', maxWidth: '85%', flexShrink: 0 },
+  tutorRow: { alignSelf: 'flex-start', maxWidth: '92%', display: 'flex', gap: 8, flexShrink: 0 },
   tutorAvatar: { width: 24, height: 24, borderRadius: '50%', background: ACCENT, color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 },
   userBubble: { background: ACCENT, color: '#fff', padding: '9px 13px', borderRadius: '16px 16px 4px 16px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   tutorBubble: { background: '#f3f4f6', color: '#374151', padding: '9px 13px', borderRadius: '4px 16px 16px 16px', fontSize: 13, lineHeight: 1.5 },
@@ -1160,6 +1160,7 @@ export default function SessionChatView() {
   const pendingContextRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const problemRef = useRef('');
+  const conversationSaveTimerRef = useRef<number | null>(null);
   const cocoSleepingRef = useRef(false);
   const voiceRecorderRef = useRef<ActiveVoiceRecorder | null>(null);
   const handleVoiceClickRef = useRef<(fromWakeWord?: boolean) => Promise<void>>(
@@ -1266,23 +1267,62 @@ export default function SessionChatView() {
     [],
   );
 
-  // Keep each active conversation on disk. A short debounce avoids a write for
-  // every streaming token while still preserving completed turns promptly.
+  const persistConversationSnapshot = useCallback(
+    (flushBeforeUnload = false) => {
+      const sessionId = sessionIdRef.current;
+      const snapshot = messagesRef.current;
+      const ipc = window.electron?.ipcRenderer;
+      if (!ipc || !sessionId || snapshot.length === 0) return;
+      const payload = {
+        sessionId,
+        problem: problemRef.current,
+        messages: snapshot,
+      };
+      if (flushBeforeUnload) {
+        ipc.sendMessage('save-chat-conversation', payload);
+        return;
+      }
+      return ipc
+        .invoke('save-chat-conversation', payload)
+        .then(() => undefined)
+        .catch(() => undefined);
+    },
+    [],
+  );
+
+  // Persist at most once per interval while streaming, but never postpone the
+  // first snapshot. A trailing debounce could be reset by every token and lose
+  // an entire conversation if the app quit before the response completed.
   useEffect(() => {
     messagesRef.current = messages;
     problemRef.current = problem;
-    if (!sessionIdRef.current || messages.length === 0) return undefined;
-    const timeout = window.setTimeout(() => {
-      window.electron?.ipcRenderer
-        .invoke('save-chat-conversation', {
-          sessionId: sessionIdRef.current,
-          problem,
-          messages,
-        })
-        .catch(() => {});
+    if (
+      !sessionIdRef.current ||
+      messages.length === 0 ||
+      conversationSaveTimerRef.current !== null
+    ) {
+      return;
+    }
+    conversationSaveTimerRef.current = window.setTimeout(() => {
+      conversationSaveTimerRef.current = null;
+      void persistConversationSnapshot();
     }, 250);
-    return () => window.clearTimeout(timeout);
-  }, [messages, problem]);
+  }, [messages, persistConversationSnapshot, problem]);
+
+  useEffect(() => {
+    const flushConversation = () => {
+      if (conversationSaveTimerRef.current !== null) {
+        window.clearTimeout(conversationSaveTimerRef.current);
+        conversationSaveTimerRef.current = null;
+      }
+      persistConversationSnapshot(true);
+    };
+    window.addEventListener('beforeunload', flushConversation);
+    return () => {
+      window.removeEventListener('beforeunload', flushConversation);
+      flushConversation();
+    };
+  }, [persistConversationSnapshot]);
 
   // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
   // same pipeline as the bubble reactions.
@@ -2295,15 +2335,11 @@ export default function SessionChatView() {
     setHistoryLoading(true);
     setHistoryError(false);
     try {
+      await persistConversationSnapshot();
       const saved = await window.electron?.ipcRenderer.invoke(
         'get-chat-conversations',
       );
-      setConversations(
-        (Array.isArray(saved) ? saved : []).filter(
-          (conversation: SavedConversation) =>
-            conversation.sessionId !== sessionIdRef.current,
-        ),
-      );
+      setConversations(Array.isArray(saved) ? saved : []);
     } catch {
       setHistoryError(true);
     } finally {
@@ -3272,12 +3308,22 @@ export default function SessionChatView() {
                   key={conversation.sessionId}
                   type="button"
                   style={S.historyItem}
-                  onClick={() => setReviewing(conversation)}
+                  onClick={() => {
+                    if (conversation.sessionId === sessionIdRef.current) {
+                      setReviewing(null);
+                      setShowHistory(false);
+                      return;
+                    }
+                    setReviewing(conversation);
+                  }}
                 >
                   <span style={S.historyItemTitle}>
                     {conversationTitle(conversation)}
                   </span>
                   <span style={S.historyItemMeta}>
+                    {conversation.sessionId === sessionIdRef.current && (
+                      <>Current · </>
+                    )}
                     {formatConversationDate(conversation.updatedAt)}
                     {' · '}
                     {conversation.messages.length}{' '}

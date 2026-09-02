@@ -7,6 +7,18 @@ import React, {
   useState,
 } from 'react';
 import { formatSocialTime } from './social-time';
+import {
+  AnimatedCocoGif,
+  type CocoGifId,
+  isCocoGifId,
+} from './CocoGifControls';
+import {
+  MessageReactionControls,
+  optimisticallyToggleReaction,
+  type MessageReaction,
+  type SocialEmoji,
+} from './SocialEmojiControls';
+import SocialMessageComposer from './SocialMessageComposer';
 
 interface GroupMessage {
   _id: string;
@@ -18,6 +30,8 @@ interface GroupMessage {
   message_type: 'message' | 'announcement';
   content: string;
   created_at: string;
+  reactions?: MessageReaction[];
+  coco_gif_id?: string | null;
 }
 
 interface GroupSummary {
@@ -347,6 +361,7 @@ export default function GroupsView() {
   const [studyAnnouncement, setStudyAnnouncement] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [hoveredMessageId, setHoveredMessageId] = useState('');
   const messageListRef = useRef<HTMLDivElement>(null);
 
   const loadInbox = useCallback(async () => {
@@ -397,12 +412,32 @@ export default function GroupsView() {
       (value) => {
         const groupInbox = (value as SocialSnapshot | undefined)?.groupInbox;
         if (groupInbox) setInbox(groupInbox);
+        if (selected) {
+          window.electron?.ipcRenderer
+            .invoke('social-list-group-messages', selected.group_id)
+            .then((page) => {
+              const nextMessages =
+                (page as { messages?: GroupMessage[] } | undefined)?.messages ||
+                [];
+              setMessages(nextMessages);
+              const lastSequence = nextMessages.at(-1)?.sequence;
+              if (lastSequence) {
+                return window.electron?.ipcRenderer.invoke(
+                  'social-mark-group-read',
+                  selected.group_id,
+                  lastSequence,
+                );
+              }
+              return undefined;
+            })
+            .catch(() => undefined);
+        }
       },
     );
     return () => {
       if (typeof cleanup === 'function') cleanup();
     };
-  }, [loadInbox]);
+  }, [loadInbox, selected]);
 
   useEffect(() => {
     if (messageListRef.current) {
@@ -478,6 +513,71 @@ export default function GroupsView() {
         draft,
       );
       setDraft('');
+      await openGroup(selected);
+    } catch (sendError) {
+      setError(errorMessage(sendError));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const toggleMessageReaction = async (
+    message: GroupMessage,
+    emoji: SocialEmoji,
+  ) => {
+    if (!selected) return;
+    const previous = message.reactions || [];
+    setMessages((current) =>
+      current.map((item) =>
+        item._id === message._id
+          ? {
+              ...item,
+              reactions: optimisticallyToggleReaction(
+                item.reactions || [],
+                emoji,
+              ),
+            }
+          : item,
+      ),
+    );
+    setError('');
+    try {
+      const result = (await window.electron?.ipcRenderer.invoke(
+        'social-toggle-group-message-reaction',
+        selected.group_id,
+        message._id,
+        emoji,
+      )) as { reactions?: MessageReaction[] } | undefined;
+      if (result?.reactions) {
+        setMessages((current) =>
+          current.map((item) =>
+            item._id === message._id
+              ? { ...item, reactions: result.reactions }
+              : item,
+          ),
+        );
+      }
+    } catch (reactionError) {
+      setMessages((current) =>
+        current.map((item) =>
+          item._id === message._id ? { ...item, reactions: previous } : item,
+        ),
+      );
+      setError(errorMessage(reactionError));
+    }
+  };
+
+  const sendCocoGif = async (id: CocoGifId) => {
+    if (!selected || sending) return;
+    setSending(true);
+    setError('');
+    try {
+      await window.electron?.ipcRenderer.invoke(
+        'social-send-group-message',
+        selected.group_id,
+        'Coco GIF',
+        id,
+      );
       await openGroup(selected);
     } catch (sendError) {
       setError(errorMessage(sendError));
@@ -735,7 +835,13 @@ export default function GroupsView() {
                 messageStyle = S.ownMessage;
               }
               return (
-                <div key={message._id} style={messageStyle}>
+                <div
+                  key={message._id}
+                  data-message-id={message._id}
+                  style={{ ...messageStyle, position: 'relative' }}
+                  onMouseEnter={() => setHoveredMessageId(message._id)}
+                  onMouseLeave={() => setHoveredMessageId('')}
+                >
                   <div
                     style={{
                       ...S.meta,
@@ -748,35 +854,38 @@ export default function GroupsView() {
                     {' · '}
                     {time(message.created_at)}
                   </div>
-                  {message.content}
+                  {isCocoGifId(message.coco_gif_id) ? (
+                    <AnimatedCocoGif id={message.coco_gif_id} size={150} />
+                  ) : (
+                    message.content
+                  )}
+                  {message.message_type === 'message' &&
+                    selected.status === 'active' && (
+                      <MessageReactionControls
+                        messageId={message._id}
+                        reactions={message.reactions || []}
+                        showAddButton={hoveredMessageId === message._id}
+                        onToggle={(emoji) =>
+                          toggleMessageReaction(message, emoji)
+                        }
+                      />
+                    )}
                 </div>
               );
             })}
           </div>
           {selected.status === 'active' ? (
-            <form style={S.composer} onSubmit={sendMessage}>
-              <textarea
-                aria-label={`Message ${selected.name}`}
-                style={S.textarea}
-                maxLength={4_000}
-                placeholder="Message the group…"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-              />
-              <button
-                type="submit"
-                style={S.primary}
-                disabled={!draft.trim() || sending}
-              >
-                {sending ? 'Sending…' : 'Send'}
-              </button>
-            </form>
+            <SocialMessageComposer
+              ariaLabel={`Message ${selected.name}`}
+              placeholder="Message the group…"
+              value={draft}
+              sending={sending}
+              emojiPickerLabel="Add emoji to group message"
+              gifPickerLabel="Send a Coco GIF to the group"
+              onChange={setDraft}
+              onSubmit={sendMessage}
+              onSendCocoGif={sendCocoGif}
+            />
           ) : (
             <div
               style={{
@@ -1143,7 +1252,10 @@ export default function GroupsView() {
                 {group.name} {group.muted ? '· Muted' : ''}
               </span>
               <span style={S.preview}>
-                {group.last_message?.content || `${group.member_count} members`}
+                {group.last_message?.coco_gif_id
+                  ? 'Coco GIF'
+                  : group.last_message?.content ||
+                    `${group.member_count} members`}
               </span>
             </span>
             {group.unread_count > 0 && (

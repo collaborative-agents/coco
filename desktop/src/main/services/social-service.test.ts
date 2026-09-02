@@ -40,6 +40,8 @@ describe('SocialService', () => {
     await service.sendMessage('friend/id', 'hello');
     await service.listMessages('friend/id', '2026-08-27T12:00:00+00:00');
     await service.markRead('friend/id');
+    await service.toggleMessageReaction('message/id', '👍');
+    await service.sendMessage('friend/id', 'Coco GIF', 'working');
 
     expect(requestJson).toHaveBeenNthCalledWith(
       1,
@@ -60,6 +62,23 @@ describe('SocialService', () => {
       3,
       '/api/social/direct-messages/friend%2Fid/read',
       'PATCH',
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      4,
+      '/api/social/direct-messages/message%2Fid/reactions',
+      'POST',
+      { emoji: '👍' },
+    );
+    expect(requestJson).toHaveBeenNthCalledWith(
+      5,
+      '/api/social/direct-messages',
+      'POST',
+      {
+        _id: expect.any(String),
+        recipient_id: 'friend/id',
+        content: 'Coco GIF',
+        coco_gif_id: 'working',
+      },
     );
   });
 
@@ -133,6 +152,8 @@ describe('SocialService', () => {
     await service.listGroupMembers('group/1');
     await service.listGroupMessages('group/1', 12);
     await service.sendGroupMessage('group/1', 'hello group');
+    await service.toggleGroupMessageReaction('group/1', 'message/1', '🎉');
+    await service.sendGroupMessage('group/1', 'Coco GIF', 'celebrate');
     await service.markGroupRead('group/1', 13);
     await service.setGroupMuted('group/1', true);
     await service.leaveGroup('group/1');
@@ -152,6 +173,20 @@ describe('SocialService', () => {
       '/api/social/groups/group%2F1/messages',
       'POST',
       { _id: expect.any(String), content: 'hello group' },
+    );
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/social/groups/group%2F1/messages/message%2F1/reactions',
+      'POST',
+      { emoji: '🎉' },
+    );
+    expect(requestJson).toHaveBeenCalledWith(
+      '/api/social/groups/group%2F1/messages',
+      'POST',
+      {
+        _id: expect.any(String),
+        content: 'Coco GIF',
+        coco_gif_id: 'celebrate',
+      },
     );
     expect(requestJson).toHaveBeenCalledWith(
       '/api/social/groups/group%2F1/reports',

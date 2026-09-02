@@ -2,6 +2,12 @@ import { randomUUID } from 'crypto';
 import type { IpcMain } from 'electron';
 import type { CocoGatewayClient } from './gateway-client';
 
+export interface MessageReaction {
+  emoji: string;
+  count: number;
+  reacted_by_me: boolean;
+}
+
 export interface DirectMessage {
   _id: string;
   sender_id: string;
@@ -9,6 +15,8 @@ export interface DirectMessage {
   content: string;
   created_at: string;
   read_at?: string | null;
+  reactions?: MessageReaction[];
+  coco_gif_id?: string | null;
 }
 
 export interface FriendshipSummary {
@@ -62,6 +70,8 @@ export interface GroupMessage {
   message_type: 'message' | 'announcement';
   content: string;
   created_at: string;
+  reactions?: MessageReaction[];
+  coco_gif_id?: string | null;
 }
 
 export interface GroupSummary {
@@ -208,12 +218,14 @@ export class SocialService {
   async sendMessage(
     participantId: string,
     content: string,
+    cocoGifId?: string,
   ): Promise<Record<string, unknown>> {
     if (!content.trim()) throw new Error('Message cannot be empty.');
     return this.gateway().requestJson('/api/social/direct-messages', 'POST', {
       _id: randomUUID(),
       recipient_id: participantId,
       content,
+      ...(cocoGifId ? { coco_gif_id: cocoGifId } : {}),
     });
   }
 
@@ -221,6 +233,14 @@ export class SocialService {
     return this.gateway().requestJson(
       `/api/social/direct-messages/${encodeURIComponent(participantId)}/read`,
       'PATCH',
+    );
+  }
+
+  async toggleMessageReaction(messageId: string, emoji: string) {
+    return this.gateway().requestJson(
+      `/api/social/direct-messages/${encodeURIComponent(messageId)}/reactions`,
+      'POST',
+      { emoji },
     );
   }
 
@@ -316,12 +336,28 @@ export class SocialService {
     )) as unknown as GroupMessagePage;
   }
 
-  async sendGroupMessage(groupId: string, content: string) {
+  async sendGroupMessage(groupId: string, content: string, cocoGifId?: string) {
     if (!content.trim()) throw new Error('Message cannot be empty.');
     return this.gateway().requestJson(
       `/api/social/groups/${encodeURIComponent(groupId)}/messages`,
       'POST',
-      { _id: randomUUID(), content },
+      {
+        _id: randomUUID(),
+        content,
+        ...(cocoGifId ? { coco_gif_id: cocoGifId } : {}),
+      },
+    );
+  }
+
+  async toggleGroupMessageReaction(
+    groupId: string,
+    messageId: string,
+    emoji: string,
+  ) {
+    return this.gateway().requestJson(
+      `/api/social/groups/${encodeURIComponent(groupId)}/messages/${encodeURIComponent(messageId)}/reactions`,
+      'POST',
+      { emoji },
     );
   }
 
@@ -506,12 +542,18 @@ export function registerSocialIpcHandlers(
   reset('social-send-message');
   targetIpcMain.handle(
     'social-send-message',
-    (_event, participantId: string, content: string) =>
-      service.sendMessage(participantId, content),
+    (_event, participantId: string, content: string, cocoGifId?: string) =>
+      service.sendMessage(participantId, content, cocoGifId),
   );
   reset('social-mark-read');
   targetIpcMain.handle('social-mark-read', (_event, participantId: string) =>
     service.markRead(participantId),
+  );
+  reset('social-toggle-message-reaction');
+  targetIpcMain.handle(
+    'social-toggle-message-reaction',
+    (_event, messageId: string, emoji: string) =>
+      service.toggleMessageReaction(messageId, emoji),
   );
   reset('social-request-knowledge');
   targetIpcMain.handle(
@@ -565,8 +607,14 @@ export function registerSocialIpcHandlers(
   reset('social-send-group-message');
   targetIpcMain.handle(
     'social-send-group-message',
-    (_event, groupId: string, content: string) =>
-      service.sendGroupMessage(groupId, content),
+    (_event, groupId: string, content: string, cocoGifId?: string) =>
+      service.sendGroupMessage(groupId, content, cocoGifId),
+  );
+  reset('social-toggle-group-message-reaction');
+  targetIpcMain.handle(
+    'social-toggle-group-message-reaction',
+    (_event, groupId: string, messageId: string, emoji: string) =>
+      service.toggleGroupMessageReaction(groupId, messageId, emoji),
   );
   reset('social-mark-group-read');
   targetIpcMain.handle(

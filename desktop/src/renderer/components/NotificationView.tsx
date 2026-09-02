@@ -552,7 +552,7 @@ export default function NotificationView() {
       return;
     }
     // Default: open the main window (existing tutor guidance behaviour).
-    ipc?.sendMessage('open-main-window');
+    ipc?.sendMessage('open-main-window', { reopenCurrent: true });
     setVisible(false);
     window.close();
   };

@@ -1349,7 +1349,12 @@ const queueWakeWordDetection = (keyword: string): void => {
     retryTimer: null,
   };
   setWakeWordCapturePaused(true);
-  showChatPanel();
+  // A wake-word invocation is an explicit new conversation, just like using
+  // the avatar/menu Open Chat action. openCoco assigns and publishes the new
+  // session id synchronously before its service configuration awaits begin.
+  openCoco().catch((err) =>
+    log.warn(`[Wake word] Could not start a fresh Coco session: ${err}`),
+  );
   deliverPendingWakeWordDetection();
 };
 
@@ -1455,16 +1460,27 @@ const openChatSettings = () => {
 ipcMain.removeAllListeners('open-chat-settings');
 ipcMain.on('open-chat-settings', () => openChatSettings());
 
+ipcMain.removeAllListeners('check-for-updates');
+ipcMain.on('check-for-updates', () => {
+  desktopAppUpdater.checkForUpdates(true).catch((error) =>
+    log.error(`[Updater] Manual update check failed: ${error}`),
+  );
+});
+
 ipcMain.removeAllListeners('quit-app');
 ipcMain.on('quit-app', () => app.quit());
 
 async function openCoco(): Promise<void> {
+  const problemStatement = pendingTaskLabel || 'General help session';
+  await createProactiveTutorSession(problemStatement, 120, undefined, 'manual');
+}
+
+async function openCurrentCocoConversation(): Promise<void> {
   if (isSessionActive && currentSessionId) {
     openChatForSession(currentSessionId, pendingTaskLabel || '');
     return;
   }
-  const problemStatement = pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, 120, undefined, 'manual');
+  await openCoco();
 }
 
 function setupPending(): boolean {
@@ -2393,19 +2409,39 @@ ipcMain.removeAllListeners('hotkey-capture-ready');
 ipcMain.on('hotkey-capture-ready', () => {
   hotkeyRendererReady = true;
   flushHotkeyCaptures();
+  if (currentSessionId && chatWindow && !chatWindow.isDestroyed()) {
+    const storedConversation = readConversations().find(
+      (conversation) => conversation.sessionId === currentSessionId,
+    );
+    chatWindow.webContents.send('session-init', {
+      sessionId: currentSessionId,
+      problemStatement:
+        storedConversation?.problem ||
+        pendingTaskLabel ||
+        'General help session',
+      tutorModelId: currentTutorModelId,
+    });
+  }
   if (pendingOpenSocialInbox && chatWindow && !chatWindow.isDestroyed()) {
     pendingOpenSocialInbox = false;
     chatWindow.webContents.send('open-social-inbox');
   }
 });
 
-// Pet click / "open chat". If a session is already active, reopen its chat
-// panel; otherwise start a fresh local session so there is a conversation to
-// show (the sensing observer keeps running either way).
+// Pet/menu "Open Chat" is a user-initiated conversation boundary. Always start
+// a fresh local session; createProactiveTutorSession ends the previous session
+// and the renderer persists its messages when it receives the new session id.
+// Explicit "View conversation" actions opt into reopening the current session.
 ipcMain.removeAllListeners('open-main-window');
-ipcMain.on('open-main-window', () => {
-  openCoco().catch((err) => log.warn(`[Chat] Could not open Coco: ${err}`));
-});
+ipcMain.on(
+  'open-main-window',
+  (_event, options?: { reopenCurrent?: boolean }) => {
+    const open = options?.reopenCurrent
+      ? openCurrentCocoConversation()
+      : openCoco();
+    open.catch((err) => log.warn(`[Chat] Could not open Coco: ${err}`));
+  },
+);
 
 ipcMain.removeAllListeners('open-social-inbox');
 ipcMain.on('open-social-inbox', () => openSocialInbox());
@@ -3642,6 +3678,10 @@ ipcMain.handle('save-chat-conversation', (_event, payload) => {
   saveConversation({ ...(payload ?? {}), tutorModelId: currentTutorModelId });
   return { success: true };
 });
+ipcMain.removeAllListeners('save-chat-conversation');
+ipcMain.on('save-chat-conversation', (_event, payload) => {
+  saveConversation({ ...(payload ?? {}), tutorModelId: currentTutorModelId });
+});
 
 ipcMain.removeHandler('resume-chat-conversation');
 ipcMain.handle(
@@ -4022,7 +4062,13 @@ ipcMain.on('save-image-annotation', (event, payload: unknown) => {
 
   if (imagePreviewAnnotationResult === 'attach') {
     pendingHotkeyCaptures.push(annotatedImageDataUrl);
-    showChatPanel();
+    // The global screenshot hotkey opens a composer without presenting the
+    // prior conversation as context. Match that visible boundary with a real
+    // session boundary so the resulting message cannot be appended to a
+    // conversation the user did not see.
+    openCoco().catch((err) =>
+      log.warn(`[ImagePreview] Could not start a fresh Coco session: ${err}`),
+    );
     flushHotkeyCaptures();
   } else if (
     imagePreviewSourceWindow &&

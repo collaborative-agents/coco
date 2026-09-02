@@ -752,6 +752,102 @@ describe('deferred suggestion context', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('includes the ongoing conversation and returns to it as the current chat', async () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    let storedConversations: any[] = [];
+    const invoke = jest.fn(async (channel: string, payload?: any) => {
+      if (channel === 'save-chat-conversation') {
+        storedConversations = [
+          {
+            ...payload,
+            title: payload.problem,
+            createdAt: 1753200000000,
+            updatedAt: 1753203600000,
+          },
+        ];
+        return { success: true };
+      }
+      if (channel === 'get-chat-conversations') return storedConversations;
+      if (channel === 'send-chat-message') {
+        return { guidance: 'Use the wraptable environment.' };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    act(() => {
+      listeners.get('session-init')?.({
+        sessionId: 'current-session',
+        problemStatement: 'Wrap a table in LaTeX',
+      });
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Ask the tutor/), {
+      target: { value: 'How do I wrap this table?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Review past conversations' }),
+    );
+
+    const currentTitle = await screen.findByText('Wrap a table in LaTeX');
+    expect(screen.getByText(/Current ·/)).toBeInTheDocument();
+
+    fireEvent.click(currentTitle);
+    expect(screen.queryByText('Past conversations')).not.toBeInTheDocument();
+    expect(screen.getByText('How do I wrap this table?')).toBeInTheDocument();
+  });
+
+  it('keeps large conversation histories scrollable without shrinking rows', async () => {
+    const conversations = Array.from({ length: 75 }, (_, index) => ({
+      sessionId: `past-session-${index}`,
+      title: `Past conversation ${index + 1}`,
+      problem: `Task ${index + 1}`,
+      createdAt: 1753200000000 - index * 1000,
+      updatedAt: 1753203600000 - index * 1000,
+      messages: [
+        { role: 'user', text: `Question ${index + 1}` },
+        { role: 'tutor', text: `Answer ${index + 1}` },
+      ],
+    }));
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async (channel: string) =>
+          channel === 'get-chat-conversations' ? conversations : null,
+        ),
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Review past conversations' }),
+    );
+
+    const first = await screen.findByText('Past conversation 1');
+    const last = screen.getByText('Past conversation 75');
+    expect(first.closest('button')).toHaveStyle({ flexShrink: '0' });
+    expect(last.closest('button')).toHaveStyle({ flexShrink: '0' });
+
+    fireEvent.click(last);
+    expect(
+      screen.getByText('Question 75').closest('[style*="flex-shrink: 0"]'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Answer 75').closest('[style*="flex-shrink: 0"]'),
+    ).toBeInTheDocument();
+  });
+
   it('starts a fresh chat session from the header', async () => {
     const listeners = new Map<string, (data: unknown) => void>();
     const invoke = jest.fn(async () => ({ success: true }));
@@ -1040,6 +1136,126 @@ describe('deferred suggestion context', () => {
     });
     expect(screen.queryByText('Coco is thinking…')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Helpful' })).toBeInTheDocument();
+  });
+
+  it('flushes an active conversation when the chat renderer closes', () => {
+    const listeners = new Map<string, (data: any) => void>();
+    const sendMessage = jest.fn();
+    const invoke = jest.fn(async (channel: string) =>
+      channel === 'send-chat-message' ? { streamed: true } : null,
+    );
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: any) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage,
+        invoke,
+      },
+    };
+    const { unmount } = render(<SessionChatView />);
+    act(() => {
+      listeners.get('session-init')?.({
+        sessionId: 'closing-session',
+        problemStatement: 'Preserve this conversation',
+      });
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Ask the tutor/), {
+      target: { value: 'Save this before closing' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    unmount();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'save-chat-conversation',
+      expect.objectContaining({
+        sessionId: 'closing-session',
+        problem: 'Preserve this conversation',
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: 'user',
+            text: 'Save this before closing',
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('persists a conversation while response tokens are still streaming', () => {
+    jest.useFakeTimers();
+    const listeners = new Map<string, (data: any) => void>();
+    let requestId = '';
+    const invoke = jest.fn(async (channel: string, payload?: any) => {
+      if (channel === 'send-chat-message') {
+        requestId = payload.requestId;
+        return { streamed: true };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data: any) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+    const { unmount } = render(<SessionChatView />);
+
+    try {
+      act(() => {
+        listeners.get('session-init')?.({
+          sessionId: 'streaming-session',
+          problemStatement: 'Keep streaming history',
+        });
+      });
+      fireEvent.change(screen.getByPlaceholderText(/Ask the tutor/), {
+        target: { value: 'Stream a long response' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+      act(() => {
+        jest.advanceTimersByTime(100);
+      });
+      act(() => {
+        listeners.get('chat-stream-event')?.({
+          requestId,
+          type: 'text_delta',
+          text: 'First ',
+        });
+      });
+      act(() => {
+        jest.advanceTimersByTime(100);
+      });
+      act(() => {
+        listeners.get('chat-stream-event')?.({
+          requestId,
+          type: 'text_delta',
+          text: 'second',
+        });
+      });
+      act(() => {
+        jest.advanceTimersByTime(50);
+      });
+
+      expect(invoke).toHaveBeenCalledWith(
+        'save-chat-conversation',
+        expect.objectContaining({
+          sessionId: 'streaming-session',
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: 'user', text: 'Stream a long response' }),
+            expect.objectContaining({ role: 'tutor', text: 'First second' }),
+          ]),
+        }),
+      );
+    } finally {
+      unmount();
+      jest.useRealTimers();
+    }
   });
 
   it('opens desktop previews for pending and sent image attachments', async () => {

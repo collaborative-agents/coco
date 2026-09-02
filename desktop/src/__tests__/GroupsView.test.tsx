@@ -128,15 +128,58 @@ describe('GroupsView', () => {
     ).not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith('social-mark-group-read', 'group-1', 2);
 
+    const addReaction = screen.getByRole('button', {
+      name: 'React to message message-1',
+    });
+    expect(addReaction).toHaveStyle({ opacity: '0' });
+    fireEvent.mouseEnter(
+      screen
+        .getByText('Want to compare answers?')
+        .closest('[data-message-id="message-1"]')!,
+    );
+    expect(addReaction).toHaveStyle({ opacity: '1' });
+    fireEvent.click(addReaction);
+    fireEvent.click(screen.getByRole('button', { name: 'React with 🎉' }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'social-toggle-group-message-reaction',
+        'group-1',
+        'message-1',
+        '🎉',
+      ),
+    );
+    expect(
+      screen.getByRole('button', { name: 'Remove 🎉 reaction' }),
+    ).toHaveTextContent('🎉 1');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Send a Coco GIF to the group' }),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Send Celebrating Coco' }),
+    );
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'social-send-group-message',
+        'group-1',
+        'Coco GIF',
+        'celebrate',
+      ),
+    );
+
     fireEvent.change(screen.getByLabelText(`Message ${group.name}`), {
       target: { value: 'My answer is 42.' },
     });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add emoji to group message' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Insert 👍' }));
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith(
         'social-send-group-message',
         'group-1',
-        'My answer is 42.',
+        'My answer is 42.👍',
       ),
     );
 

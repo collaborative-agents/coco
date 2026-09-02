@@ -87,7 +87,15 @@ const MEMORY_SECTION_TITLES: Record<string, string> = {
 function PetMenuIcon({
   name,
 }: {
-  name: 'chat' | 'sleep' | 'wake' | 'history' | 'hide' | 'settings' | 'quit';
+  name:
+    | 'chat'
+    | 'sleep'
+    | 'wake'
+    | 'history'
+    | 'hide'
+    | 'settings'
+    | 'update'
+    | 'quit';
 }) {
   if (name === 'chat') {
     return (
@@ -132,6 +140,14 @@ function PetMenuIcon({
     return (
       <svg viewBox="0 0 24 24" aria-hidden>
         <path d="M10 4H5v16h5M14 8l4 4-4 4M18 12H9" />
+      </svg>
+    );
+  }
+  if (name === 'update') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path d="M20 7v5h-5M4 17v-5h5" />
+        <path d="M18.5 9A7.5 7.5 0 0 0 5.8 6.5L4 9M5.5 15A7.5 7.5 0 0 0 18.2 17.5L20 15" />
       </svg>
     );
   }
@@ -1376,7 +1392,9 @@ function PetView() {
       setMood('idle');
       window.electron?.ipcRenderer.sendMessage('open-social-inbox');
     } else {
-      window.electron?.ipcRenderer.sendMessage('open-main-window');
+      window.electron?.ipcRenderer.sendMessage('open-main-window', {
+        reopenCurrent: true,
+      });
     }
   };
 
@@ -1709,6 +1727,18 @@ function PetView() {
             >
               <PetMenuIcon name="settings" />
               <span>Settings</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                event.stopPropagation();
+                setActionsMenuOpen(false);
+                window.electron?.ipcRenderer.sendMessage('check-for-updates');
+              }}
+            >
+              <PetMenuIcon name="update" />
+              <span>Check for Updates</span>
             </button>
             <button
               type="button"

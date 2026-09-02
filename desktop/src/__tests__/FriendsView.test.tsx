@@ -81,7 +81,14 @@ describe('FriendsView', () => {
       }
       if (channel === 'social-list-messages') {
         return Promise.resolve({
-          messages: [friendships.friends[0].last_message],
+          messages: [
+            friendships.friends[0].last_message,
+            {
+              ...friendships.friends[0].last_message,
+              _id: 'message-gif',
+              coco_gif_id: 'working',
+            },
+          ],
         });
       }
       if (channel === 'social-list-knowledge-requests') {
@@ -114,17 +121,103 @@ describe('FriendsView', () => {
     expect(
       await screen.findByText('Want to compare study notes?'),
     ).toBeInTheDocument();
+    expect(screen.getByAltText('Working Coco')).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith('social-mark-read', 'Participant-2');
+
+    const composer = screen.getByLabelText('Message Participant-2');
+    Object.defineProperty(composer, 'scrollHeight', {
+      configurable: true,
+      value: 200,
+    });
+    fireEvent.change(composer, { target: { value: 'A'.repeat(300) } });
+    await waitFor(() =>
+      expect(composer).toHaveStyle({ height: '120px', overflowY: 'auto' }),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand message editor' }),
+    );
+    await waitFor(() =>
+      expect(composer).toHaveStyle({ height: '200px', overflowY: 'hidden' }),
+    );
+
+    const addReaction = screen.getByRole('button', {
+      name: 'React to message message-1',
+    });
+    expect(addReaction).toHaveStyle({ opacity: '0' });
+    fireEvent.mouseEnter(
+      screen
+        .getByText('Want to compare study notes?')
+        .closest('[data-message-id="message-1"]')!,
+    );
+    expect(addReaction).toHaveStyle({ opacity: '1' });
+    expect(addReaction).toHaveStyle({ top: '-10px', right: '-8px' });
+    fireEvent.click(addReaction);
+    expect(
+      screen.getByRole('group', {
+        name: 'Choose a reaction for message message-1',
+      }),
+    ).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(
+      screen.queryByRole('group', {
+        name: 'Choose a reaction for message message-1',
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(addReaction);
+    fireEvent.click(screen.getByRole('button', { name: 'React with 👍' }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'social-toggle-message-reaction',
+        'message-1',
+        '👍',
+      ),
+    );
+    expect(
+      screen.getByRole('button', { name: 'Remove 👍 reaction' }),
+    ).toHaveTextContent('👍 1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send a Coco GIF' }));
+    expect(screen.getByRole('group', { name: 'Send a Coco GIF' })).toHaveStyle({
+      left: '0px',
+    });
+    fireEvent.mouseDown(document.body);
+    expect(
+      screen.queryByRole('group', { name: 'Send a Coco GIF' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Send a Coco GIF' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Working Coco' }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'social-send-message',
+        'Participant-2',
+        'Coco GIF',
+        'working',
+      ),
+    );
 
     fireEvent.change(screen.getByLabelText('Message Participant-2'), {
       target: { value: 'Yes, sounds good.' },
     });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add emoji to message' }),
+    );
+    expect(
+      screen.getByRole('group', { name: 'Add emoji to message' }),
+    ).toHaveStyle({ left: '0px' });
+    fireEvent.mouseDown(document.body);
+    expect(
+      screen.queryByRole('group', { name: 'Add emoji to message' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add emoji to message' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Insert 🎉' }));
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith(
         'social-send-message',
         'Participant-2',
-        'Yes, sounds good.',
+        'Yes, sounds good.🎉',
       ),
     );
   });

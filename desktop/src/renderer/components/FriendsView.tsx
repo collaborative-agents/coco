@@ -6,6 +6,18 @@ import React, {
   useState,
 } from 'react';
 import GroupsView from './GroupsView';
+import {
+  AnimatedCocoGif,
+  type CocoGifId,
+  isCocoGifId,
+} from './CocoGifControls';
+import {
+  MessageReactionControls,
+  optimisticallyToggleReaction,
+  type MessageReaction,
+  type SocialEmoji,
+} from './SocialEmojiControls';
+import SocialMessageComposer from './SocialMessageComposer';
 import { formatSocialTime, socialTimestampMs } from './social-time';
 
 interface DirectMessage {
@@ -15,6 +27,8 @@ interface DirectMessage {
   content: string;
   created_at: string;
   read_at?: string | null;
+  reactions?: MessageReaction[];
+  coco_gif_id?: string | null;
 }
 
 interface FriendshipSummary {
@@ -503,6 +517,7 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [hoveredMessageId, setHoveredMessageId] = useState('');
   const messageListRef = useRef<HTMLDivElement>(null);
 
   const loadFriendships = useCallback(async (showLoading = false) => {
@@ -667,6 +682,73 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
         draft,
       );
       setDraft('');
+      await loadMessages(selectedFriend);
+      await loadFriendships();
+    } catch (sendError) {
+      setError(errorMessage(sendError));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const toggleMessageReaction = async (
+    message: DirectMessage,
+    emoji: SocialEmoji,
+  ) => {
+    const messageId = directMessageId(message);
+    const previous = message.reactions || [];
+    setMessages((current) =>
+      current.map((item) =>
+        directMessageId(item) === messageId
+          ? {
+              ...item,
+              reactions: optimisticallyToggleReaction(
+                item.reactions || [],
+                emoji,
+              ),
+            }
+          : item,
+      ),
+    );
+    setError('');
+    try {
+      const result = (await window.electron?.ipcRenderer.invoke(
+        'social-toggle-message-reaction',
+        messageId,
+        emoji,
+      )) as { reactions?: MessageReaction[] } | undefined;
+      if (result?.reactions) {
+        setMessages((current) =>
+          current.map((item) =>
+            directMessageId(item) === messageId
+              ? { ...item, reactions: result.reactions }
+              : item,
+          ),
+        );
+      }
+    } catch (reactionError) {
+      setMessages((current) =>
+        current.map((item) =>
+          directMessageId(item) === messageId
+            ? { ...item, reactions: previous }
+            : item,
+        ),
+      );
+      setError(errorMessage(reactionError));
+    }
+  };
+
+  const sendCocoGif = async (id: CocoGifId) => {
+    if (!selectedFriend || sending) return;
+    setSending(true);
+    setError('');
+    try {
+      await window.electron?.ipcRenderer.invoke(
+        'social-send-message',
+        selectedFriend.participant_id,
+        'Coco GIF',
+        id,
+      );
       await loadMessages(selectedFriend);
       await loadFriendships();
     } catch (sendError) {
@@ -1092,13 +1174,33 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
               return (
                 <div
                   key={directMessageId(message)}
-                  style={fromFriend ? styles.friendMessage : styles.ownMessage}
+                  data-message-id={directMessageId(message)}
+                  style={{
+                    ...(fromFriend ? styles.friendMessage : styles.ownMessage),
+                    position: 'relative',
+                  }}
+                  onMouseEnter={() =>
+                    setHoveredMessageId(directMessageId(message))
+                  }
+                  onMouseLeave={() => setHoveredMessageId('')}
                 >
                   <div
                     style={fromFriend ? styles.friendBubble : styles.ownBubble}
                   >
-                    {message.content}
+                    {isCocoGifId(message.coco_gif_id) ? (
+                      <AnimatedCocoGif id={message.coco_gif_id} size={150} />
+                    ) : (
+                      message.content
+                    )}
                   </div>
+                  <MessageReactionControls
+                    messageId={directMessageId(message)}
+                    reactions={message.reactions || []}
+                    showAddButton={
+                      hoveredMessageId === directMessageId(message)
+                    }
+                    onToggle={(emoji) => toggleMessageReaction(message, emoji)}
+                  />
                   <div
                     style={{
                       ...styles.timestamp,
@@ -1111,34 +1213,17 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
               );
             })}
           </div>
-          <form style={styles.composer} onSubmit={sendMessage}>
-            <textarea
-              aria-label={`Message ${selectedFriend.participant_id}`}
-              style={styles.textarea}
-              maxLength={4_000}
-              placeholder="Write a message…"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-            />
-            <button
-              type="submit"
-              style={{
-                ...styles.primaryButton,
-                ...(!draft.trim() || sending
-                  ? { opacity: 0.45, cursor: 'default' }
-                  : {}),
-              }}
-              disabled={!draft.trim() || sending}
-            >
-              {sending ? 'Sending…' : 'Send'}
-            </button>
-          </form>
+          <SocialMessageComposer
+            ariaLabel={`Message ${selectedFriend.participant_id}`}
+            placeholder="Write a message…"
+            value={draft}
+            sending={sending}
+            emojiPickerLabel="Add emoji to message"
+            gifPickerLabel="Send a Coco GIF"
+            onChange={setDraft}
+            onSubmit={sendMessage}
+            onSendCocoGif={sendCocoGif}
+          />
         </div>
       </div>
     );
@@ -1251,7 +1336,9 @@ export default function FriendsView({ onClose }: { onClose: () => void }) {
                   unreadKnowledgeAnswers.length;
                 const totalAttention =
                   (friend.unread_count || 0) + knowledgeAttention;
-                let preview = friend.last_message?.content || 'No messages yet';
+                let preview = friend.last_message?.coco_gif_id
+                  ? 'Coco GIF'
+                  : friend.last_message?.content || 'No messages yet';
                 let showKnowledgeCue = false;
                 if (pendingKnowledgeRequests[0]) {
                   preview = `Coco request: ${pendingKnowledgeRequests[0].question}`;
