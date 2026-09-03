@@ -12,7 +12,6 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { randomUUID } from 'crypto';
-import { createServer } from 'net';
 import { exec, spawn } from 'child_process';
 import {
   app,
@@ -43,11 +42,6 @@ import {
   type ObservationEvent,
 } from './services/observation-stream';
 import {
-  consumeTutorStream,
-  TutorStreamTimeoutError,
-} from './services/tutor-stream';
-import type { TutorStreamEvent } from './services/tutor-stream';
-import {
   PersonalizationScheduler,
   type PersonalizationFatalError,
   type PersonalizationRunEvent,
@@ -77,10 +71,6 @@ import {
   saveAuthSession,
 } from './auth-session-store';
 import {
-  WakeWordService,
-  type WakeWordStatusEvent,
-} from './services/wake-word-service';
-import {
   appendActivity,
   readActivity,
   recordSupportEngagement,
@@ -88,7 +78,7 @@ import {
   recordSupportSuggestion,
   pruneActivity,
 } from './activity-store';
-import { readConversations, saveConversation } from './conversation-store';
+import { readConversations } from './conversation-store';
 import {
   defaultTutor,
   ensureManagedDefaultModelConfiguration,
@@ -102,6 +92,27 @@ import {
   type ModelConnection,
 } from './model-config-store';
 import { ObservationSleepGuard } from './observation-sleep-guard';
+import ChatSessionController, {
+  type ChatSeed,
+} from './controllers/chat-session-controller';
+import HotkeyCaptureController from './controllers/hotkey-capture-controller';
+import WakeWordController from './controllers/wake-word-controller';
+import {
+  configureLocalServicePorts,
+  requestedPersonalizationConcurrency,
+} from './runtime-config';
+import {
+  isStoredOnboardingComplete,
+  memoryPath,
+  profilePath,
+  readHideAvatarSetting,
+  readLocalMemory,
+  readProfileDocument,
+  readTutorProfile,
+  saveLocalMemory,
+  saveProfileDocument,
+  updateProfileDocument,
+} from './user-data-store';
 import {
   cleanObservation,
   AI_TOOLS,
@@ -279,18 +290,9 @@ const desktopAppUpdater = new DesktopAppUpdater({
 //                     created on demand, hidden (not destroyed) on close so the
 //                     conversation survives a reopen. Talks only to the local
 //                     tutor/sensing servers — no external backend or WebSocket.
-// imagePreviewWindow: full-display preview for pending and sent chat images.
 // sessionSetupWindow: small floating window for proactive session config
 let avatarWindow: BrowserWindow | null = null;
 let chatWindow: BrowserWindow | null = null;
-let imagePreviewWindow: BrowserWindow | null = null;
-let imagePreviewDataUrl: string | null = null;
-let imagePreviewEditable = false;
-let imagePreviewSourceWindow: BrowserWindow | null = null;
-let imagePreviewAnnotationResult: 'replace' | 'attach' = 'replace';
-let imagePreviewFullScreenOverlay = false;
-let hotkeyCaptureInProgress = false;
-let wakeWordCaptureWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
 let revealedSuggestionOpen = false;
@@ -342,100 +344,7 @@ const initializeDailyMemoryDraftService = () => {
   );
 };
 
-let wakeWordService: WakeWordService | null = null;
-const DEFAULT_WAKE_WORD_ENABLED = true;
-let wakeWordEnabled = DEFAULT_WAKE_WORD_ENABLED;
-let wakeWordStatus: WakeWordStatusEvent = { status: 'disabled' };
 let systemSuspended = false;
-let wakeWordCapturePaused = false;
-let wakeWordCapturePauseTimer: ReturnType<typeof setTimeout> | null = null;
-let wakeWordCaptureState = 'stopped';
-let wakeWordDetectionSequence = 0;
-let pendingWakeWordDetection: {
-  id: number;
-  keyword: string;
-  attempts: number;
-  retryTimer: ReturnType<typeof setTimeout> | null;
-} | null = null;
-
-const WAKE_WORDS = ['COCO', 'HI COCO', 'HEY COCO'] as const;
-const WAKE_WORD_MODEL =
-  'sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01';
-
-const wakeWordSettingsPath = () =>
-  path.join(app.getPath('userData'), 'wake-word.json');
-
-const readWakeWordEnabled = (): boolean => {
-  const settingsPath = wakeWordSettingsPath();
-  try {
-    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as {
-      enabled?: unknown;
-    };
-    if (typeof saved?.enabled !== 'boolean') {
-      throw new Error('saved enabled value is missing or invalid');
-    }
-    const { enabled } = saved;
-    log.info(`[Wake word] Loaded enabled=${enabled} from ${settingsPath}`);
-    return enabled;
-  } catch (error) {
-    log.info(
-      `[Wake word] No saved setting at ${settingsPath}; defaulting enabled (${(error as Error).message})`,
-    );
-    return DEFAULT_WAKE_WORD_ENABLED;
-  }
-};
-
-const saveWakeWordEnabled = (enabled: boolean): void => {
-  fs.writeFileSync(
-    wakeWordSettingsPath(),
-    `${JSON.stringify({ enabled }, null, 2)}\n`,
-    'utf8',
-  );
-};
-
-const publishWakeWordStatus = (status: WakeWordStatusEvent): void => {
-  wakeWordStatus = status;
-  chatWindow?.webContents.send('wake-word-status', status);
-  if (status.detail) log.warn(`[Wake word] ${status.status}: ${status.detail}`);
-  else log.info(`[Wake word] ${status.status}`);
-};
-
-const setWakeWordCapturePaused = (paused: boolean): void => {
-  wakeWordCapturePaused = paused;
-  if (wakeWordCapturePauseTimer) clearTimeout(wakeWordCapturePauseTimer);
-  wakeWordCapturePauseTimer = null;
-  wakeWordCaptureWindow?.webContents.send('wake-word-capture-paused-changed', {
-    paused,
-  });
-  if (paused) {
-    // Voice recording is capped at 30 seconds. Never leave activation paused
-    // indefinitely if the chat renderer fails during the handoff.
-    wakeWordCapturePauseTimer = setTimeout(() => {
-      setWakeWordCapturePaused(false);
-    }, 45_000);
-  }
-};
-
-// Completed hot-key screen captures waiting to be shown as preview thumbnails
-// in the chat input bar. The direct annotation overlay can finish before a fresh
-// chat renderer has mounted its IPC listener, so buffer here and flush once the
-// renderer announces it is ready.
-let pendingHotkeyCaptures: string[] = [];
-let hotkeyRendererReady = false;
-
-// Deliver any buffered hot-key captures to the chat renderer. No-op until the
-// renderer has signalled readiness — that handshake is what makes delivery
-// race-free regardless of whether the window was already open.
-const flushHotkeyCaptures = () => {
-  if (!hotkeyRendererReady) return;
-  if (!chatWindow || chatWindow.isDestroyed()) return;
-  if (pendingHotkeyCaptures.length === 0) return;
-  const toSend = pendingHotkeyCaptures;
-  pendingHotkeyCaptures = [];
-  toSend.forEach((imageDataUrl) => {
-    chatWindow?.webContents.send('hotkey-capture', { imageDataUrl });
-  });
-};
 
 // True once the Python services have been started. Guards against double-start
 // and lets us defer startup until the user has chosen their models.
@@ -446,35 +355,10 @@ let isFloatMode = true;
 // intercepting (they otherwise hide-instead-of-close, which would block quit).
 let isQuitting = false;
 
-// ── User profile ──────────────────────────────────────────────────────────────
-const profilePath = () =>
-  path.join(app.getPath('userData'), 'coco-profile.json');
-
 const isOnboardingComplete = (): boolean => {
-  try {
-    const raw = fs.readFileSync(profilePath(), 'utf-8');
-    const profile = JSON.parse(raw);
-    return (
-      profile?.onboardingComplete === true &&
-      (!gatewayClient ||
-        (Boolean(currentUserId) && profile?.participantId === currentUserId))
-    );
-  } catch {
-    return false;
-  }
+  return isStoredOnboardingComplete(Boolean(gatewayClient), currentUserId);
 };
 
-const readHideAvatarSetting = (): boolean => {
-  try {
-    const profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
-    return profile?.hideAvatar === true;
-  } catch {
-    return false;
-  }
-};
-
-// ── Proactive session state ───────────────────────────────────────────────────
-let isSessionActive = false;
 const appRunId = randomUUID();
 let currentUserId = process.env.COCO_GATEWAY_USER_ID?.trim() || null;
 let isAuthenticated = false;
@@ -502,11 +386,33 @@ const socialBackgroundPoller = new SocialBackgroundPoller(
   },
   log,
 );
-const endedGatewaySessions = new Set<string>();
 const gatewayExposureIds = new Map<string, string>();
-let currentSessionId: string | null = null;
-let pendingTaskLabel: string | null = null;
-let currentTutorModelId: string | null = null;
+const chatSessions = new ChatSessionController({
+  appRunId,
+  openChatForSession: (sessionId, problemStatement, seed) =>
+    openChatForSession(sessionId, problemStatement, seed),
+  onSessionEnded: () => {
+    if (chatWindow && !chatWindow.isDestroyed()) {
+      chatWindow.hide();
+      avatarWindow?.show();
+    }
+  },
+  queueGatewayOperation: (type, payload) =>
+    queueGatewayOperation(type, payload),
+});
+const hotkeyCapture = new HotkeyCaptureController({
+  preloadPath: () => preloadPath(),
+  createChatWindow: () => createChatWindow(),
+  getChatWindow: () => chatWindow,
+  startNewSession: () => openCoco(),
+});
+const wakeWords = new WakeWordController({
+  preloadPath: () => preloadPath(),
+  getChatWindow: () => chatWindow,
+  isSleeping: () => isCocoSleeping(),
+  isSystemSuspended: () => systemSuspended,
+  startNewSession: () => openCoco(),
+});
 // Invite timing is owned by the sensing-side judge; no renderer-side cooldown.
 
 const queueGatewayOperation = (
@@ -534,7 +440,9 @@ const configuredModelForFatalError = (
       config?.sensing.model || process.env.OBSERVER_MODEL?.trim() || undefined
     );
   }
-  const selected = resolveTutorRuntimeConnection(currentTutorModelId);
+  const selected = resolveTutorRuntimeConnection(
+    chatSessions.currentTutorModelId,
+  );
   return selected?.model || process.env.TUTOR_MODEL?.trim() || undefined;
 };
 
@@ -575,7 +483,9 @@ const queueFatalError = (
     app_version: app.getVersion(),
     platform: process.platform,
     arch: process.arch,
-    ...(currentSessionId ? { session_id: currentSessionId } : {}),
+    ...(chatSessions.currentSessionId
+      ? { session_id: chatSessions.currentSessionId }
+      : {}),
     ...(model ? { model } : {}),
     ...(typeof error.exitCode === 'number'
       ? { exit_code: error.exitCode }
@@ -673,7 +583,8 @@ const queueGatewayInteraction = (payload: unknown): void => {
   const observationId = stringField('observation_id');
   const messageId = stringField('message_id');
   const status = stringField('status');
-  const sessionId = stringField('session_id') || currentSessionId || undefined;
+  const sessionId =
+    stringField('session_id') || chatSessions.currentSessionId || undefined;
   const exposureSubject = observationId || messageId || status;
   const exposureKey = exposureSubject
     ? `${surface}:${exposureSubject}`
@@ -720,89 +631,11 @@ const queueGatewayInteraction = (payload: unknown): void => {
 };
 
 const queueGatewayMessage = (payload: Record<string, unknown>): void => {
-  if (!currentSessionId) return;
+  if (!chatSessions.currentSessionId) return;
   queueGatewayOperation('message', {
     ...payload,
-    sid: currentSessionId,
+    sid: chatSessions.currentSessionId,
   });
-};
-
-const requestedPort = (value: string | undefined, fallback: number): number => {
-  const parsed = Number.parseInt(value ?? '', 10);
-  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535
-    ? parsed
-    : fallback;
-};
-
-const requestedPersonalizationConcurrency = (
-  value: string | undefined,
-): number => {
-  const parsed = Number.parseInt(value ?? '', 10);
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 4 ? parsed : 4;
-};
-
-const canBindPort = (port: number): Promise<boolean> =>
-  new Promise((resolve) => {
-    const server = createServer();
-    server.unref();
-    server.once('error', () => resolve(false));
-    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
-      server.close(() => resolve(true));
-    });
-  });
-
-const findAvailablePort = async (
-  preferred: number,
-  excluded: Set<number>,
-): Promise<number> => {
-  if (!excluded.has(preferred) && (await canBindPort(preferred)))
-    return preferred;
-  for (let candidate = 49152; candidate <= 65535; candidate += 1) {
-    if (!excluded.has(candidate) && (await canBindPort(candidate)))
-      return candidate;
-  }
-  throw new Error('Coco could not find an available local service port.');
-};
-
-const configureLocalServicePorts = async (): Promise<void> => {
-  const requestedSensingPort = requestedPort(process.env.SENSING_PORT, 8080);
-  const requestedTutorPort = requestedPort(process.env.TUTOR_PORT, 8081);
-  const selected = new Set<number>();
-  const sensingPort = await findAvailablePort(requestedSensingPort, selected);
-  selected.add(sensingPort);
-  const tutorPort = await findAvailablePort(requestedTutorPort, selected);
-
-  process.env.SENSING_PORT = String(sensingPort);
-  process.env.TUTOR_PORT = String(tutorPort);
-  serviceManager.configureServiceArg(
-    'sensing-server',
-    'port',
-    String(sensingPort),
-  );
-  serviceManager.configureServiceArg('tutor-server', 'port', String(tutorPort));
-  serviceManager.configureServiceArg(
-    'sensing-server',
-    'tutor_url',
-    `http://127.0.0.1:${tutorPort}`,
-  );
-  const portEnv = {
-    SENSING_PORT: String(sensingPort),
-    TUTOR_PORT: String(tutorPort),
-  };
-  serviceManager.configureServiceEnv('sensing-server', portEnv);
-  serviceManager.configureServiceEnv('tutor-server', portEnv);
-
-  if (
-    sensingPort !== requestedSensingPort ||
-    tutorPort !== requestedTutorPort
-  ) {
-    log.warn(
-      `[Ports] Requested sensing=${requestedSensingPort}, tutor=${requestedTutorPort}; ` +
-      `using sensing=${sensingPort}, tutor=${tutorPort} because a port was occupied.`,
-    );
-  } else {
-    log.info(`[Ports] sensing=${sensingPort}, tutor=${tutorPort}`);
-  }
 };
 
 // Preload path helper
@@ -1015,7 +848,7 @@ const createChatWindow = () => {
 
   // A fresh renderer hasn't mounted its hot-key listener yet; wait for its
   // readiness handshake before flushing any buffered captures.
-  hotkeyRendererReady = false;
+  hotkeyCapture.markRendererNotReady();
 
   chatWindow = new BrowserWindow({
     show: false,
@@ -1164,282 +997,12 @@ function openSocialInbox(): void {
   if (
     chatWindow &&
     !chatWindow.isDestroyed() &&
-    hotkeyRendererReady
+    hotkeyCapture.isRendererReady
   ) {
     pendingOpenSocialInbox = false;
     chatWindow.webContents.send('open-social-inbox');
   }
 }
-
-const clearImagePreviewState = (target: BrowserWindow) => {
-  if (imagePreviewWindow !== target) return;
-  imagePreviewWindow = null;
-  imagePreviewDataUrl = null;
-  imagePreviewEditable = false;
-  imagePreviewSourceWindow = null;
-  imagePreviewAnnotationResult = 'replace';
-  imagePreviewFullScreenOverlay = false;
-};
-
-const dismissImagePreviewWindow = (target: BrowserWindow) => {
-  clearImagePreviewState(target);
-  if (!target.isDestroyed()) target.destroy();
-};
-
-const captureDisplayAtCursor = async (): Promise<string> => {
-  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const pixelSize = {
-    width: Math.max(1, Math.round(display.size.width * display.scaleFactor)),
-    height: Math.max(1, Math.round(display.size.height * display.scaleFactor)),
-  };
-  const sources = await desktopCapturer.getSources({
-    types: ['screen'],
-    thumbnailSize: pixelSize,
-  });
-  const source =
-    sources.find((candidate) => candidate.display_id === String(display.id)) ??
-    (sources.length === 1 ? sources[0] : undefined);
-  if (!source || source.thumbnail.isEmpty()) {
-    throw new Error(`No capture source found for display ${display.id}`);
-  }
-
-  const capturedSize = source.thumbnail.getSize();
-  log.info(
-    `[ImagePreview] Captured display ${display.id} at ` +
-      `${capturedSize.width}x${capturedSize.height} ` +
-      `(requested ${pixelSize.width}x${pixelSize.height}).`,
-  );
-  return source.thumbnail.toDataURL();
-};
-
-const openImagePreviewWindow = (
-  sourceWindow: BrowserWindow | null,
-  imageDataUrl: string,
-  editable = false,
-  annotationResult: 'replace' | 'attach' = 'replace',
-  displayAtCursor = false,
-  fullScreenOverlay = false,
-) => {
-  imagePreviewDataUrl = imageDataUrl;
-  imagePreviewEditable = editable;
-  imagePreviewSourceWindow = sourceWindow;
-  imagePreviewAnnotationResult = annotationResult;
-  imagePreviewFullScreenOverlay = fullScreenOverlay;
-  const display =
-    sourceWindow && !displayAtCursor
-      ? screen.getDisplayMatching(sourceWindow.getBounds())
-      : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-
-  if (imagePreviewWindow && !imagePreviewWindow.isDestroyed()) {
-    if (
-      process.platform === 'darwin' &&
-      imagePreviewWindow.isSimpleFullScreen()
-    ) {
-      imagePreviewWindow.setSimpleFullScreen(false);
-    }
-    imagePreviewWindow.setBounds(display.bounds);
-    if (process.platform === 'darwin') {
-      imagePreviewWindow.setSimpleFullScreen(true);
-    }
-    if (!imagePreviewWindow.webContents.isLoadingMainFrame()) {
-      imagePreviewWindow.webContents.send('image-preview', {
-        imageDataUrl,
-        editable,
-        fullScreenOverlay,
-      });
-      imagePreviewWindow.show();
-      imagePreviewWindow.focus();
-    }
-    return;
-  }
-
-  const previewWindow = new BrowserWindow({
-    show: false,
-    ...display.bounds,
-    frame: false,
-    transparent: false,
-    backgroundColor: '#111827',
-    alwaysOnTop: true,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: true,
-    skipTaskbar: true,
-    hasShadow: false,
-    webPreferences: { preload: preloadPath() },
-  });
-  imagePreviewWindow = previewWindow;
-  previewWindow.setAlwaysOnTop(
-    true,
-    process.platform === 'darwin' ? 'screen-saver' : 'floating',
-  );
-  if (process.platform === 'darwin') {
-    // A bounded frameless window is constrained below macOS's live menu bar,
-    // which leaves the captured menu bar visible underneath it. Simple
-    // fullscreen covers the menu bar and Dock without creating a new Space.
-    previewWindow.setSimpleFullScreen(true);
-  }
-  previewWindow.loadURL(`${resolveHtmlPath('index.html')}?view=image-preview`);
-  previewWindow.on('closed', () => {
-    // A rapid cancel → hotkey sequence can create the next preview before the
-    // old window emits `closed`. Never let the old callback clear the new one.
-    clearImagePreviewState(previewWindow);
-  });
-};
-
-const beginHotkeyCapture = async (): Promise<void> => {
-  if (hotkeyCaptureInProgress) {
-    log.info('[ImagePreview] Capture already in progress; ignoring repeat.');
-    return;
-  }
-  if (imagePreviewWindow && !imagePreviewWindow.isDestroyed()) {
-    imagePreviewWindow.show();
-    imagePreviewWindow.focus();
-    return;
-  }
-
-  hotkeyCaptureInProgress = true;
-  const startedAt = Date.now();
-  try {
-    const dataUrl = await captureDisplayAtCursor();
-    createChatWindow();
-    openImagePreviewWindow(chatWindow, dataUrl, true, 'attach', true, true);
-    log.info(
-      `[ImagePreview] Annotation overlay opened in ${Date.now() - startedAt}ms.`,
-    );
-  } catch (error) {
-    log.error(
-      `[ImagePreview] Direct screenshot capture failed: ${(error as Error).message}`,
-    );
-  } finally {
-    hotkeyCaptureInProgress = false;
-  }
-};
-
-const deliverPendingWakeWordDetection = (): void => {
-  const pending = pendingWakeWordDetection;
-  if (!pending) return;
-  if (pending.attempts >= 30) {
-    log.warn(
-      `[Wake word] Chat did not acknowledge detection ${pending.id}; resuming listening`,
-    );
-    pendingWakeWordDetection = null;
-    setWakeWordCapturePaused(false);
-    return;
-  }
-  pending.attempts += 1;
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    chatWindow.webContents.send('wake-word-detected', {
-      id: pending.id,
-      keyword: pending.keyword,
-    });
-  }
-  pending.retryTimer = setTimeout(deliverPendingWakeWordDetection, 500);
-};
-
-const queueWakeWordDetection = (keyword: string): void => {
-  if (pendingWakeWordDetection?.retryTimer) {
-    clearTimeout(pendingWakeWordDetection.retryTimer);
-  }
-  wakeWordDetectionSequence += 1;
-  pendingWakeWordDetection = {
-    id: wakeWordDetectionSequence,
-    keyword,
-    attempts: 0,
-    retryTimer: null,
-  };
-  setWakeWordCapturePaused(true);
-  // A wake-word invocation is an explicit new conversation, just like using
-  // the avatar/menu Open Chat action. openCoco assigns and publishes the new
-  // session id synchronously before its service configuration awaits begin.
-  openCoco().catch((err) =>
-    log.warn(`[Wake word] Could not start a fresh Coco session: ${err}`),
-  );
-  deliverPendingWakeWordDetection();
-};
-
-const createWakeWordCaptureWindow = (): void => {
-  if (wakeWordCaptureWindow && !wakeWordCaptureWindow.isDestroyed()) return;
-  const { x, y } = screen.getPrimaryDisplay().workArea;
-  wakeWordCaptureWindow = new BrowserWindow({
-    show: false,
-    x,
-    y,
-    width: 1,
-    height: 1,
-    opacity: 0,
-    transparent: true,
-    frame: false,
-    focusable: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
-    webPreferences: {
-      preload: preloadPath(),
-      backgroundThrottling: false,
-    },
-  });
-  wakeWordCaptureWindow.setIgnoreMouseEvents(true);
-  wakeWordCaptureWindow.setAlwaysOnTop(true, 'floating');
-  wakeWordCaptureWindow.setVisibleOnAllWorkspaces(true, {
-    visibleOnFullScreen: true,
-  });
-  wakeWordCaptureWindow.loadURL(
-    `${resolveHtmlPath('index.html')}?view=wake-word-capture`,
-  );
-  wakeWordCaptureWindow.webContents.on(
-    'render-process-gone',
-    (_event, details) => {
-      log.error(
-        `[Wake word] Capture renderer exited: ${details.reason} (${details.exitCode})`,
-      );
-    },
-  );
-  wakeWordCaptureWindow.on('closed', () => {
-    wakeWordCaptureWindow = null;
-  });
-};
-
-const syncWakeWordService = (): void => {
-  if (!wakeWordService) return;
-  if (!wakeWordEnabled) wakeWordService.stop('disabled');
-  else if (isCocoSleeping() || systemSuspended) {
-    wakeWordService.stop('sleeping');
-  } else wakeWordService.start();
-};
-
-const initializeWakeWordService = (): void => {
-  if (wakeWordService) return;
-  wakeWordEnabled = readWakeWordEnabled();
-  const modelDir = app.isPackaged
-    ? path.join(process.resourcesPath, 'assets', 'wake-word', WAKE_WORD_MODEL)
-    : path.resolve(process.cwd(), 'assets', 'wake-word', WAKE_WORD_MODEL);
-  const executable = app.isPackaged
-    ? path.join(
-        process.resourcesPath,
-        'service-dist',
-        'coco-services',
-        process.platform === 'win32'
-          ? 'wake-word-worker.exe'
-          : 'wake-word-worker',
-      )
-    : undefined;
-  wakeWordService = new WakeWordService({
-    projectRoot: app.isPackaged
-      ? process.resourcesPath
-      : path.resolve(process.cwd(), '..'),
-    modelDir,
-    stateDir: path.join(app.getPath('userData'), 'wake-word'),
-    logPath: path.join(app.getPath('userData'), 'logs', 'wake-word.log'),
-    packagedExecutable: executable,
-    onStatus: publishWakeWordStatus,
-    onDetected: (keyword) => {
-      if (!wakeWordEnabled || isCocoSleeping() || systemSuspended) return;
-      log.info(`[Wake word] Detected ${keyword}`);
-      queueWakeWordDetection(keyword);
-    },
-  });
-  syncWakeWordService();
-};
 
 const openChatSettings = () => {
   createChatWindow();
@@ -1471,13 +1034,17 @@ ipcMain.removeAllListeners('quit-app');
 ipcMain.on('quit-app', () => app.quit());
 
 async function openCoco(): Promise<void> {
-  const problemStatement = pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, 120, undefined, 'manual');
+  const problemStatement =
+    chatSessions.pendingTaskLabel || 'General help session';
+  await chatSessions.start(problemStatement, 120, undefined, 'manual');
 }
 
 async function openCurrentCocoConversation(): Promise<void> {
-  if (isSessionActive && currentSessionId) {
-    openChatForSession(currentSessionId, pendingTaskLabel || '');
+  if (chatSessions.isActive && chatSessions.currentSessionId) {
+    openChatForSession(
+      chatSessions.currentSessionId,
+      chatSessions.pendingTaskLabel || '',
+    );
     return;
   }
   await openCoco();
@@ -1636,16 +1203,6 @@ function applyAvatarVisibility(hidden: boolean): void {
   avatarWindow?.show();
 }
 
-interface ChatSeed {
-  phrase: string;
-  label: string;
-  rawObservation: string;
-  /** Attach context to the user's next turn instead of sending immediately. */
-  deferUntilUserMessage?: boolean;
-  /** Pre-fill Coco's composer without sending the message. */
-  initialInput?: string;
-}
-
 // Open the chat panel for a session, pushing the session context (and an
 // optional observation to send now or attach to the user's next message).
 const openChatForSession = (
@@ -1662,7 +1219,7 @@ const openChatForSession = (
     chatWindow?.webContents.send('session-init', {
       sessionId,
       problemStatement,
-      tutorModelId: currentTutorModelId,
+      tutorModelId: chatSessions.currentTutorModelId,
     });
     if (seed) chatWindow?.webContents.send('help-request', seed);
   };
@@ -1858,16 +1415,13 @@ const showNotification = (payload: NotificationPayload): boolean => {
 // Returns the saved onboarding profile so renderer/webapp code can read it
 // without needing filesystem access. Returns null if the profile doesn't exist.
 ipcMain.handle('get-profile', () => {
-  try {
-    const raw = fs.readFileSync(profilePath(), 'utf-8');
-    const profile = JSON.parse(raw);
-    return {
-      ...profile,
-      ...(currentUserId ? { participantId: currentUserId } : {}),
-    };
-  } catch {
-    return null;
-  }
+  const profile = readProfileDocument();
+  return profile
+    ? {
+        ...profile,
+        ...(currentUserId ? { participantId: currentUserId } : {}),
+      }
+    : null;
 });
 
 ipcMain.handle('get-chat-content-zoom-factor', () => chatContentZoomFactor);
@@ -1911,7 +1465,7 @@ ipcMain.handle(
         role === 'sensing'
       ? savedConfig?.sensing
           : (savedConfig?.tutors.find(
-              (item) => item.id === currentTutorModelId,
+              (item) => item.id === chatSessions.currentTutorModelId,
             ) ??
             savedConfig?.tutors.find(
               (item) => item.id === savedConfig.defaultTutorId,
@@ -2189,70 +1743,7 @@ async function testModelConnection(
 ipcMain.handle('test-model-connection', testModelConnection);
 
 async function restoreSessionAfterModelRestart(): Promise<void> {
-  if (!currentSessionId) return;
-  const conversation = readConversations().find(
-    (item) => item.sessionId === currentSessionId,
-  );
-  const tutorPort = process.env.TUTOR_PORT || '8081';
-  const sensingPort = process.env.SENSING_PORT || '8080';
-  const tutor = `http://127.0.0.1:${tutorPort}`;
-  const sensing = `http://127.0.0.1:${sensingPort}`;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      await Promise.all([
-        axios.get(`${tutor}/health`, { timeout: 1000 }),
-        axios.get(`${sensing}/health`, { timeout: 1000 }),
-      ]);
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-  const { aiTools, scenario, customObserverPrompt, userName } = readProfile();
-  await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
-  await axios.post(
-    `${tutor}/context/problem_statement`,
-    { problem_statement: conversation?.problem || pendingTaskLabel || '' },
-    { timeout: 8000 },
-  );
-  await axios.post(
-    `${tutor}/context/ai_tools`,
-    { ai_tools: aiTools },
-    { timeout: 8000 },
-  );
-  await axios.post(
-    `${tutor}/context/user_name`,
-    { user_name: userName },
-    { timeout: 8000 },
-  );
-  const memory = readLocalMemory();
-  if (memory) {
-    await axios.post(`${tutor}/context/memory`, { memory }, { timeout: 8000 });
-  }
-  if (conversation) {
-    await axios.post(
-      `${tutor}/context/conversation`,
-      {
-        messages: conversation.messages
-          .filter((message) => !message.isError)
-          .map(({ role, text }) => ({ role, text })),
-      },
-      { timeout: 8000 },
-    );
-  }
-  await axios.post(
-    `${sensing}/session`,
-    {
-      node_uuid: currentSessionId,
-      struggle_detection_seconds: 120,
-      scenario,
-      config_source: 'model_settings_restart',
-      ...(customObserverPrompt && {
-        custom_observer_prompt: customObserverPrompt,
-      }),
-    },
-    { timeout: 15000 },
-  );
+  await chatSessions.restoreAfterModelRestart();
 }
 
 ipcMain.handle(
@@ -2266,9 +1757,9 @@ ipcMain.handle(
         const defaultTutorModel = defaultTutor(runtime.config);
         const activeTutorModel =
           runtime.config.tutors.find(
-            (item) => item.id === currentTutorModelId,
+            (item) => item.id === chatSessions.currentTutorModelId,
           ) ?? defaultTutorModel;
-        currentTutorModelId = activeTutorModel.id;
+        chatSessions.setCurrentTutorModelId(activeTutorModel.id);
         process.env.TUTOR_MODEL = defaultTutorModel.model;
         process.env.OBSERVER_MODEL = runtime.config.sensing.model;
         personalizationScheduler?.updateModelConfiguration(
@@ -2333,7 +1824,7 @@ ipcMain.handle(
         { model: selected.model },
         { timeout: 8000 },
       );
-      currentTutorModelId = selected.id;
+      chatSessions.setCurrentTutorModelId(selected.id);
       return { success: true, modelId: selected.id };
     } catch (err) {
       return { success: false, error: (err as Error).message };
@@ -2343,37 +1834,26 @@ ipcMain.handle(
 
 // Persist profile edits made post-onboarding (the Settings surface in the
 // webapp).
-ipcMain.handle('save-profile', (_event, profile: object) => {
+ipcMain.handle(
+  'save-profile',
+  (_event, profile: Record<string, unknown>) => {
   try {
-    fs.writeFileSync(
-      profilePath(),
-      JSON.stringify(
-        { ...profile, ...(currentUserId ? { participantId: currentUserId } : {}) },
-        null,
-        2,
-      ),
-      'utf-8',
-    );
+    saveProfileDocument(profile, currentUserId);
     log.info('[Settings] Profile saved:', profilePath());
     return { success: true };
   } catch (err) {
     log.error('[Settings] Failed to save profile:', err);
     return { success: false, error: String(err) };
   }
-});
+  },
+);
 
-ipcMain.on('onboarding-complete', (_event, profile: object) => {
+ipcMain.on(
+  'onboarding-complete',
+  (_event, profile: Record<string, unknown>) => {
   // Write the profile so isOnboardingComplete() returns true on next launch.
   try {
-    fs.writeFileSync(
-      profilePath(),
-      JSON.stringify(
-        { ...profile, ...(currentUserId ? { participantId: currentUserId } : {}) },
-        null,
-        2,
-      ),
-      'utf-8',
-    );
+    saveProfileDocument(profile, currentUserId);
     log.info('[Onboarding] Profile saved:', profilePath());
   } catch (err) {
     log.error('[Onboarding] Failed to save profile:', err);
@@ -2385,7 +1865,8 @@ ipcMain.on('onboarding-complete', (_event, profile: object) => {
   // Onboarding window closes itself (window.close() in renderer). Start the
   // avatar now that setup is complete; the chat panel is created on demand.
   applyAvatarVisibility(readHideAvatarSetting());
-});
+  },
+);
 
 ipcMain.removeAllListeners('hide-onboarding');
 ipcMain.on('hide-onboarding', () => {
@@ -2407,19 +1888,23 @@ ipcMain.on('model-configuration-complete', () => {
 // what lets a saved annotation open the chat and attach reliably.
 ipcMain.removeAllListeners('hotkey-capture-ready');
 ipcMain.on('hotkey-capture-ready', () => {
-  hotkeyRendererReady = true;
-  flushHotkeyCaptures();
-  if (currentSessionId && chatWindow && !chatWindow.isDestroyed()) {
+  hotkeyCapture.markRendererReady();
+  if (
+    chatSessions.currentSessionId &&
+    chatWindow &&
+    !chatWindow.isDestroyed()
+  ) {
     const storedConversation = readConversations().find(
-      (conversation) => conversation.sessionId === currentSessionId,
+      (conversation) =>
+        conversation.sessionId === chatSessions.currentSessionId,
     );
     chatWindow.webContents.send('session-init', {
-      sessionId: currentSessionId,
+      sessionId: chatSessions.currentSessionId,
       problemStatement:
         storedConversation?.problem ||
-        pendingTaskLabel ||
+        chatSessions.pendingTaskLabel ||
         'General help session',
-      tutorModelId: currentTutorModelId,
+      tutorModelId: chatSessions.currentTutorModelId,
     });
   }
   if (pendingOpenSocialInbox && chatWindow && !chatWindow.isDestroyed()) {
@@ -2429,7 +1914,7 @@ ipcMain.on('hotkey-capture-ready', () => {
 });
 
 // Pet/menu "Open Chat" is a user-initiated conversation boundary. Always start
-// a fresh local session; createProactiveTutorSession ends the previous session
+// a fresh local session; ChatSessionController ends the previous session
 // and the renderer persists its messages when it receives the new session id.
 // Explicit "View conversation" actions opt into reopening the current session.
 ipcMain.removeAllListeners('open-main-window');
@@ -2464,8 +1949,12 @@ ipcMain.on(
     _event,
     payload: { phrase: string; label: string; rawObservation: string },
   ) => {
-  if (isSessionActive && currentSessionId) {
-    openChatForSession(currentSessionId, pendingTaskLabel || '', payload);
+  if (chatSessions.isActive && chatSessions.currentSessionId) {
+    openChatForSession(
+      chatSessions.currentSessionId,
+      chatSessions.pendingTaskLabel || '',
+      payload,
+    );
     return;
   }
 
@@ -2473,9 +1962,9 @@ ipcMain.on(
   const problemStatement =
       payload?.phrase?.trim() ||
       payload?.label?.trim() ||
-      pendingTaskLabel ||
+      chatSessions.pendingTaskLabel ||
       'General help session';
-    const sessionId = await createProactiveTutorSession(
+    const sessionId = await chatSessions.start(
       problemStatement,
       120,
       payload,
@@ -2541,10 +2030,14 @@ ipcMain.on(
       })
       .finally(() => personalizationScheduler?.noteFeedback());
 
-    if (isSessionActive && currentSessionId) {
-      openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
+    if (chatSessions.isActive && chatSessions.currentSessionId) {
+      openChatForSession(
+        chatSessions.currentSessionId,
+        chatSessions.pendingTaskLabel || '',
+        seed,
+      );
     } else {
-      await createProactiveTutorSession(
+      await chatSessions.start(
         rawObservation || 'General help session',
         120,
         seed,
@@ -2606,12 +2099,10 @@ async function setCocoSleepMode(
     throw error;
   }
   previewCocoSleepMode = sleeping;
-  syncWakeWordService();
+  wakeWords.sync();
   avatarWindow?.webContents.send('coco-sleep-mode-changed', { sleeping });
   chatWindow?.webContents.send('coco-sleep-mode-changed', { sleeping });
-  wakeWordCaptureWindow?.webContents.send('coco-sleep-mode-changed', {
-    sleeping,
-  });
+  wakeWords.notifySleepMode(sleeping);
   if (!sleeping) {
     avatarWindow?.webContents.send('daily-memory-draft-refresh');
   }
@@ -2688,143 +2179,7 @@ ipcMain.handle(
   },
 );
 
-ipcMain.removeHandler('get-wake-word-settings');
-ipcMain.handle('get-wake-word-settings', () => ({
-  enabled: wakeWordEnabled,
-  keywords: [...WAKE_WORDS],
-  capturePaused: wakeWordCapturePaused,
-  ...wakeWordStatus,
-  logPath: path.join(app.getPath('userData'), 'logs', 'wake-word.log'),
-}));
-
-ipcMain.removeHandler('set-wake-word-settings');
-ipcMain.handle(
-  'set-wake-word-settings',
-  async (_event, { enabled }: { enabled?: boolean } = {}) => {
-    if (typeof enabled !== 'boolean') {
-      return { success: false, error: 'Invalid voice activation setting.' };
-    }
-    if (
-      enabled &&
-      process.platform === 'darwin' &&
-      systemPreferences.getMediaAccessStatus('microphone') !== 'granted'
-    ) {
-      const granted = await systemPreferences.askForMediaAccess('microphone');
-      if (!granted) {
-        return {
-          success: false,
-          error:
-            'Microphone access is required. Enable Coco under Privacy & Security → Microphone.',
-        };
-      }
-    }
-    wakeWordEnabled = enabled;
-    if (!enabled) setWakeWordCapturePaused(false);
-    saveWakeWordEnabled(enabled);
-    syncWakeWordService();
-    const settings = {
-      enabled,
-      keywords: [...WAKE_WORDS],
-      capturePaused: wakeWordCapturePaused,
-      ...wakeWordStatus,
-    };
-    chatWindow?.webContents.send('wake-word-settings-changed', settings);
-    wakeWordCaptureWindow?.webContents.send(
-      'wake-word-settings-changed',
-      settings,
-    );
-    return { success: true, ...settings };
-  },
-);
-
-ipcMain.removeHandler('set-wake-word-capture-paused');
-ipcMain.handle(
-  'set-wake-word-capture-paused',
-  (_event, { paused }: { paused?: boolean } = {}) => {
-    if (typeof paused !== 'boolean') return { success: false };
-    setWakeWordCapturePaused(paused);
-    return { success: true, paused };
-  },
-);
-
-ipcMain.removeAllListeners('wake-word-capture-renderer-ready');
-ipcMain.on('wake-word-capture-renderer-ready', (event) => {
-  if (
-    !wakeWordCaptureWindow ||
-    event.sender !== wakeWordCaptureWindow.webContents
-  ) {
-    return;
-  }
-  // getUserMedia can remain pending forever in a genuinely hidden renderer on
-  // macOS. Keep this 1 px, fully transparent window technically visible.
-  wakeWordCaptureWindow.showInactive();
-  wakeWordCaptureWindow.webContents.send('wake-word-settings-changed', {
-    enabled: wakeWordEnabled,
-    keywords: [...WAKE_WORDS],
-    capturePaused: wakeWordCapturePaused,
-    ...wakeWordStatus,
-  });
-  setImmediate(() => {
-    wakeWordCaptureWindow?.webContents.send('wake-word-capture-window-ready');
-  });
-  log.info('[Wake word] Microphone capture renderer ready');
-});
-
-ipcMain.removeAllListeners('wake-word-detection-ack');
-ipcMain.on(
-  'wake-word-detection-ack',
-  (event, value: { id?: unknown } | undefined) => {
-    if (!chatWindow || event.sender !== chatWindow.webContents) return;
-    const id = typeof value?.id === 'number' ? value.id : null;
-    if (!pendingWakeWordDetection || pendingWakeWordDetection.id !== id) return;
-    if (pendingWakeWordDetection.retryTimer) {
-      clearTimeout(pendingWakeWordDetection.retryTimer);
-    }
-    log.info(
-      `[Wake word] Chat acknowledged detection ${id} after ${pendingWakeWordDetection.attempts} attempt(s)`,
-    );
-    pendingWakeWordDetection = null;
-  },
-);
-
-ipcMain.removeAllListeners('wake-word-capture-status');
-ipcMain.on('wake-word-capture-status', (event, value: unknown) => {
-  if (
-    !wakeWordCaptureWindow ||
-    event.sender !== wakeWordCaptureWindow.webContents
-  ) {
-    return;
-  }
-  const status = value as { state?: unknown; detail?: unknown } | undefined;
-  const state = typeof status?.state === 'string' ? status.state : 'unknown';
-  if (state === wakeWordCaptureState && !status?.detail) return;
-  wakeWordCaptureState = state;
-  const detail = typeof status?.detail === 'string' ? `: ${status.detail}` : '';
-  log.info(`[Wake word] Microphone capture ${state}${detail}`);
-  chatWindow?.webContents.send('wake-word-capture-status', {
-    state,
-    detail: typeof status?.detail === 'string' ? status.detail : undefined,
-  });
-});
-
-ipcMain.removeAllListeners('wake-word-audio-frame');
-ipcMain.on('wake-word-audio-frame', (event, frame: unknown) => {
-  if (
-    !wakeWordEnabled ||
-    isCocoSleeping() ||
-    systemSuspended ||
-    wakeWordCapturePaused ||
-    !wakeWordCaptureWindow ||
-    event.sender !== wakeWordCaptureWindow.webContents
-  ) {
-    return;
-  }
-  if (frame instanceof Uint8Array) {
-    wakeWordService?.writeAudio(Buffer.from(frame));
-  } else if (frame instanceof ArrayBuffer) {
-    wakeWordService?.writeAudio(Buffer.from(new Uint8Array(frame)));
-  }
-});
+wakeWords.registerIpc(ipcMain);
 
 ipcMain.removeAllListeners('notification');
 ipcMain.on('notification', (_event, args) => {
@@ -3085,24 +2440,13 @@ ipcMain.removeAllListeners('session-active');
 ipcMain.on(
   'session-active',
   (_event, payload: { active: boolean; sessionId?: string }) => {
-  isSessionActive = payload.active;
+  chatSessions.syncRendererState(payload.active, payload.sessionId);
   if (payload.active && payload.sessionId) {
-    currentSessionId = payload.sessionId;
     // Dismiss the onboarding overlay if still open — a live session takes over.
     if (onboardingWindow && !onboardingWindow.isDestroyed()) {
       onboardingWindow.destroy();
       onboardingWindow = null;
     }
-  }
-  if (!payload.active) {
-    currentSessionId = null;
-    // Tell sensing server to revert to pre-session observation mode.
-    const sensingPort = process.env.SENSING_PORT || '8080';
-    axios
-      .post(`http://127.0.0.1:${sensingPort}/session/end`)
-        .catch((e) =>
-          log.warn('Could not notify sensing server of session end:', e),
-        );
   }
     log.info(
       `[ProactiveSession] isSessionActive=${payload.active}, sessionId=${payload.sessionId}`,
@@ -3115,50 +2459,12 @@ ipcMain.on(
 ipcMain.removeAllListeners('show-session-setup');
 ipcMain.on('show-session-setup', () => {
   notificationWindow?.destroy();
-  showSessionSetupWindow(pendingTaskLabel);
+  showSessionSetupWindow(chatSessions.pendingTaskLabel);
 });
 
 // Read the user's onboarding profile for the AI tools and tutor mode they
 // selected. Returns sensible defaults when the file is missing or malformed.
-// Shared by createProactiveTutorSession() and the instant-suggestion precompute.
-function readProfile(): {
-  aiTools: string[];
-  scenario: string;
-  customObserverPrompt: string;
-  userName: string;
-} {
-  let aiTools: string[] = [];
-  let scenario = 'everyday_support';
-  let customObserverPrompt = '';
-  let userName = '';
-  try {
-    const profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
-    if (typeof profile.tutorScenario === 'string' && profile.tutorScenario) {
-      scenario = profile.tutorScenario;
-    }
-    if (Array.isArray(profile.aiTools) && profile.aiTools.length > 0) {
-      aiTools = profile.aiTools;
-    }
-    if (
-      typeof profile.customSystemPrompt === 'string' &&
-      profile.customSystemPrompt.trim()
-    ) {
-      customObserverPrompt = profile.customSystemPrompt;
-    }
-    if (typeof profile.userName === 'string' && profile.userName.trim()) {
-      userName = profile.userName.trim();
-    }
-    // "Custom" mode customizes only the sensing observer prompt. The judge/tutor
-    // still run on a real base scenario, so map 'custom' → 'everyday_support'.
-    if (scenario === 'custom') {
-      scenario = 'everyday_support';
-    }
-  } catch (err) {
-    log.warn(`[Profile] Could not read profile at ${profilePath()}: ${err}.`);
-  }
-  return { aiTools, scenario, customObserverPrompt, userName };
-}
-
+// Shared by ChatSessionController and the instant-suggestion precompute.
 // ── Instant suggestion precompute cache ─────────────────────────────────────
 // For each Tier-2 candidate, ask the tutor server for a ready-to-use suggestion
 // and cache the in-flight promise by observation_id. Nothing is presented until
@@ -3195,7 +2501,7 @@ const PRECOMPUTE_STATUSES = new Set([
 // that category (recommended tool first) and let them pick among them. Falls
 // back to all their tools — then ChatGPT — if that category has none.
 function buildAvailableTools(preferredId?: string | null): AiToolButton[] {
-  const { aiTools } = readProfile();
+  const { aiTools } = readTutorProfile();
   const resolved = resolveAiTools(aiTools, preferredId);
   const category = preferredId ? parseAiTool(preferredId)?.category : undefined;
   const sameCategory = category
@@ -3255,7 +2561,7 @@ function precomputeSuggestion(event: {
   if (cached) return cached.promise;
   pruneSuggestionCache();
 
-  const { aiTools, scenario } = readProfile();
+  const { aiTools, scenario } = readTutorProfile();
   const tutorPort = process.env.TUTOR_PORT || '8081';
   const startedAt = Date.now();
   log.info(
@@ -3507,10 +2813,14 @@ ipcMain.on(
       })
       .finally(() => personalizationScheduler?.noteFeedback());
 
-    if (isSessionActive && currentSessionId) {
-      openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
+    if (chatSessions.isActive && chatSessions.currentSessionId) {
+      openChatForSession(
+        chatSessions.currentSessionId,
+        chatSessions.pendingTaskLabel || '',
+        seed,
+      );
     } else {
-      await createProactiveTutorSession(
+      await chatSessions.start(
         suggestion.title,
         120,
         seed,
@@ -3520,128 +2830,6 @@ ipcMain.on(
   },
 );
 
-// Create a tutor session entirely against the LOCAL servers (no backend). A
-// "session" here is just a fresh conversation on the tutor server plus a
-// configured struggle-detection window on the sensing server. Shared by the
-// "Yes, start session" invite flow and the pre-session "Help me with this"
-// flow. Returns the new (locally generated) session id, or null on failure.
-async function createProactiveTutorSession(
-  problemStatement: string,
-  struggleSeconds: number,
-  seed?: ChatSeed,
-  startTrigger: 'proactive_suggestion' | 'user_message' | 'manual' = 'manual',
-): Promise<string | null> {
-  if (currentSessionId && !endedGatewaySessions.has(currentSessionId)) {
-    endCurrentSession('user_ended');
-  }
-  // Read the user's onboarding profile to get their selected AI tools and mode.
-  const { aiTools, scenario, customObserverPrompt, userName } = readProfile();
-
-  const sensingPort = process.env.SENSING_PORT || '8080';
-  const tutorPort = process.env.TUTOR_PORT || '8081';
-  const sensing = `http://127.0.0.1:${sensingPort}`;
-  const tutor = `http://127.0.0.1:${tutorPort}`;
-  const sessionId = randomUUID();
-  const modelConfig = readModelConfiguration();
-  const selectedTutor = resolveTutorRuntimeConnection();
-  currentTutorModelId = selectedTutor?.id ?? null;
-
-  // Open the chat panel immediately so the user always gets a UI, even if a
-  // server is still starting up. Configuration below is best-effort.
-  currentSessionId = sessionId;
-  isSessionActive = true;
-  openChatForSession(sessionId, problemStatement, seed);
-  log.info(`[ProactiveSession] Local tutor session started: ${sessionId}`);
-  queueGatewayOperation('session_start', {
-    _id: sessionId,
-    started_at: new Date().toISOString(),
-    start_trigger: startTrigger,
-    scenario,
-    ...(selectedTutor?.model ? { tutor_model: selectedTutor.model } : {}),
-    ...(modelConfig?.sensing.model
-      ? { observer_model: modelConfig.sensing.model }
-      : {}),
-    app_run_id: appRunId,
-    repository: 'coco',
-    ...(process.env.COCO_GIT_COMMIT_SHA
-      ? { git_commit_sha: process.env.COCO_GIT_COMMIT_SHA }
-      : {}),
-    ...(process.env.COCO_GIT_BRANCH
-      ? { git_branch: process.env.COCO_GIT_BRANCH }
-      : {}),
-  });
-
-  // Configure the tutor conversation (the chat only needs the tutor server).
-  try {
-    await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
-    if (selectedTutor) {
-      await axios.post(
-        `${tutor}/config/model`,
-        { model: selectedTutor.model },
-        { timeout: 8000 },
-      );
-    }
-    await axios.post(
-      `${tutor}/config/scenario`,
-      { scenario },
-      { timeout: 8000 },
-    );
-    await axios.post(
-      `${tutor}/context/problem_statement`,
-      { problem_statement: problemStatement },
-      { timeout: 8000 },
-    );
-    await axios.post(
-      `${tutor}/context/ai_tools`,
-      { ai_tools: aiTools },
-      { timeout: 8000 },
-    );
-    await axios.post(
-      `${tutor}/context/user_name`,
-      { user_name: userName },
-      { timeout: 8000 },
-    );
-    // Re-apply the persisted long-term memory so a freshly (re)started tutor
-    // process always has it, independent of its own on-disk load.
-    const savedMemory = readLocalMemory();
-    if (savedMemory) {
-      await axios.post(
-        `${tutor}/context/memory`,
-        { memory: savedMemory },
-        { timeout: 8000 },
-      );
-    }
-  } catch (err) {
-    log.warn(
-      `[ProactiveSession] Tutor context setup failed: ${(err as Error).message}`,
-    );
-  }
-
-  // Configure the sensing session (struggle-detection window + observer prompt).
-  // This is proactive-only — chat still works if the sensing server is down.
-  try {
-    await axios.post(
-      `${sensing}/session`,
-      {
-        node_uuid: sessionId,
-        struggle_detection_seconds: struggleSeconds,
-        scenario,
-        config_source: 'session_start',
-        ...(customObserverPrompt && {
-          custom_observer_prompt: customObserverPrompt,
-        }),
-      },
-      { timeout: 15000 },
-    );
-  } catch (err) {
-    log.warn(
-      `[ProactiveSession] Sensing session setup failed (proactive disabled): ${(err as Error).message}`,
-    );
-  }
-
-  return sessionId;
-}
-
 // Start a fresh conversation directly from the chat header. Reuse the regular
 // session setup path so tutor context, sensing, profile settings, and long-term
 // memory all move to the same new session boundary.
@@ -3650,9 +2838,11 @@ ipcMain.handle(
   'start-new-chat-session',
   async (_event, { problemStatement }: { problemStatement?: string } = {}) => {
     const task =
-      problemStatement?.trim() || pendingTaskLabel || 'General help session';
+      problemStatement?.trim() ||
+      chatSessions.pendingTaskLabel ||
+      'General help session';
     try {
-      const sessionId = await createProactiveTutorSession(
+      const sessionId = await chatSessions.start(
         task,
         120,
         undefined,
@@ -3668,97 +2858,7 @@ ipcMain.handle(
   },
 );
 
-// Chat history is local-only: the renderer persists completed turns here and
-// asks main to rebuild tutor context before continuing an older conversation.
-ipcMain.removeHandler('get-chat-conversations');
-ipcMain.handle('get-chat-conversations', () => readConversations());
-
-ipcMain.removeHandler('save-chat-conversation');
-ipcMain.handle('save-chat-conversation', (_event, payload) => {
-  saveConversation({ ...(payload ?? {}), tutorModelId: currentTutorModelId });
-  return { success: true };
-});
-ipcMain.removeAllListeners('save-chat-conversation');
-ipcMain.on('save-chat-conversation', (_event, payload) => {
-  saveConversation({ ...(payload ?? {}), tutorModelId: currentTutorModelId });
-});
-
-ipcMain.removeHandler('resume-chat-conversation');
-ipcMain.handle(
-  'resume-chat-conversation',
-  async (_event, { sessionId }: { sessionId?: string } = {}) => {
-    const conversation = readConversations().find(
-      (saved) => saved.sessionId === sessionId,
-    );
-    if (!conversation) {
-      return { success: false, error: 'Conversation not found.' };
-    }
-
-    const tutorPort = process.env.TUTOR_PORT || '8081';
-    const tutor = `http://127.0.0.1:${tutorPort}`;
-    const { aiTools, scenario, userName } = readProfile();
-    try {
-      await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
-      const selectedTutor = resolveTutorRuntimeConnection(
-        conversation.tutorModelId,
-      );
-      if (selectedTutor) {
-        await axios.post(
-          `${tutor}/config/model`,
-          { model: selectedTutor.model },
-          { timeout: 8000 },
-        );
-        currentTutorModelId = selectedTutor.id;
-      }
-      await axios.post(
-        `${tutor}/config/scenario`,
-        { scenario },
-        { timeout: 8000 },
-      );
-      await axios.post(
-        `${tutor}/context/problem_statement`,
-        { problem_statement: conversation.problem },
-        { timeout: 8000 },
-      );
-      await axios.post(
-        `${tutor}/context/ai_tools`,
-        { ai_tools: aiTools },
-        { timeout: 8000 },
-      );
-      await axios.post(
-        `${tutor}/context/user_name`,
-        { user_name: userName },
-        { timeout: 8000 },
-      );
-      const savedMemory = readLocalMemory();
-      if (savedMemory) {
-        await axios.post(
-          `${tutor}/context/memory`,
-          { memory: savedMemory },
-          { timeout: 8000 },
-        );
-      }
-      await axios.post(
-        `${tutor}/context/conversation`,
-        {
-          messages: conversation.messages
-            .filter((message) => !message.isError)
-            .map(({ role, text }) => ({ role, text })),
-        },
-        { timeout: 8000 },
-      );
-      currentSessionId = conversation.sessionId;
-      isSessionActive = true;
-      pendingTaskLabel = conversation.problem;
-      return { success: true, tutorModelId: currentTutorModelId };
-    } catch (err) {
-      log.warn(
-        `[Chat] Could not resume conversation: ${(err as Error).message}`,
-      );
-      return { success: false, error: (err as Error).message };
-    }
-  },
-);
+chatSessions.registerConversationIpc(ipcMain);
 
 // User confirmed the task + struggle-time in the session-setup window.
 ipcMain.removeAllListeners('proactive-session-confirmed');
@@ -3772,16 +2872,18 @@ ipcMain.on(
     }: { struggleSeconds: number; taskLabel?: string },
   ) => {
   sessionSetupWindow?.destroy();
-  // Prefer the user-edited task label from the setup window; fall back to
-  // the auto-detected pendingTaskLabel, then a generic default.
+    // Prefer the user-edited task label from the setup window; fall back to
+    // the auto-detected pendingTaskLabel, then a generic default.
     const problemStatement =
-      taskLabel?.trim() || pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(
-    problemStatement,
-    struggleSeconds,
-    undefined,
-    'proactive_suggestion',
-  );
+      taskLabel?.trim() ||
+      chatSessions.pendingTaskLabel ||
+      'General help session';
+    await chatSessions.start(
+      problemStatement,
+      struggleSeconds,
+      undefined,
+      'proactive_suggestion',
+    );
   },
 );
 
@@ -3791,36 +2893,8 @@ ipcMain.on(
 ipcMain.removeAllListeners('proactive-session-end-confirmed');
 ipcMain.on('proactive-session-end-confirmed', () => {
   notificationWindow?.destroy();
-  endCurrentSession();
+  chatSessions.end();
 });
-
-// Ends the active session: mark inactive, close the chat panel, and tell the
-// sensing server to revert to pre-session observation mode.
-function endCurrentSession(
-  completionReason: 'user_ended' | 'app_quit' | 'error' = 'user_ended',
-) {
-  const endingSessionId = currentSessionId;
-  if (endingSessionId && !endedGatewaySessions.has(endingSessionId)) {
-    endedGatewaySessions.add(endingSessionId);
-    queueGatewayOperation('session_end', {
-      session_id: endingSessionId,
-      ended_at: new Date().toISOString(),
-      completion_reason: completionReason,
-    });
-  }
-  isSessionActive = false;
-  currentSessionId = null;
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    chatWindow.hide();
-    avatarWindow?.show();
-  }
-  const sensingPort = process.env.SENSING_PORT || '8080';
-  axios
-    .post(`http://127.0.0.1:${sensingPort}/session/end`)
-    .catch((e) =>
-      log.warn('Could not notify sensing server of session end:', e),
-    );
-}
 
 // ── Local chat turn ────────────────────────────────────────────────────────────
 // The renderer (SessionChatView) sends the user's message here. We generate an
@@ -3905,7 +2979,7 @@ ipcMain.handle(
           // Current-screen context is now retrieved only when the tutor calls
           // observe_screen; ordinary chat turns skip the observer entirely.
           observation: '',
-          session_id: currentSessionId,
+          session_id: chatSessions.currentSessionId,
           user_text: contextualizedUserText,
           image_paths: imagePaths.length ? imagePaths : null,
         },
@@ -3984,103 +3058,7 @@ ipcMain.handle(
   },
 );
 
-ipcMain.removeAllListeners('open-image-preview');
-ipcMain.on('open-image-preview', (event, payload: unknown) => {
-  const preview = (payload ?? {}) as {
-    imageDataUrl?: unknown;
-    editable?: unknown;
-  };
-  const { imageDataUrl } = preview;
-  if (
-    typeof imageDataUrl !== 'string' ||
-    !imageDataUrl.startsWith('data:image/')
-  ) {
-    log.warn('[ImagePreview] Ignored an invalid image preview request.');
-    return;
-  }
-  openImagePreviewWindow(
-    BrowserWindow.fromWebContents(event.sender),
-    imageDataUrl,
-    preview.editable === true,
-  );
-});
-
-ipcMain.removeAllListeners('image-preview-ready');
-ipcMain.on('image-preview-ready', (event) => {
-  if (
-    !imagePreviewWindow ||
-    imagePreviewWindow.isDestroyed() ||
-    imagePreviewWindow.webContents.id !== event.sender.id ||
-    !imagePreviewDataUrl
-  ) {
-    return;
-  }
-  imagePreviewWindow.webContents.send('image-preview', {
-    imageDataUrl: imagePreviewDataUrl,
-    editable: imagePreviewEditable,
-    fullScreenOverlay: imagePreviewFullScreenOverlay,
-  });
-  if (
-    process.platform === 'darwin' &&
-    !imagePreviewWindow.isSimpleFullScreen()
-  ) {
-    imagePreviewWindow.setSimpleFullScreen(true);
-  }
-  imagePreviewWindow.show();
-  imagePreviewWindow.focus();
-});
-
-ipcMain.removeAllListeners('close-image-preview');
-ipcMain.on('close-image-preview', (event) => {
-  if (
-    imagePreviewWindow &&
-    !imagePreviewWindow.isDestroyed() &&
-    imagePreviewWindow.webContents.id === event.sender.id
-  ) {
-    dismissImagePreviewWindow(imagePreviewWindow);
-  }
-});
-
-ipcMain.removeAllListeners('save-image-annotation');
-ipcMain.on('save-image-annotation', (event, payload: unknown) => {
-  const annotatedImageDataUrl = (
-    payload as { imageDataUrl?: unknown } | null
-  )?.imageDataUrl;
-  if (
-    !imagePreviewEditable ||
-    !imagePreviewDataUrl ||
-    !imagePreviewWindow ||
-    imagePreviewWindow.isDestroyed() ||
-    imagePreviewWindow.webContents.id !== event.sender.id ||
-    typeof annotatedImageDataUrl !== 'string' ||
-    !annotatedImageDataUrl.startsWith('data:image/png;base64,') ||
-    annotatedImageDataUrl.length > 50_000_000
-  ) {
-    log.warn('[ImagePreview] Ignored an invalid annotation result.');
-    return;
-  }
-
-  if (imagePreviewAnnotationResult === 'attach') {
-    pendingHotkeyCaptures.push(annotatedImageDataUrl);
-    // The global screenshot hotkey opens a composer without presenting the
-    // prior conversation as context. Match that visible boundary with a real
-    // session boundary so the resulting message cannot be appended to a
-    // conversation the user did not see.
-    openCoco().catch((err) =>
-      log.warn(`[ImagePreview] Could not start a fresh Coco session: ${err}`),
-    );
-    flushHotkeyCaptures();
-  } else if (
-    imagePreviewSourceWindow &&
-    !imagePreviewSourceWindow.isDestroyed()
-  ) {
-    imagePreviewSourceWindow.webContents.send('image-annotation-saved', {
-      originalImageDataUrl: imagePreviewDataUrl,
-      imageDataUrl: annotatedImageDataUrl,
-    });
-  }
-  dismissImagePreviewWindow(imagePreviewWindow);
-});
+hotkeyCapture.registerIpc(ipcMain);
 
 ipcMain.removeHandler('send-audio-message');
 ipcMain.handle(
@@ -4100,7 +3078,9 @@ ipcMain.handle(
     }
     const modelConfig = readModelConfiguration();
     const selectedTutor =
-      modelConfig?.tutors.find((item) => item.id === currentTutorModelId) ??
+      modelConfig?.tutors.find(
+        (item) => item.id === chatSessions.currentTutorModelId,
+      ) ??
       (modelConfig ? defaultTutor(modelConfig) : null);
     if (!selectedTutor?.supportsAudio) {
       return {
@@ -4128,7 +3108,7 @@ ipcMain.handle(
         {
           audio_data: audioData,
           audio_format: 'wav',
-          session_id: currentSessionId,
+          session_id: chatSessions.currentSessionId,
         },
         (streamEvent: TutorStreamEvent) => {
           if (streamEvent.type === 'text_delta') {
@@ -4351,18 +3331,7 @@ ipcMain.handle(
       return { success: false, error: 'Invalid avatar visibility setting.' };
     }
     try {
-      let profile: Record<string, unknown> = {};
-      try {
-        profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
-      } catch {
-        /* no existing profile — start fresh */
-      }
-      profile.hideAvatar = hideAvatar;
-      fs.writeFileSync(
-        profilePath(),
-        JSON.stringify(profile, null, 2),
-        'utf-8',
-      );
+      updateProfileDocument({ hideAvatar });
       applyAvatarVisibility(hideAvatar);
       return { success: true };
     } catch (err) {
@@ -4393,20 +3362,11 @@ ipcMain.handle(
     // 1. Persist into the profile (merged with existing fields). Models are
     // configured via .env (TUTOR_MODEL / OBSERVER_MODEL), not here.
     try {
-      let profile: Record<string, unknown> = {};
-      try {
-        profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
-      } catch {
-        /* no existing profile — start fresh */
-      }
-      profile.tutorScenario = scenario;
-      profile.aiTools = aiTools;
-      profile.hideAvatar = hideAvatar === true;
-      fs.writeFileSync(
-        profilePath(),
-        JSON.stringify(profile, null, 2),
-        'utf-8',
-      );
+      updateProfileDocument({
+        tutorScenario: scenario,
+        aiTools,
+        hideAvatar: hideAvatar === true,
+      });
     } catch (err) {
       log.error('[Settings] Failed to persist profile:', err);
       return { success: false, error: String(err) };
@@ -4435,13 +3395,13 @@ ipcMain.handle(
       log.warn(`[Settings] Tutor update failed: ${(err as Error).message}`);
     }
     // Update the observer/judge scenario too (sensing) if a session is running.
-    if (currentSessionId) {
-      const { customObserverPrompt } = readProfile();
+    if (chatSessions.currentSessionId) {
+      const { customObserverPrompt } = readTutorProfile();
       try {
         await axios.post(
           `${sensing}/session`,
           {
-            node_uuid: currentSessionId,
+            node_uuid: chatSessions.currentSessionId,
             struggle_detection_seconds: 120,
             scenario,
             config_source: 'settings',
@@ -4465,17 +3425,7 @@ ipcMain.handle(
 // The Electron main process owns the on-disk copy (userData/coco-memory.txt),
 // exactly like the profile/settings, so it always survives a restart. The value
 // is also pushed to the tutor server for live use (and re-applied on each new
-// session — see createProactiveTutorSession).
-const memoryPath = () => path.join(app.getPath('userData'), 'coco-memory.txt');
-
-function readLocalMemory(): string {
-  try {
-    return fs.readFileSync(memoryPath(), 'utf-8');
-  } catch {
-    return '';
-  }
-}
-
+// session — see ChatSessionController.start()).
 ipcMain.removeHandler('get-memory');
 ipcMain.handle('get-memory', async () => {
   // The local file is the source of truth and persists across restarts.
@@ -4502,7 +3452,7 @@ ipcMain.handle(
   async (_event, { memory }: { memory: string }) => {
   // 1. Persist to disk in userData (authoritative — like the profile).
   try {
-    fs.writeFileSync(memoryPath(), memory ?? '', 'utf-8');
+    saveLocalMemory(memory ?? '');
     log.info('[Memory] saved to', memoryPath());
   } catch (err) {
     log.error('[Memory] failed to persist:', err);
@@ -4731,7 +3681,7 @@ async function launchDesktopSurfaces(): Promise<void> {
   }
   desktopSurfacesLaunched = true;
   await requestRequiredMacPermissions();
-  initializeWakeWordService();
+  wakeWords.initialize();
   const canStartConfiguredModels = Boolean(
     readModelConfiguration() ||
       (process.env.TUTOR_MODEL?.trim() && process.env.OBSERVER_MODEL?.trim()),
@@ -4745,7 +3695,7 @@ async function launchDesktopSurfaces(): Promise<void> {
     startObserver();
   }
   await createWindow();
-  createWakeWordCaptureWindow();
+  wakeWords.createCaptureWindow();
   // Keep chat state alive while its panel is closed.
   createChatWindow();
 }
@@ -4880,7 +3830,7 @@ const startObserver = () => {
     configureServiceModelArguments(serviceManager, tutorModel, observerModel);
     const runtime = resolveModelRuntime();
     if (runtime) {
-      const { userName } = readProfile();
+      const { userName } = readTutorProfile();
       serviceManager.configureServiceEnv(
         'tutor-server',
         {
@@ -5162,8 +4112,8 @@ const startObserver = () => {
       // The sensing-side judge now owns the invite decision AND its timing
       // (it only emits a task_suggested event when it decides to invite, at
       // most once per its cooldown), so we no longer rate-limit here.
-      if (!isSessionActive && status === 'task_suggested' && taskLabel) {
-        pendingTaskLabel = taskLabel;
+      if (!chatSessions.isActive && status === 'task_suggested' && taskLabel) {
+        chatSessions.setPendingTaskLabel(taskLabel);
         const message = `I see you're ${taskLabel}. Want me to guide you with AI tools?`;
         const shown = showNotification({
           message,
@@ -5182,7 +4132,7 @@ const startObserver = () => {
       }
 
       // ── In-session: detect task completion ───────────────────────────
-      if (isSessionActive && status === 'task_complete') {
+      if (chatSessions.isActive && status === 'task_complete') {
         const shown = showNotification({
           message:
             'Looks like your task is done. Want to wrap up this session?',
@@ -5209,12 +4159,12 @@ app
     // Update checks are independent of authentication, onboarding, and local
     // service startup. The manager delays its first network request briefly.
     desktopAppUpdater.start();
-    await configureLocalServicePorts();
+    await configureLocalServicePorts(serviceManager);
     initializeDailyMemoryDraftService();
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
       systemSuspended = true;
-      syncWakeWordService();
+      wakeWords.sync();
       observationSleepGuard.suspend();
       latestProactiveSuggestionObservationId = undefined;
       suggestionCache.clear();
@@ -5232,7 +4182,7 @@ app
     powerMonitor.on('resume', () => {
       log.info('[Power] System resumed; suppressing observations briefly.');
       systemSuspended = false;
-      syncWakeWordService();
+      wakeWords.sync();
       observationSleepGuard.resume();
       latestProactiveSuggestionObservationId = undefined;
       suggestionCache.clear();
@@ -5291,7 +4241,7 @@ app
         return;
       }
       log.info('[ImagePreview] Screenshot hotkey triggered.');
-      void beginHotkeyCapture();
+      void hotkeyCapture.beginCapture();
     });
 
     // Cmd/Ctrl+Shift+H — toggle the observation history panel on the avatar.
@@ -5320,19 +4270,12 @@ app.on('before-quit', (event) => {
   if (isQuitting) return;
   event.preventDefault();
   isQuitting = true;
-  if (currentSessionId && !endedGatewaySessions.has(currentSessionId)) {
-    endedGatewaySessions.add(currentSessionId);
-    queueGatewayOperation('session_end', {
-      session_id: currentSessionId,
-      ended_at: new Date().toISOString(),
-      completion_reason: 'app_quit',
-    });
-  }
+  chatSessions.recordGatewayEnd('app_quit');
   log.info('App quitting: waiting up to 10s for services to stop...');
   desktopAppUpdater.stop();
   stopObservationStream();
   personalizationScheduler?.stop();
-  wakeWordService?.stop('disabled');
+  wakeWords.stop();
   const shutdownTimeoutMs = 10_000;
   const finishQuit = () => {
     if (installUpdateAfterShutdown) {
