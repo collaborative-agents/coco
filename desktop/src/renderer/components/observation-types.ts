@@ -371,8 +371,8 @@ export const STATUS_TO_LANE: Record<ObservationStatus, ActivityLane> = {
 export const LANE_LABEL: Record<ActivityLane, string> = {
   flow: 'Flow',
   watching: 'Watching',
-  focus: 'Focus moment',
-  assist: 'AI assist',
+  focus: 'AI suggest',
+  assist: 'AI suggest',
 };
 
 // Single source of truth for lane colors. Amber (not red) for focus moments —

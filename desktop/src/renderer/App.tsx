@@ -203,6 +203,16 @@ function formatMetricLatency(ms?: number): string {
   return `${Math.round(ms)}ms`;
 }
 
+function historyStatusLabel(record: ActivityRecord): string {
+  const hasProactiveSupport =
+    record.proactive_support?.suggestion != null ||
+    record.proactive_support?.available === true;
+  if (record.status === 'support_needed' && !hasProactiveSupport) {
+    return 'Potential support';
+  }
+  return STATUS_LABEL[record.status] ?? STATUS_LABEL.observing;
+}
+
 function LlmMetricChips({ record }: { record: ActivityRecord }) {
   const m = record.llm_metrics;
   if (!m) return null;
@@ -463,11 +473,8 @@ function ActivityPanel({
 
       <div className="obs-summary-counts">
         <span className="obs-count">
-          <i className="obs-dot obs-lane--focus" /> {summary.focusCount} focus
-        </span>
-        <span className="obs-count">
-          <i className="obs-dot obs-lane--assist" /> {summary.assistCount} AI
-          assist
+          <i className="obs-dot obs-lane--focus" /> {summary.suggestionCount}{' '}
+          AI suggest
         </span>
       </div>
 
@@ -479,7 +486,7 @@ function ActivityPanel({
           {dayRecords.map((e, i) => {
             const isOpen = expanded.has(i);
             const lane = laneOf(e.status, e.need_support);
-            const label = STATUS_LABEL[e.status] ?? STATUS_LABEL.observing;
+            const label = historyStatusLabel(e);
             const supportOpen = openSupport.has(i);
             const supportKey = e.observation_id ?? `${e.ts}-${i}`;
             return (

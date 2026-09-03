@@ -38,6 +38,8 @@ export interface DaySummary {
   flowPct: number;
   focusCount: number;
   assistCount: number;
+  /** Records for which Coco generated and persisted a proactive suggestion. */
+  suggestionCount: number;
   segments: TimelineSegment[];
   /** Active window bounds for laying out the timeline. */
   windowStartTs: number;
@@ -110,6 +112,9 @@ export function summarizeDay(
   const assistCount = inDay.filter(
     (r) => laneOf(r.status, r.need_support) === 'assist',
   ).length;
+  const suggestionCount = inDay.filter(
+    (r) => r.proactive_support?.suggestion != null,
+  ).length;
 
   return {
     activeSec,
@@ -117,6 +122,7 @@ export function summarizeDay(
     flowPct: activeSec > 0 ? Math.round((flowSec / activeSec) * 100) : 0,
     focusCount,
     assistCount,
+    suggestionCount,
     segments,
     windowStartTs: inDay.length ? inDay[0].ts : dayStartTs,
     windowEndTs: segments.length

@@ -22,6 +22,15 @@ describe('activity history support classification', () => {
         status: 'mistake',
         need_support: 'yes',
         observation: 'A stale focus status with an explicit support decision.',
+        proactive_support: {
+          engaged: false,
+          suggestion: {
+            kind: 'content',
+            title: 'A ready suggestion',
+            body: 'Suggested content',
+            copyText: 'Suggested content',
+          },
+        },
       },
       {
         ts: nowSec - 10,
@@ -40,6 +49,7 @@ describe('activity history support classification', () => {
     expect(summary.flowPct).toBe(50);
     expect(summary.focusCount).toBe(1);
     expect(summary.assistCount).toBe(0);
+    expect(summary.suggestionCount).toBe(1);
   });
 
   it('keeps legacy status mapping for records without need_support', () => {
