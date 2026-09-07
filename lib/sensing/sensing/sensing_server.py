@@ -950,6 +950,7 @@ async def main_async(
             action_snapshot_cooldown_seconds=0.0,
             # node_uuid and redis_url are configured later via POST /session
         )
+        ai_processor.set_monitor_snapshot_provider(screen.capture_all_monitor_snapshots)
         processors.append(ai_processor)
         # Attach the training-data recorder so every observer call and judge
         # decision is logged (observations.jsonl / decisions.jsonl / episodes.jsonl)

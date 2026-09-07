@@ -26,6 +26,7 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
@@ -40,6 +41,7 @@ from PIL import Image
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 from sensing.language import ActionNode, SequenceNode, annotate_high_level_nodes
+from sensing.screen import MonitorSnapshot
 
 logger = init_logger(__name__)
 
@@ -101,11 +103,44 @@ class Snapshot:
     timestamp: str
     action: str | None = None
     actions: tuple[str, ...] = ()
+    monitor_id: str | None = None
+    monitor_index: int | None = None
 
     def associated_actions(self) -> tuple[str, ...]:
         if self.actions:
             return self.actions
         return (self.action,) if self.action is not None else ()
+
+
+_MONITOR_FILENAME_RE = re.compile(
+    r"_monitor-(?P<monitor_id>[A-Za-z0-9_.-]+)_index-(?P<monitor_index>\d+)_"
+)
+
+
+def _monitor_metadata_from_path(image_path: str) -> tuple[str | None, int | None]:
+    """Recover display identity embedded by ``Screen._save_frame``."""
+    match = _MONITOR_FILENAME_RE.search(Path(image_path).name)
+    if match is None:
+        return None, None
+    return match.group("monitor_id"), int(match.group("monitor_index"))
+
+
+def _snapshot(
+    image_path: str,
+    timestamp: str,
+    *,
+    action: str | None = None,
+    actions: tuple[str, ...] = (),
+) -> Snapshot:
+    monitor_id, monitor_index = _monitor_metadata_from_path(image_path)
+    return Snapshot(
+        image_path=image_path,
+        timestamp=timestamp,
+        action=action,
+        actions=actions,
+        monitor_id=monitor_id,
+        monitor_index=monitor_index,
+    )
 
 
 @dataclass
@@ -602,8 +637,21 @@ class SnapshotBuffer:
         timestamp: str,
         action: str | None = None,
         actions: tuple[str, ...] = (),
+        monitor_id: str | None = None,
+        monitor_index: int | None = None,
     ) -> None:
-        self.buffer.append(Snapshot(image_path, timestamp, action, actions))
+        if monitor_id is None and monitor_index is None:
+            monitor_id, monitor_index = _monitor_metadata_from_path(image_path)
+        self.buffer.append(
+            Snapshot(
+                image_path,
+                timestamp,
+                action,
+                actions,
+                monitor_id,
+                monitor_index,
+            )
+        )
 
     def history(self, last_n: int | None = None) -> list[Snapshot]:
         return self.buffer if last_n is None else self.buffer[-last_n:]
@@ -654,7 +702,7 @@ def meaningful_action_snapshots(
             if not isinstance(time_info, dict):
                 time_info = {}
             if initial_before is None and before_path is not None:
-                initial_before = Snapshot(
+                initial_before = _snapshot(
                     image_path=before_path,
                     timestamp=str(
                         time_info.get("before") or node.get("timestamp") or "unknown"
@@ -668,7 +716,7 @@ def meaningful_action_snapshots(
             action = node.get("action")
             action_text = str(action) if action is not None else "unknown action"
             action_frames.append(
-                Snapshot(
+                _snapshot(
                     image_path=image_path,
                     timestamp=str(timestamp),
                     action=action_text,
@@ -692,7 +740,7 @@ def meaningful_action_snapshots(
         pending_actions.extend(frame.associated_actions())
         if rgb_mse(last_kept_path, frame.image_path) > mse_threshold:
             snapshots.append(
-                Snapshot(
+                _snapshot(
                     image_path=frame.image_path,
                     timestamp=frame.timestamp,
                     action="; ".join(pending_actions),
@@ -707,7 +755,7 @@ def meaningful_action_snapshots(
     if pending_actions:
         final_frame = action_frames[-1]
         snapshots.append(
-            Snapshot(
+            _snapshot(
                 image_path=final_frame.image_path,
                 timestamp=final_frame.timestamp,
                 action="; ".join(pending_actions),
@@ -981,6 +1029,11 @@ class AiTutoringProcessor(SegmentProcessor):
         self._last_observation_id: str | None = None
         # Screenshot retained briefly for the eager instant-suggestion request.
         self._last_observation_image_paths: list[str] = []
+        # Set by the sensing server. Called exactly once per observer request to
+        # obtain one current reference frame from every connected display.
+        self._monitor_snapshot_provider: (
+            Callable[[], Awaitable[list[MonitorSnapshot]]] | None
+        ) = None
         # observation_id -> user reaction ("shown" | "engage" | "dismiss" |
         # "thumbs_up" | "thumbs_down"), updated from POST /feedback. Injected
         # back into the observer prompt so it doesn't re-raise suggestions the
@@ -1295,6 +1348,12 @@ class AiTutoringProcessor(SegmentProcessor):
     # Public helpers (called by Streamer delegation methods)
     # ------------------------------------------------------------------
 
+    def set_monitor_snapshot_provider(
+        self, provider: Callable[[], Awaitable[list[MonitorSnapshot]]]
+    ) -> None:
+        """Provide current per-display reference frames for observer calls."""
+        self._monitor_snapshot_provider = provider
+
     async def generate_observation(
         self,
         type: str,
@@ -1583,8 +1642,56 @@ class AiTutoringProcessor(SegmentProcessor):
             elif type == "snapshot":
                 text += f'<user_input timestamp="{now_ts}">(User activity snapshot)</user_input>'
 
-        # Collect rolling snapshot images (these will be cleaned up after use).
+        # Capture one current reference frame per monitor exactly once at this
+        # observer-call boundary, alongside the historical event/change images.
+        monitor_snapshots: list[MonitorSnapshot] = []
+        if self._monitor_snapshot_provider is not None:
+            try:
+                monitor_snapshots = await self._monitor_snapshot_provider()
+            except Exception as exc:
+                # Historical evidence is still useful if a display disappears
+                # during this best-effort reference capture.
+                logger.warning("Could not capture current monitor references: %s", exc)
+
+        # Timer, idle, and user-prompt paths may already have saved the exact
+        # same buffered frame as an unlabeled single-screen snapshot. Keep the
+        # richer all-monitor reference and avoid sending that duplicate image.
+        self._drop_duplicate_current_snapshots(monitor_snapshots)
         text_prompt, snapshot_image_paths = self._collect_images(text)
+
+        monitor_image_paths = [item.image_path for item in monitor_snapshots]
+        if monitor_snapshots:
+            reference_lines = []
+            for position, item in enumerate(monitor_snapshots, start=1):
+                flags = []
+                if item.is_primary:
+                    flags.append("primary")
+                if item.cursor_here:
+                    flags.append("cursor here")
+                if item.last_interaction_here:
+                    flags.append("last interaction here")
+                flag_text = ", ".join(flags) if flags else "none"
+                reference_lines.append(
+                    "  "
+                    f"[current{position}] Current reference {position} of "
+                    f"{len(monitor_snapshots)} | timestamp={escape(item.timestamp)} "
+                    f"| monitor_id={escape(item.monitor_id)} "
+                    f"| monitor_index={item.monitor_index} "
+                    f"| bounds=({item.left},{item.top},{item.width},{item.height}) "
+                    f"| topology_generation={item.topology_generation} "
+                    f"| capture_group_id={escape(item.capture_group_id)} "
+                    f"| flags={flag_text}"
+                )
+            text_prompt += (
+                '\n<screenshots type="current_monitor_references">\n'
+                "These are the latest available frames from every connected "
+                "display. They represent one capture group and appear after "
+                "the historical screenshots above. Use them together to infer "
+                "the user's current cross-monitor context; cursor and last-"
+                "interaction flags are clues, not proof of visual attention.\n"
+                + "\n".join(reference_lines)
+                + "\n</screenshots>\n"
+            )
 
         # Append user-flagged hot-key screenshot(s) after the rolling snapshots.
         # We keep these paths separate so we do NOT delete them — they must
@@ -1606,15 +1713,21 @@ class AiTutoringProcessor(SegmentProcessor):
                 f"</screenshots>"
             )
 
-        all_image_paths = snapshot_image_paths + hk_paths
+        all_image_paths = snapshot_image_paths + monitor_image_paths + hk_paths
 
         observation_id = uuid.uuid4().hex
-        obs, metrics = _observe(
-            text_prompt,
-            all_image_paths,
-            system_prompt=self._observer_prompt,
-            model=self._observer_model,
-        )
+        try:
+            obs, metrics = _observe(
+                text_prompt,
+                all_image_paths,
+                system_prompt=self._observer_prompt,
+                model=self._observer_model,
+            )
+        except Exception:
+            self._cleanup_consumed_screenshots(
+                snapshot_image_paths + monitor_image_paths
+            )
+            raise
         print(f"[HANDLE OBSERVATION] type: {type}, obs: {obs}")
         self._last_observation_id = observation_id
         observation_ts = time.time()
@@ -1666,16 +1779,19 @@ class AiTutoringProcessor(SegmentProcessor):
         # screenshots can be removed immediately; hot-key screenshots already
         # have session-managed lifetimes.
         suggestion_image_paths = (
-            snapshot_image_paths[-1:] if snapshot_image_paths else hk_paths[-1:]
+            monitor_image_paths
+            if monitor_image_paths
+            else snapshot_image_paths[-1:] or hk_paths[-1:]
         )
         self._last_observation_image_paths = suggestion_image_paths
-        deferred_cleanup = set(suggestion_image_paths) & set(snapshot_image_paths)
+        rolling_image_paths = snapshot_image_paths + monitor_image_paths
+        deferred_cleanup = set(suggestion_image_paths) & set(rolling_image_paths)
 
         # Delete only the rolling snapshot files — the observer has already
         # base64-encoded them and they are no longer needed.
         # Hot-key screenshots are intentionally excluded from cleanup.
         self._cleanup_consumed_screenshots(
-            [path for path in snapshot_image_paths if path not in deferred_cleanup]
+            [path for path in rolling_image_paths if path not in deferred_cleanup]
         )
         if deferred_cleanup:
             asyncio.get_running_loop().call_later(
@@ -2009,6 +2125,28 @@ class AiTutoringProcessor(SegmentProcessor):
             f"<conversation_history>\n{conv_block}\n</conversation_history>\n\n"
         )
 
+    def _drop_duplicate_current_snapshots(
+        self, monitor_snapshots: list[MonitorSnapshot]
+    ) -> None:
+        """Remove unlabeled rolling frames duplicated by current references."""
+        if not monitor_snapshots or not self.snapshot_buffer.buffer:
+            return
+        current_keys = {
+            (snapshot.monitor_id, snapshot.timestamp) for snapshot in monitor_snapshots
+        }
+        kept: list[Snapshot] = []
+        duplicates: list[str] = []
+        for snapshot in self.snapshot_buffer.buffer:
+            key = (snapshot.monitor_id, snapshot.timestamp)
+            if not snapshot.associated_actions() and key in current_keys:
+                duplicates.append(snapshot.image_path)
+            else:
+                kept.append(snapshot)
+        if duplicates:
+            self.snapshot_buffer.buffer = kept
+            self._image_num = max(0, self._image_num - len(duplicates))
+            self._cleanup_consumed_screenshots(duplicates)
+
     def _collect_images(self, text_prompt: str) -> tuple[str, list[str]]:
         if self.snapshot_buffer.obs_history:
             sanitized_history = [
@@ -2046,6 +2184,16 @@ class AiTutoringProcessor(SegmentProcessor):
             )
         if snaps:
 
+            def monitor_suffix(snapshot: Snapshot) -> str:
+                if snapshot.monitor_id is None:
+                    return ""
+                index = (
+                    f", index {snapshot.monitor_index}"
+                    if snapshot.monitor_index is not None
+                    else ""
+                )
+                return f" | Monitor: {escape(snapshot.monitor_id, quote=False)}{index}"
+
             def action_suffix(snapshot: Snapshot) -> str:
                 actions = snapshot.associated_actions()
                 if len(actions) == 1:
@@ -2059,6 +2207,7 @@ class AiTutoringProcessor(SegmentProcessor):
 
             snap_lines = "\n".join(
                 f"  [{escape(s.timestamp)}] Screenshot {i + 1} of {len(snaps)}"
+                + monitor_suffix(s)
                 + action_suffix(s)
                 for i, s in enumerate(snaps)
             )

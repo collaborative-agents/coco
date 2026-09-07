@@ -6,11 +6,13 @@ import asyncio
 import gc
 import logging
 import os
+import re
 import sys
 import time
 from collections import deque
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import mss
@@ -33,6 +35,25 @@ class Update(BaseModel):
     content_type: Literal["input_text", "input_image"] = Field(
         ..., description="The type of the update"
     )
+
+
+@dataclass(frozen=True)
+class MonitorSnapshot:
+    """A saved frame plus the display topology that gives it meaning."""
+
+    image_path: str
+    timestamp: str
+    monitor_id: str
+    monitor_index: int
+    left: int
+    top: int
+    width: int
+    height: int
+    is_primary: bool
+    cursor_here: bool
+    last_interaction_here: bool
+    topology_generation: int
+    capture_group_id: str
 
 
 ###############################################################################
@@ -196,6 +217,7 @@ class Screen(Observer):
     _PERIODIC_SEC: int = 30
     _DEBOUNCE_SEC: float = 2.0
     _MON_START: int = 1  # first real display in mss
+    _MONITOR_REFRESH_SEC: float = 2.0
     _MEMORY_CLEANUP_INTERVAL: int = 30  # Force GC every 30 frames instead of 50
     _MAX_WORKERS: int = 4  # Limit thread pool size to prevent exhaustion
 
@@ -254,6 +276,7 @@ class Screen(Observer):
 
         # state shared with worker
         self._frames: dict[int, Any] = {}
+        self._frame_timestamps: dict[int, str] = {}
         self._frame_lock = asyncio.Lock()
 
         self._history: deque[str] = deque(maxlen=max(0, history_k))
@@ -291,6 +314,7 @@ class Screen(Observer):
         # Monitor list populated once the _worker starts mss — used by
         # capture_for_hotkey() to determine which monitor is under the cursor.
         self._mons: list[dict] = []
+        self._topology_generation: int = 0
 
         # call parent
         super().__init__()
@@ -365,6 +389,120 @@ class Screen(Observer):
             ):
                 return idx
         return None
+
+    @staticmethod
+    def _monitor_topology(monitors: list[dict]) -> tuple[tuple[Any, ...], ...]:
+        """Return the capture-relevant identity and geometry of each display."""
+        return tuple(
+            (
+                monitor.get("left"),
+                monitor.get("top"),
+                monitor.get("width"),
+                monitor.get("height"),
+                monitor.get("display_id"),
+                monitor.get("unique_id"),
+                monitor.get("output"),
+                monitor.get("is_primary"),
+            )
+            for monitor in monitors
+        )
+
+    @staticmethod
+    def _enumerate_monitors() -> list[dict]:
+        """Read a fresh display list, bypassing MSS's per-instance cache."""
+        with mss.mss() as probe:
+            monitors = [dict(monitor) for monitor in probe.monitors[1:]]
+
+        # MSS exposes geometry but no durable identity on macOS. Match the
+        # geometry to CoreGraphics so a display keeps its ID after displays are
+        # rearranged and positional MSS indices change.
+        if _IS_MACOS:
+            try:
+                err, display_ids, count = Quartz.CGGetActiveDisplayList(  # type: ignore
+                    16, None, None
+                )
+                if err == Quartz.kCGErrorSuccess:  # type: ignore
+                    native_displays: dict[
+                        tuple[int, int, int, int], tuple[int, bool]
+                    ] = {}
+                    for display_id in display_ids[:count]:
+                        bounds = Quartz.CGDisplayBounds(display_id)  # type: ignore
+                        geometry = (
+                            round(bounds.origin.x),
+                            round(bounds.origin.y),
+                            round(bounds.size.width),
+                            round(bounds.size.height),
+                        )
+                        native_displays[geometry] = (
+                            int(display_id),
+                            bool(Quartz.CGDisplayIsMain(display_id)),  # type: ignore
+                        )
+                    for monitor in monitors:
+                        geometry = (
+                            int(monitor["left"]),
+                            int(monitor["top"]),
+                            int(monitor["width"]),
+                            int(monitor["height"]),
+                        )
+                        native = native_displays.get(geometry)
+                        if native is not None:
+                            monitor["display_id"], monitor["is_primary"] = native
+            except Exception as exc:
+                logging.getLogger("Screen").debug(
+                    "Could not attach CoreGraphics display IDs: %s", exc
+                )
+
+        for index, monitor in enumerate(monitors, start=1):
+            monitor.setdefault("is_primary", index == 1)
+        return monitors
+
+    @staticmethod
+    def _monitor_id(monitor: dict, monitor_index: int) -> str:
+        """Return a prompt- and filename-safe identity for a display."""
+        for key in ("display_id", "unique_id", "output"):
+            value = monitor.get(key)
+            if value not in (None, ""):
+                token = re.sub(r"[^A-Za-z0-9.-]+", "-", str(value)).strip("-")
+                if token:
+                    return f"{key}-{token}"
+        # Geometry is a deterministic fallback on platforms where the capture
+        # backend does not expose a hardware display ID.
+        geometry = "-".join(
+            str(int(monitor.get(key, 0))).replace("-", "m")
+            for key in ("left", "top", "width", "height")
+        )
+        return f"geometry-{geometry}-index-{monitor_index}"
+
+    async def _refresh_monitor_topology(
+        self, monitors: list[dict]
+    ) -> tuple[list[dict], bool]:
+        """Refresh displays and discard state tied to obsolete monitor indices."""
+        refreshed = await self._run_in_thread(self._enumerate_monitors)
+        if self._monitor_topology(refreshed) == self._monitor_topology(monitors):
+            return monitors, False
+
+        log = logging.getLogger("Screen")
+        log.info(
+            "Display topology changed: %s -> %s",
+            self._monitor_topology(monitors),
+            self._monitor_topology(refreshed),
+        )
+
+        # Monitor indices are positional. Once displays are added, removed, or
+        # rearranged, cached frames and pending events can point at the wrong
+        # physical display, so reset them before publishing the new topology.
+        if self._debounce_handle:
+            self._debounce_handle.cancel()
+            self._debounce_handle = None
+        self._pending_event = None
+        self._last_active_click_monitor_idx = None
+        async with self._frame_lock:
+            self._frames.clear()
+            getattr(self, "_frame_timestamps", {}).clear()
+
+        self._mons = refreshed
+        self._topology_generation = getattr(self, "_topology_generation", 0) + 1
+        return refreshed, True
 
     async def _run_in_thread(self, func, *args, **kwargs):
         """Run a function in the custom thread pool."""
@@ -461,12 +599,22 @@ class Screen(Observer):
         tag: str,
         target_dir: str | None = None,
         lossless: bool = False,
+        *,
+        timestamp: str | None = None,
+        monitor: dict | None = None,
+        monitor_index: int | None = None,
     ) -> tuple[str, str]:
         # print(f"[SAVE FRAME] saving frame for tag: {tag}")
-        ts = f"{time.time():.5f}"
+        ts = timestamp or f"{time.time():.5f}"
         save_dir = target_dir if target_dir is not None else self.screens_dir
         extension = "png" if lossless else "jpg"
-        path = os.path.join(save_dir, f"{ts}_{tag}.{extension}")
+        monitor_tag = ""
+        if monitor is not None and monitor_index is not None:
+            monitor_tag = (
+                f"monitor-{self._monitor_id(monitor, monitor_index)}_"
+                f"index-{monitor_index}_"
+            )
+        path = os.path.join(save_dir, f"{ts}_{monitor_tag}{tag}.{extension}")
         image = Image.frombytes("RGB", (frame.width, frame.height), frame.rgb)
 
         if lossless:
@@ -486,6 +634,87 @@ class Screen(Observer):
         del image
         # print(f"[SAVE FRAME] saved frame to path: {path}")
         return path, ts
+
+    async def capture_all_monitor_snapshots(self) -> list[MonitorSnapshot]:
+        """Save the latest buffered frame for every connected display.
+
+        These reference frames are captured once at an observer-call boundary.
+        Event screenshots remain a separate, historical timeline, avoiding the
+        cost of saving every monitor for every input event.
+        """
+        try:
+            cursor_x, cursor_y = mouse.Controller().position
+        except Exception:
+            cursor_x = cursor_y = float("nan")
+
+        capture_group_id = str(time.time_ns())
+        pending: list[tuple[int, dict, Any, str | None, bool, bool, int]] = []
+        async with self._frame_lock:
+            monitors = list(self._mons)
+            cursor_index = self._mon_for(cursor_x, cursor_y, monitors)
+            active_index = self._last_active_click_monitor_idx
+            topology_generation = getattr(self, "_topology_generation", 0)
+            frame_timestamps = getattr(self, "_frame_timestamps", {})
+
+            for monitor_index, monitor in enumerate(monitors, start=1):
+                frame = self._frames.get(monitor_index)
+                if frame is None:
+                    continue
+                pending.append(
+                    (
+                        monitor_index,
+                        monitor,
+                        frame,
+                        frame_timestamps.get(monitor_index),
+                        monitor_index == cursor_index,
+                        monitor_index == active_index,
+                        topology_generation,
+                    )
+                )
+
+        snapshots: list[MonitorSnapshot] = []
+        for (
+            monitor_index,
+            monitor,
+            frame,
+            timestamp,
+            cursor_here,
+            last_interaction_here,
+            topology_generation,
+        ) in pending:
+            try:
+                path, saved_timestamp = await self._save_frame(
+                    frame,
+                    "current_reference",
+                    timestamp=timestamp,
+                    monitor=monitor,
+                    monitor_index=monitor_index,
+                )
+            except Exception as exc:
+                logging.getLogger("Screen").warning(
+                    "Could not save current reference for monitor %s: %s",
+                    monitor_index,
+                    exc,
+                )
+                continue
+            snapshots.append(
+                MonitorSnapshot(
+                    image_path=path,
+                    timestamp=saved_timestamp,
+                    monitor_id=self._monitor_id(monitor, monitor_index),
+                    monitor_index=monitor_index,
+                    left=int(monitor["left"]),
+                    top=int(monitor["top"]),
+                    width=int(monitor["width"]),
+                    height=int(monitor["height"]),
+                    is_primary=bool(monitor.get("is_primary", monitor_index == 1)),
+                    cursor_here=cursor_here,
+                    last_interaction_here=last_interaction_here,
+                    topology_generation=topology_generation,
+                    capture_group_id=capture_group_id,
+                )
+            )
+        return snapshots
 
     async def _process_and_emit(
         self,
@@ -516,6 +745,7 @@ class Screen(Observer):
                 if frame is not None:
                     del frame
             self._frames.clear()
+            getattr(self, "_frame_timestamps", {}).clear()
 
         # Force garbage collection
         await self._run_in_thread(gc.collect)
@@ -570,7 +800,20 @@ class Screen(Observer):
                 )
                 return "", ""
 
-            path, ts = await self._save_frame(bf, "inspect")
+            monitor_position = idx - self._MON_START if idx is not None else -1
+            monitor = (
+                self._mons[monitor_position]
+                if 0 <= monitor_position < len(self._mons)
+                else None
+            )
+            frame_timestamp = getattr(self, "_frame_timestamps", {}).get(idx)
+            path, ts = await self._save_frame(
+                bf,
+                "inspect",
+                timestamp=frame_timestamp,
+                monitor=monitor,
+                monitor_index=idx,
+            )
             print(f"[INSPECT] saved current frame to: {path} at {ts}")
             return path, ts
 
@@ -586,12 +829,27 @@ class Screen(Observer):
         self._note_user_activity()
         # Get cursor position synchronously — mouse.Controller().position is fast.
         x, y = mouse.Controller().position
+        monitors = getattr(self, "_mons", [])
+        cursor_monitor_index = self._mon_for(x, y, monitors)
+        cursor_monitor = (
+            monitors[cursor_monitor_index - self._MON_START]
+            if cursor_monitor_index is not None
+            else None
+        )
 
         # Retina-aware, fresh capture. Unlike the rolling mss buffer, Quartz
         # returns the physical backing pixels instead of macOS logical points.
         if _IS_MACOS:
             ts = f"{time.time():.5f}"
-            native_path = os.path.join(self._hotkey_dir, f"{ts}_hotkey.png")
+            monitor_tag = ""
+            if cursor_monitor is not None and cursor_monitor_index is not None:
+                monitor_tag = (
+                    f"monitor-{self._monitor_id(cursor_monitor, cursor_monitor_index)}_"
+                    f"index-{cursor_monitor_index}_"
+                )
+            native_path = os.path.join(
+                self._hotkey_dir, f"{ts}_{monitor_tag}hotkey.png"
+            )
             if await self._run_in_thread(
                 _save_native_display_at_point, x, y, native_path
             ):
@@ -606,7 +864,7 @@ class Screen(Observer):
 
         async with self._frame_lock:
             if self._mons:
-                idx = self._mon_for(x, y, self._mons)
+                idx = cursor_monitor_index
             elif self._last_active_click_monitor_idx is not None:
                 idx = self._last_active_click_monitor_idx
             else:
@@ -621,6 +879,9 @@ class Screen(Observer):
                 "hotkey",
                 target_dir=self._hotkey_dir,
                 lossless=True,
+                timestamp=getattr(self, "_frame_timestamps", {}).get(idx),
+                monitor=cursor_monitor,
+                monitor_index=idx,
             )
 
         print(f"[HOTKEY CAPTURE] saved to: {path} at {ts}")
@@ -655,7 +916,7 @@ class Screen(Observer):
         # All calls to mss / Quartz are wrapped in `to_thread`
         # ------------------------------------------------------------------
         with mss.mss() as sct:
-            mons = sct.monitors[self._MON_START :]
+            mons = await self._run_in_thread(self._enumerate_monitors)
             # Expose monitor list so capture_for_hotkey() can resolve cursor position.
             self._mons = mons
 
@@ -701,11 +962,9 @@ class Screen(Observer):
             # ----------------------------------------------------------------
 
             mouse_listener = mouse.Listener(
-                on_click=lambda x, y, btn, prs: schedule_event(
-                    x, y, f"click_{btn.name}"
-                )
-                if prs
-                else None,
+                on_click=lambda x, y, btn, prs: (
+                    schedule_event(x, y, f"click_{btn.name}") if prs else None
+                ),
                 on_scroll=lambda x, y, dx, dy: schedule_scroll_event(x, y, dx, dy),
             )
             key_listener = keyboard.Listener(
@@ -728,13 +987,20 @@ class Screen(Observer):
                 )
                 try:
                     aft = await self._run_in_thread(sct.grab, mons[ev["mon"] - 1])
+                    after_timestamp = f"{time.time():.5f}"
                 except Exception as e:
                     # print(f"[FLUSH] [{ev['eid']}] failed to capture after frame: {e}")
                     if self.debug:
                         logging.getLogger("Screen").error(
                             f"Failed to capture after frame: {e}"
                         )
-                    self._pending_event = None
+                    if self._pending_event is ev:
+                        self._pending_event = None
+                    return
+
+                # A display refresh (or a newer input event) may have invalidated
+                # this event while the screen grab was running.
+                if self._pending_event is not ev:
                     return
 
                 if "scroll" in ev["type"]:
@@ -743,15 +1009,28 @@ class Screen(Observer):
                 else:
                     step = f"{ev['type']}({ev['position'][0]:.1f}, {ev['position'][1]:.1f})"
 
-                bef_path, _ = await self._save_frame(ev["before"], f"{step}_before")
-                aft_path, _ = await self._save_frame(aft, f"{step}_after")
+                bef_path, _ = await self._save_frame(
+                    ev["before"],
+                    f"{step}_before",
+                    timestamp=ev.get("before_timestamp"),
+                    monitor=ev["monitor"],
+                    monitor_index=ev["mon"],
+                )
+                aft_path, _ = await self._save_frame(
+                    aft,
+                    f"{step}_after",
+                    timestamp=after_timestamp,
+                    monitor=ev["monitor"],
+                    monitor_index=ev["mon"],
+                )
                 await self._process_and_emit(bef_path, aft_path, ev["type"], ev)
 
                 log.info(f"{ev['type']} captured on monitor {ev['mon']}")
                 print(
                     # f"[FLUSH] [{ev['eid']}] completed event: {ev['type']} at {ev['position']} on monitor {ev['mon']}"
                 )
-                self._pending_event = None
+                if self._pending_event is ev:
+                    self._pending_event = None
 
             def debounce_flush():
                 # callback from loop.call_later → must create task
@@ -777,6 +1056,15 @@ class Screen(Observer):
                 async with self._key_activity_lock:
                     current_time = time.time()
 
+                    # A display topology refresh intentionally clears the frame
+                    # cache. Ignore input during that brief transition and wait
+                    # for the capture loop to populate a frame for the display.
+                    async with self._frame_lock:
+                        frame = self._frames.get(idx)
+                        frame_timestamp = self._frame_timestamps.get(idx)
+                    if frame is None:
+                        return
+
                     # Check if this is the start of a new keyboard session
                     if (
                         self._key_activity_start is None
@@ -787,7 +1075,11 @@ class Screen(Observer):
                         self._key_activity_start = current_time
                         self._key_screenshots = []
                         screenshot_path, _ = await self._save_frame(
-                            self._frames[idx], f"{step}_first"
+                            frame,
+                            f"{step}_first",
+                            timestamp=frame_timestamp,
+                            monitor=mons[idx - self._MON_START],
+                            monitor_index=idx,
                         )
                         self._key_screenshots.append(screenshot_path)
                         log.info(
@@ -796,7 +1088,11 @@ class Screen(Observer):
                     else:
                         # Continue existing session - save intermediate screenshot
                         screenshot_path, _ = await self._save_frame(
-                            self._frames[idx], f"{step}_intermediate"
+                            frame,
+                            f"{step}_intermediate",
+                            timestamp=frame_timestamp,
+                            monitor=mons[idx - self._MON_START],
+                            monitor_index=idx,
                         )
                         self._key_screenshots.append(screenshot_path)
                         log.info(
@@ -843,14 +1139,18 @@ class Screen(Observer):
                     return
 
                 async with self._frame_lock:
-                    bf = self._frames[idx]
+                    bf = self._frames.get(idx)
                     if bf is None:
                         return
                     self._pending_event = {
                         "type": "scroll",
                         "position": (x, y),
                         "mon": idx,
+                        "monitor": dict(mon),
                         "before": bf,
+                        "before_timestamp": getattr(self, "_frame_timestamps", {}).get(
+                            idx
+                        ),
                         "scroll": (dx, dy),
                         "eid": eid,
                     }
@@ -886,14 +1186,18 @@ class Screen(Observer):
                     return
 
                 async with self._frame_lock:
-                    bf = self._frames[idx]
+                    bf = self._frames.get(idx)
                     if bf is None:
                         return
                     self._pending_event = {
                         "type": typ,
                         "position": (x, y),
                         "mon": idx,
+                        "monitor": dict(mon),
                         "before": bf,
+                        "before_timestamp": getattr(self, "_frame_timestamps", {}).get(
+                            idx
+                        ),
                         "eid": eid,
                     }
 
@@ -912,6 +1216,7 @@ class Screen(Observer):
             log.info(f"Screen observer started — guarding {self._guard or '∅'}")
             frame_count = 0
             was_sensing_paused = False
+            last_monitor_refresh = time.monotonic()
 
             while self._running:  # flag from base class
                 t0 = time.time()
@@ -929,12 +1234,22 @@ class Screen(Observer):
                             self._debounce_handle = None
                         async with self._frame_lock:
                             self._frames.clear()
+                            self._frame_timestamps.clear()
                     was_sensing_paused = True
                     await asyncio.sleep(1.0)
                     continue
                 if was_sensing_paused:
                     log.info("Screen observer resumed after user activity")
                 was_sensing_paused = False
+
+                if time.monotonic() - last_monitor_refresh >= self._MONITOR_REFRESH_SEC:
+                    try:
+                        mons, _ = await self._refresh_monitor_topology(mons)
+                    except Exception as exc:
+                        # A topology probe can race with the OS while a display
+                        # is connecting. Keep the last known-good list and retry.
+                        log.warning("Could not refresh display topology: %s", exc)
+                    last_monitor_refresh = time.monotonic()
 
                 # refresh 'before' buffers
                 for idx, m in enumerate(mons, 1):
@@ -954,6 +1269,7 @@ class Screen(Observer):
 
                     async with self._frame_lock:
                         self._frames[idx] = frame
+                        self._frame_timestamps[idx] = f"{time.time():.5f}"
 
                     # Explicitly delete old frame to free memory
                     if old_frame is not None:

@@ -13,7 +13,11 @@ The problem the student is attempting to solve.
 </problem_statement>
 
 <screenshots>
-Captured images of the student's whiteboard. Each image corresponds to a timestamp listed in the text. Action-triggered sequences begin with a before frame and end with an after frame; visually redundant intermediate frames may be removed. Every keyboard, click, or scroll action belonging to a removed frame is carried forward and listed on the next retained screenshot entry. A screenshot can therefore list multiple actions. Treat those actions as ordered direct evidence of what the student did before reaching the associated whiteboard state. Images are provided in chronological order after the text; the last image reflects the most recent whiteboard state.
+Historical images associated with the student's actions or meaningful screen changes. Each image corresponds to a timestamp and, when available, a monitor ID listed in the text. Action-triggered sequences begin with a before frame and end with an after frame; visually redundant intermediate frames may be removed. Every keyboard, click, or scroll action belonging to a removed frame is carried forward and listed on the next retained screenshot entry. A screenshot can therefore list multiple actions. Treat those actions as ordered direct evidence of what the student did before reaching the associated state. Compare chronology within each monitor; do not assume images from different monitors are successive states of one screen.
+</screenshots>
+
+<screenshots type="current_monitor_references">
+One latest reference image from every connected display, captured as a single observation group. Each image is labeled with its timestamp, stable monitor ID, current positional index, bounds, topology generation, capture-group ID, and whether the cursor or last interaction is on that display. These images jointly represent the student's current multi-monitor workspace. Do not privilege the last image merely because it appears last. Cursor and last-interaction labels are useful context but are not proof of where the student is looking.
 </screenshots>
 
 <conversation_history>
@@ -44,11 +48,12 @@ If you are given multiple screenshots with timestamps, treat them as a continuou
 - How the content changed over time
 - Which steps were added, corrected, revised, or erased
 - Whether the student is making forward progress
+- Which monitor each historical action occurred on, and how the current monitor references relate to one another
 
 Skip this step if only one screenshot (or none) is provided.
 
 2. Describe the current whiteboard content
-Summarize what is visible in the most recent snapshot. Reference earlier snapshots to clarify how the state evolved, if available.
+Summarize the relevant content visible across the current monitor-reference group. Do not treat the final image as the only current screen. Reference earlier historical screenshots to clarify how each monitor's state evolved, if available.
 
 Skip this step if only one screenshot (or none) is provided.
 

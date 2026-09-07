@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sensing import segment_processor, sensing_server
+from sensing.screen import MonitorSnapshot
 from sensing.segment_processor import AiTutoringProcessor
 
 
@@ -72,6 +73,100 @@ async def test_ai_processor_persists_generated_observation(monkeypatch):
     assert persisted.observation_type == "snapshot"
     assert persisted.session_id == "session-1"
     assert persisted.scenario == "everyday_support"
+
+
+@pytest.mark.asyncio
+async def test_observation_includes_current_reference_from_every_monitor(
+    monkeypatch, tmp_path
+):
+    historical = (
+        tmp_path
+        / "99.00000_monitor-display_id-111_index-1_click_left(1.0, 2.0)_after.jpg"
+    )
+    duplicate_current = (
+        tmp_path / "100.10000_monitor-display_id-111_index-1_inspect.jpg"
+    )
+    monitor_one = tmp_path / "100.10000_monitor-display_id-111_index-1_current.jpg"
+    monitor_two = tmp_path / "100.20000_monitor-display_id-222_index-2_current.jpg"
+    for path in (historical, duplicate_current, monitor_one, monitor_two):
+        path.write_bytes(b"image")
+
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="",
+        observer_model="provider/observer",
+        snapshot_max_age_seconds=10**12,
+    )
+    processor._build_context_prompt = AsyncMock(return_value="context")
+    processor._add_snapshot(
+        str(historical),
+        "99.00000",
+        action="click_left(1.0, 2.0)",
+    )
+    processor._add_snapshot(str(duplicate_current), "100.10000")
+    provider = AsyncMock(
+        return_value=[
+            MonitorSnapshot(
+                image_path=str(monitor_one),
+                timestamp="100.10000",
+                monitor_id="display_id-111",
+                monitor_index=1,
+                left=0,
+                top=0,
+                width=1728,
+                height=1117,
+                is_primary=True,
+                cursor_here=False,
+                last_interaction_here=True,
+                topology_generation=4,
+                capture_group_id="group-1",
+            ),
+            MonitorSnapshot(
+                image_path=str(monitor_two),
+                timestamp="100.20000",
+                monitor_id="display_id-222",
+                monitor_index=2,
+                left=1728,
+                top=0,
+                width=2560,
+                height=1440,
+                is_primary=False,
+                cursor_here=True,
+                last_interaction_here=False,
+                topology_generation=4,
+                capture_group_id="group-1",
+            ),
+        ]
+    )
+    processor.set_monitor_snapshot_provider(provider)
+    captured = {}
+
+    def fake_observe(text_prompt, image_paths, **_kwargs):
+        captured.update(prompt=text_prompt, image_paths=image_paths)
+        return '{"need_support":"no"}', {}
+
+    monkeypatch.setattr(segment_processor, "_observe", fake_observe)
+
+    await processor._handle_observation(type="snapshot")
+
+    provider.assert_awaited_once_with()
+    assert captured["image_paths"] == [
+        str(historical),
+        str(monitor_one),
+        str(monitor_two),
+    ]
+    assert not duplicate_current.exists()
+    assert "Monitor: display_id-111, index 1" in captured["prompt"]
+    assert 'type="current_monitor_references"' in captured["prompt"]
+    assert "timestamp=100.10000 | monitor_id=display_id-111" in captured["prompt"]
+    assert "flags=primary, last interaction here" in captured["prompt"]
+    assert "timestamp=100.20000 | monitor_id=display_id-222" in captured["prompt"]
+    assert "flags=cursor here" in captured["prompt"]
+    assert processor._last_observation_image_paths == [
+        str(monitor_one),
+        str(monitor_two),
+    ]
 
 
 @pytest.mark.asyncio

@@ -20,7 +20,13 @@ def test_inspect_uses_active_monitor():
     result = asyncio.run(screen._inspect())
 
     assert result == ("/tmp/inspect.jpg", "timestamp")
-    screen._save_frame.assert_awaited_once_with("active", "inspect")
+    screen._save_frame.assert_awaited_once_with(
+        "active",
+        "inspect",
+        timestamp=None,
+        monitor=None,
+        monitor_index=2,
+    )
 
 
 def test_inspect_falls_back_to_cursor_monitor(monkeypatch):
@@ -40,7 +46,13 @@ def test_inspect_falls_back_to_cursor_monitor(monkeypatch):
     result = asyncio.run(screen._inspect())
 
     assert result == ("/tmp/inspect.jpg", "timestamp")
-    screen._save_frame.assert_awaited_once_with("under-cursor", "inspect")
+    screen._save_frame.assert_awaited_once_with(
+        "under-cursor",
+        "inspect",
+        timestamp=None,
+        monitor={"left": 100, "top": 0, "width": 100, "height": 100},
+        monitor_index=2,
+    )
 
 
 def test_inspect_returns_empty_before_first_frame():

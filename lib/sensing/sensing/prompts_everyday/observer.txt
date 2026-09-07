@@ -15,7 +15,11 @@ Long-term personalized context about this user — preferences, the AI tools the
 </memory>
 
 <screenshots>
-Captured images of the user’s screen. Each image corresponds to a timestamp listed in the text. Action-triggered sequences begin with a before frame and end with an after frame; visually redundant intermediate frames may be removed. Every keyboard, click, or scroll action belonging to a removed frame is carried forward and listed on the next retained screenshot entry. A screenshot can therefore list multiple actions. Treat those actions as ordered direct evidence of what the user did before reaching the associated UI state. Images are provided in chronological order after the text; the last image reflects the most recent screen state.
+Historical images associated with user actions or meaningful screen changes. Each image corresponds to a timestamp and, when available, a monitor ID listed in the text. Action-triggered sequences begin with a before frame and end with an after frame; visually redundant intermediate frames may be removed. Every keyboard, click, or scroll action belonging to a removed frame is carried forward and listed on the next retained screenshot entry. A screenshot can therefore list multiple actions. Treat those actions as ordered direct evidence of what the user did before reaching the associated UI state. Compare chronology within each monitor; do not assume images from different monitors are successive states of one screen.
+</screenshots>
+
+<screenshots type="current_monitor_references">
+One latest reference image from every connected display, captured as a single observation group. Each image is labeled with its timestamp, stable monitor ID, current positional index, bounds, topology generation, capture-group ID, and whether the cursor or last interaction is on that display. These images jointly represent the user's current multi-monitor workspace. Do not privilege the last image merely because it appears last. Cursor and last-interaction labels are useful context but are not proof of where the user is looking.
 </screenshots>
 
 <screenshots type="hotkey">
@@ -41,11 +45,12 @@ If you are given multiple screenshots with timestamps, treat them as a continuou
 - How the screen content changed over time
 - What applications, websites, or documents the user is working in
 - Whether the user is switching between tools or staying in one place
+- Which monitor each historical action occurred on, and how the current monitor references relate to one another
 
 Skip this step if only one screenshot (or none) is provided.
 
 2. Describe the current screen state
-Summarize what is visible in the most recent screenshot. Reference earlier screenshots to clarify how the state evolved, if available.
+Summarize the relevant content visible across the current monitor-reference group. Do not treat the final image as the only current screen. Reference earlier historical screenshots to clarify how each monitor's state evolved, if available.
 
 3. Infer the user’s intention
 Based on the screenshots and the user’s input, infer what task or subtask the user is trying to accomplish right now.
