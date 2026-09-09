@@ -53,8 +53,10 @@ import {
 } from './services/personalization-scheduler';
 import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { DailyMemoryDraftService } from './services/daily-memory-drafts';
+import { PersonalizationCenterService } from './services/personalization-center';
 import { HiddenAvatarVisibility } from './services/hidden-avatar-visibility';
 import configureFullscreenCompanionWindow from './services/fullscreen-companion-window';
+import resizeBoundsKeepingRightEdge from './services/chat-window-bounds';
 import { CocoGatewayClient } from './services/gateway-client';
 import GatewayOutbox from './services/gateway-outbox';
 import KnowledgeAnswerService, {
@@ -327,6 +329,7 @@ let eveningPersonalizationScheduler: EveningPersonalizationScheduler | null =
   null;
 let wakeAfterEveningPersonalization = false;
 let dailyMemoryDraftService: DailyMemoryDraftService | null = null;
+let personalizationCenterService: PersonalizationCenterService | null = null;
 let previewCocoSleepMode = false;
 
 const isDailyMemoryPreviewOnly = () =>
@@ -338,14 +341,22 @@ const isCocoSleeping = () =>
 
 const initializeDailyMemoryDraftService = () => {
   if (dailyMemoryDraftService) return;
+  const personalizationStateRoot = path.join(
+    app.getPath('userData'),
+    'personalization',
+  );
   dailyMemoryDraftService = new DailyMemoryDraftService(
     app.getPath('userData'),
-    path.join(app.getPath('userData'), 'personalization'),
+    personalizationStateRoot,
     {
       fixtureStatePath: app.isPackaged
         ? undefined
         : process.env.COCO_DAILY_MEMORY_DRAFT_FIXTURE,
     },
+  );
+  personalizationCenterService = new PersonalizationCenterService(
+    personalizationStateRoot,
+    dailyMemoryDraftService,
   );
 };
 
@@ -773,6 +784,10 @@ const createAvatarWindow = () => {
     width: 180,
     height: 180,
     transparent: true,
+    // Electron's native background defaults to white even for transparent
+    // windows. During a bounds change that backing surface can be exposed for
+    // one compositor frame, which looks like the avatar flashing on dismiss.
+    backgroundColor: '#00000000',
     frame: false,
     alwaysOnTop: true,
     hasShadow: false,
@@ -845,8 +860,22 @@ revealSocialAvatarNotification = (notification) => {
 
 const CHAT_PANEL_W = 420;
 const CHAT_EXPANDED_W = 820;
+const CHAT_MIN_W = 340;
+const CHAT_MIN_H = 360;
+const CHAT_LAYOUT_BREAKPOINT = (CHAT_PANEL_W + CHAT_EXPANDED_W) / 2;
 const CHAT_CONTENT_ZOOM_LEVELS = [0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 let chatContentZoomFactor = 1;
+let chatWindowHasBeenShown = false;
+
+const syncChatLayoutModeFromWindowSize = () => {
+  if (!chatWindow || chatWindow.isDestroyed()) return;
+  const nextFloatMode = chatWindow.getBounds().width < CHAT_LAYOUT_BREAKPOINT;
+  if (nextFloatMode === isFloatMode) return;
+  isFloatMode = nextFloatMode;
+  chatWindow.webContents.send('float-window-state', {
+    isFloat: isFloatMode,
+  });
+};
 
 const createChatWindow = () => {
   if (chatWindow && !chatWindow.isDestroyed()) return;
@@ -861,7 +890,9 @@ const createChatWindow = () => {
     height: 700,
     frame: false,
     transparent: true,
-    resizable: false,
+    resizable: true,
+    minWidth: CHAT_MIN_W,
+    minHeight: CHAT_MIN_H,
     skipTaskbar: true,
     alwaysOnTop: true,
     webPreferences: { preload: preloadPath(), backgroundThrottling: false },
@@ -932,7 +963,10 @@ const createChatWindow = () => {
 
   chatWindow.on('closed', () => {
     chatWindow = null;
+    chatWindowHasBeenShown = false;
   });
+
+  chatWindow.on('resize', syncChatLayoutModeFromWindowSize);
 
   chatWindow.webContents.setWindowOpenHandler((edata) => {
     shell.openExternal(edata.url);
@@ -940,18 +974,36 @@ const createChatWindow = () => {
   });
 };
 
-// Position the chat window as a right-edge side panel and show it.
+// Position a new chat window at its default size. Once shown, preserve any
+// size and position the user chose when they hide and reopen the panel.
 const showChatPanel = () => {
   createChatWindow();
   if (!chatWindow || chatWindow.isDestroyed()) return;
 
   const disp = screen.getDisplayMatching(chatWindow.getBounds());
-  const { x: dx, y: dy, width: sw, height: sh } = disp.workArea;
-  const w = isFloatMode ? CHAT_PANEL_W : CHAT_EXPANDED_W;
-  const h = Math.min(760, sh - 32);
-
-  chatWindow.setSize(w, h);
-  chatWindow.setPosition(dx + sw - w - 16, dy + Math.floor((sh - h) / 2));
+  if (!chatWindowHasBeenShown) {
+    const { x: dx, y: dy, width: sw, height: sh } = disp.workArea;
+    const w = isFloatMode ? CHAT_PANEL_W : CHAT_EXPANDED_W;
+    const h = Math.min(760, sh - 32);
+    chatWindow.setBounds({
+      x: dx + sw - w - 16,
+      y: dy + Math.floor((sh - h) / 2),
+      width: w,
+      height: h,
+    });
+    chatWindowHasBeenShown = true;
+  } else {
+    const currentBounds = chatWindow.getBounds();
+    chatWindow.setBounds(
+      resizeBoundsKeepingRightEdge(
+        currentBounds,
+        disp.workArea,
+        currentBounds.width,
+        16,
+      ),
+    );
+  }
+  syncChatLayoutModeFromWindowSize();
   chatWindow.setAlwaysOnTop(true, 'floating');
   chatWindow.show();
   chatWindow.focus();
@@ -989,6 +1041,25 @@ const showChatPanel = () => {
   ) {
     avatarWindow.show();
   }
+};
+
+// Unlike opening the panel, changing its reading width should not discard a
+// position chosen by the user. Keep the right edge fixed so the panel expands
+// to the left, moving it only when required to remain within its display.
+const resizeChatPanelInPlace = () => {
+  if (!chatWindow || chatWindow.isDestroyed()) return;
+
+  const currentBounds = chatWindow.getBounds();
+  const display = screen.getDisplayMatching(currentBounds);
+  const requestedWidth = isFloatMode ? CHAT_PANEL_W : CHAT_EXPANDED_W;
+  chatWindow.setBounds(
+    resizeBoundsKeepingRightEdge(
+      currentBounds,
+      display.workArea,
+      requestedWidth,
+      16,
+    ),
+  );
 };
 
 const isChatPanelOpen = (): boolean =>
@@ -1216,7 +1287,6 @@ const openChatForSession = (
   seed?: ChatSeed,
 ) => {
   const alreadyLoaded = chatWindow && !chatWindow.isDestroyed();
-  isFloatMode = true;
   showChatPanel();
   if (!chatWindow) return;
 
@@ -2265,9 +2335,25 @@ ipcMain.removeAllListeners('toggle-float-window');
 ipcMain.on('toggle-float-window', () => {
   if (!chatWindow || chatWindow.isDestroyed()) return;
   isFloatMode = !isFloatMode; // isFloatMode === narrow side-panel
-  showChatPanel();
+  resizeChatPanelInPlace();
   chatWindow.webContents.send('float-window-state', { isFloat: isFloatMode });
 });
+
+ipcMain.removeAllListeners('set-chat-window-expanded');
+ipcMain.on(
+  'set-chat-window-expanded',
+  (_event, { expanded }: { expanded?: boolean } = {}) => {
+    if (!chatWindow || chatWindow.isDestroyed()) return;
+    const nextFloatMode = expanded !== true;
+    if (isFloatMode !== nextFloatMode) {
+      isFloatMode = nextFloatMode;
+      resizeChatPanelInPlace();
+    }
+    chatWindow.webContents.send('float-window-state', {
+      isFloat: isFloatMode,
+    });
+  },
+);
 
 ipcMain.on('shell-show-item-in-finder', (_event, fullPath) => {
   try {
@@ -2310,6 +2396,73 @@ ipcMain.handle('get-personalization-status', () => ({
   },
 }));
 
+ipcMain.removeHandler('get-personalization-center');
+ipcMain.handle('get-personalization-center', () => {
+  initializeDailyMemoryDraftService();
+  const dailyRun = eveningPersonalizationScheduler?.getStatus() ?? {
+    scheduledHour: 18,
+  };
+  return {
+    status: {
+      ...(personalizationScheduler?.getStatus() ?? {
+        available: false,
+        sleeping: isCocoSleeping(),
+        successfulUpdateCount: 0,
+        state: 'idle',
+      }),
+      dailyRun,
+    },
+    center: personalizationCenterService?.snapshot() ?? null,
+  };
+});
+
+ipcMain.removeHandler('save-personalization-review-decision');
+ipcMain.handle('save-personalization-review-decision', (_event, input) => {
+  try {
+    initializeDailyMemoryDraftService();
+    return {
+      success: true,
+      center: personalizationCenterService?.saveDecision(input) ?? null,
+    };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.removeHandler('apply-personalization-review');
+ipcMain.handle(
+  'apply-personalization-review',
+  async (_event, { draftId }: { draftId?: string } = {}) => {
+    if (!draftId) return { success: false, error: 'Draft ID is required.' };
+    try {
+      initializeDailyMemoryDraftService();
+      if (!personalizationCenterService) {
+        throw new Error('Personalization review is not available.');
+      }
+      const { memory, draft } =
+        personalizationCenterService.applyReview(draftId);
+      const tutorPort = process.env.TUTOR_PORT || '8081';
+      try {
+        await axios.post(
+          `http://127.0.0.1:${tutorPort}/context/evolved_memory`,
+          { memory },
+          { timeout: 8000 },
+        );
+      } catch (error) {
+        log.warn(
+          `[Memory] personalization review live apply failed: ${(error as Error).message}`,
+        );
+      }
+      avatarWindow?.webContents.send('daily-memory-draft-applied', {
+        draftId: draft.draftId,
+      });
+      return { success: true, draftId: draft.draftId };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  },
+);
+
 // ── Dynamic avatar-window resize ──────────────────────────────────────────────
 // Renderer asks for a new content size when the bubble or history panel
 // appears/disappears. We pin the bottom-right corner so the pet stays put
@@ -2323,12 +2476,15 @@ ipcMain.on(
     const h = Math.max(1, Math.round(height));
     const b = avatarWindow.getBounds();
     if (b.width === w && b.height === h) return;
-    avatarWindow.setBounds({
-      x: b.x + b.width - w,
-      y: b.y + b.height - h,
-      width: w,
-      height: h,
-    });
+    avatarWindow.setBounds(
+      {
+        x: b.x + b.width - w,
+        y: b.y + b.height - h,
+        width: w,
+        height: h,
+      },
+      false,
+    );
   },
 );
 

@@ -224,8 +224,24 @@ export class DailyMemoryDraftService {
     return draft;
   }
 
+  /** Return the newest unapplied draft without consuming the daily prompt. */
+  latestPending(): DailyMemoryDraft | null {
+    const state = readJson<ReviewState>(this.reviewStatePath, {});
+    const approvedThrough = Number(state.latestApprovedPeriodEnd ?? 0);
+    return (
+      this.readDrafts()
+        .filter((item) => item.periodEnd > approvedThrough)
+        .sort(
+          (left, right) =>
+            right.periodEnd - left.periodEnd ||
+            right.createdAt - left.createdAt,
+        )[0] ?? null
+    );
+  }
+
   approve(
     draftId: string,
+    reviewedBullets?: DailyMemoryDraft['bullets'],
     nowMs = Date.now(),
   ): {
     memory: string;
@@ -233,7 +249,10 @@ export class DailyMemoryDraftService {
   } {
     const draft = this.readDrafts().find((item) => item.draftId === draftId);
     if (!draft) throw new Error('Memory draft no longer exists.');
-    const memory = renderEvolvedMemory(draft);
+    const approvedDraft = reviewedBullets
+      ? { ...draft, bullets: reviewedBullets }
+      : draft;
+    const memory = renderEvolvedMemory(approvedDraft);
     fs.mkdirSync(path.dirname(this.evolvedMemoryPath), { recursive: true });
     const temporary = `${this.evolvedMemoryPath}.tmp`;
     fs.writeFileSync(temporary, memory, 'utf8');
@@ -249,7 +268,7 @@ export class DailyMemoryDraftService {
       draft.periodEnd,
     );
     writeJsonAtomic(this.reviewStatePath, state);
-    return { memory, draft };
+    return { memory, draft: approvedDraft };
   }
 
   private readDrafts(): DailyMemoryDraft[] {

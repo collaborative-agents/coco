@@ -153,7 +153,9 @@ describe('Personalization status', () => {
     render(
       <PersonalizationStatusPanel
         loading={false}
-        onRefresh={jest.fn()}
+        onExpand={jest.fn()}
+        readyCount={0}
+        waitingForReview={false}
         status={{
           available: true,
           sleeping: true,

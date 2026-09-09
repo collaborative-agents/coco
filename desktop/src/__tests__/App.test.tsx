@@ -283,9 +283,10 @@ describe('App', () => {
     expect(screen.queryByText('Watching')).not.toBeInTheDocument();
   });
 
-  it('closes a rated expanded suggestion with one dismiss click', async () => {
+  it('keeps a long rated suggestion anchored and closes it with one click', async () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const sendMessage = jest.fn();
+    const suggestionBody = 'Lead with the main result. '.repeat(80).trim();
     const invoke = jest.fn((channel: string) => {
       if (channel === 'get-coco-sleep-mode') {
         return Promise.resolve({ sleeping: false });
@@ -296,8 +297,8 @@ describe('App', () => {
           suggestion: {
             kind: 'content',
             title: 'Improve the summary',
-            body: 'Lead with the main result.',
-            copyText: 'Lead with the main result.',
+            body: suggestionBody,
+            copyText: suggestionBody,
           },
         });
       }
@@ -331,11 +332,12 @@ describe('App', () => {
       });
     });
     fireEvent.click(screen.getByText('Help me with this'));
-    expect(await screen.findByText('Lead with the main result.'))
-      .toBeInTheDocument();
+    expect(await screen.findByText(suggestionBody)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Good suggestion' }));
     expect(screen.getByText('Thanks for the feedback')).toBeInTheDocument();
+    expect(screen.getByText('Improve the summary')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 
     expect(screen.queryByText('Improve the summary')).not.toBeInTheDocument();

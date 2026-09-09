@@ -4,7 +4,6 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import trainingAnimation from '../../../assets/training.gif';
 import {
   startVoiceRecorder,
   type ActiveVoiceRecorder,
@@ -18,6 +17,10 @@ import {
 } from './observation-types';
 import type { LLMCallMetrics, TutorToolCall } from './observation-types';
 import FriendsView, { FriendsButton } from './FriendsView';
+import PersonalizationCenter, {
+  PersonalizationSettingsCard,
+} from './PersonalizationCenter';
+export { PersonalizationStatusPanel } from './PersonalizationCenter';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -43,47 +46,6 @@ export interface TrainingScreenshotRetentionInfo {
   recordsRoot: string;
   screenshotPattern: string;
   configurationPath: string;
-}
-
-export interface PersonalizationStatusInfo {
-  available: boolean;
-  sleeping: boolean;
-  successfulUpdateCount: number;
-  state:
-    | 'idle'
-    | 'running'
-    | 'checkpointed'
-    | 'completed'
-    | 'no_work'
-    | 'preempted'
-    | 'failed';
-  activeJob?: 'signals' | 'revise' | 'evolve';
-  activeStartedAt?: number;
-  checkpointStatus?: string;
-  processedSamples?: number;
-  totalSamples?: number;
-  periodStart?: number;
-  periodEnd?: number;
-  signals?: {
-    signalCount: number;
-    observationCount: number;
-    feedbackEventCount: number;
-    updatedAt?: number;
-  };
-  lastRun?: {
-    job: 'signals' | 'revise' | 'evolve';
-    outcome: 'completed' | 'no_work' | 'preempted' | 'failed';
-    endedAt: number;
-    detail?: string;
-  };
-  nextEvolveAttemptAt?: number;
-  dailyRun?: {
-    scheduledHour: number;
-    lastStartedDate?: string;
-    lastCompletedDate?: string;
-    lastOutcome?: 'completed' | 'no_work';
-    lastCompletedAt?: number;
-  };
 }
 
 interface WakeWordSettingsInfo {
@@ -525,93 +487,6 @@ const S: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontFamily: FONT,
   },
-  personalizationCard: {
-    border: `1px solid ${BORDER}`,
-    borderRadius: 10,
-    background: '#f9fafb',
-    padding: '10px 11px',
-    marginBottom: 14,
-  },
-  personalizationHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-  },
-  personalizationDot: {
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    flexShrink: 0,
-  },
-  personalizationTitle: {
-    color: '#374151',
-    fontSize: 12.5,
-    fontWeight: 700,
-  },
-  personalizationMeta: {
-    color: '#6b7280',
-    fontSize: 11,
-    lineHeight: 1.45,
-    marginTop: 4,
-  },
-  personalizationGrowth: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    border: `1px solid ${ACCENT_BORDER}`,
-    borderRadius: 9,
-    background: ACCENT_BG,
-    padding: '9px 10px',
-    marginBottom: 8,
-  },
-  personalizationGrowthAnimation: {
-    width: 72,
-    height: 48,
-    flex: '0 0 auto',
-    objectFit: 'contain',
-  },
-  personalizationGrowthTitle: {
-    color: ACCENT,
-    fontSize: 12.5,
-    fontWeight: 700,
-    lineHeight: 1.25,
-  },
-  personalizationGrowthCount: {
-    color: ACCENT,
-    fontSize: 15,
-    fontWeight: 700,
-    lineHeight: 1.4,
-  },
-  personalizationGrowthDetail: {
-    color: '#4b5563',
-    fontSize: 10.5,
-    lineHeight: 1.4,
-  },
-  personalizationProgressTrack: {
-    height: 6,
-    borderRadius: 999,
-    overflow: 'hidden',
-    background: '#e5e7eb',
-    marginTop: 7,
-  },
-  personalizationProgressFill: {
-    height: '100%',
-    borderRadius: 999,
-    background: ACCENT,
-    transition: 'width 180ms ease',
-  },
-  personalizationRefresh: {
-    marginLeft: 'auto',
-    border: 'none',
-    background: 'transparent',
-    color: ACCENT,
-    padding: 0,
-    cursor: 'pointer',
-    fontSize: 11,
-    fontWeight: 700,
-    fontFamily: FONT,
-  },
   toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
   toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
   toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
@@ -698,194 +573,6 @@ export function TrainingScreenshotRetentionNotice({
         </div>
       )}
     </div>
-  );
-}
-
-const PERSONALIZATION_JOB_LABELS = {
-  signals: 'Collecting personalization signals',
-  revise: 'Revising feedback labels',
-  evolve: 'Self-evolving prompt',
-} as const;
-
-function formatPersonalizationTime(timestamp: number, seconds = false): string {
-  return new Date(seconds ? timestamp * 1000 : timestamp).toLocaleString();
-}
-
-function localDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function dailyPersonalizationStatus(
-  status: PersonalizationStatusInfo,
-  now = new Date(),
-): string {
-  const daily = status.dailyRun;
-  if (!daily) return 'Coco checks for a new update every day.';
-  const today = localDateKey(now);
-  const scheduledTime = new Date(now);
-  scheduledTime.setHours(daily.scheduledHour, 0, 0, 0);
-  const scheduleLabel = scheduledTime.toLocaleTimeString([], {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-  if (daily.lastCompletedDate === today) {
-    const completedTime = daily.lastCompletedAt
-      ? new Date(daily.lastCompletedAt).toLocaleTimeString([], {
-          hour: 'numeric',
-          minute: '2-digit',
-        })
-      : null;
-    if (daily.lastOutcome === 'no_work') {
-      return `Checked today${completedTime ? ` at ${completedTime}` : ''} — no new activity to learn from.`;
-    }
-    return `Latest growth completed today${completedTime ? ` at ${completedTime}` : ''}.`;
-  }
-  if (daily.lastStartedDate === today) {
-    return status.state === 'running'
-      ? 'Coco is growing now.'
-      : 'Today’s update has started.';
-  }
-  return now < scheduledTime
-    ? `Next daily growth check is at ${scheduleLabel}.`
-    : `Today’s growth check has not run yet (scheduled for ${scheduleLabel}).`;
-}
-
-export function PersonalizationStatusPanel({
-  status,
-  loading,
-  onRefresh,
-}: {
-  status: PersonalizationStatusInfo | null;
-  loading: boolean;
-  onRefresh: () => void;
-}) {
-  const activeLabel = status?.activeJob
-    ? PERSONALIZATION_JOB_LABELS[status.activeJob]
-    : null;
-  const title = !status?.available
-    ? 'Personalization is not ready'
-    : status.state === 'running'
-      ? `${activeLabel ?? 'Personalization'} is running`
-      : status.state === 'checkpointed'
-        ? 'Self-evolving prompt is checkpointed'
-        : status.state === 'completed'
-          ? 'Self-evolving prompt completed'
-          : status.state === 'no_work'
-            ? 'No eligible personalization work yet'
-            : status.state === 'preempted'
-              ? 'Personalization paused for interactive work'
-              : status.state === 'failed'
-                ? 'Personalization needs attention'
-                : status.sleeping
-                  ? 'Coco is ready for personalization work'
-                  : 'Personalization is waiting for idle time';
-  const color = status?.state === 'running'
-    ? '#2563eb'
-    : status?.state === 'failed'
-      ? '#dc2626'
-      : status?.state === 'completed'
-        ? '#16a34a'
-        : '#9ca3af';
-  const canShowProgress = Boolean(
-    status?.totalSamples &&
-      (!status.activeJob || status.activeJob === 'evolve'),
-  );
-  const processed = Math.min(
-    status?.processedSamples ?? 0,
-    status?.totalSamples ?? 0,
-  );
-  const percent = canShowProgress
-    ? Math.round((processed / (status?.totalSamples ?? 1)) * 100)
-    : 0;
-
-  return (
-    <section style={S.personalizationCard} aria-label="Personalization status">
-      <div style={S.personalizationHeader}>
-        <span style={{ ...S.personalizationDot, background: color }} />
-        <span style={S.personalizationTitle}>{title}</span>
-        <button
-          type="button"
-          style={S.personalizationRefresh}
-          onClick={onRefresh}
-          disabled={loading}
-        >
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </div>
-      {status && (
-        <div style={S.personalizationGrowth}>
-          <img
-            src={trainingAnimation}
-            alt="Coco training"
-            style={S.personalizationGrowthAnimation}
-          />
-          <div>
-            <div style={S.personalizationGrowthTitle}>Coco’s growth</div>
-            <div style={S.personalizationGrowthCount}>
-              {status.successfulUpdateCount}{' '}
-              {status.successfulUpdateCount === 1
-                ? 'successful update'
-                : 'successful updates'}
-            </div>
-            <div style={S.personalizationGrowthDetail}>
-              {dailyPersonalizationStatus(status)}
-            </div>
-          </div>
-        </div>
-      )}
-      {canShowProgress && (
-        <>
-          <div style={S.personalizationMeta}>
-            {processed} of {status!.totalSamples} samples processed · {percent}%
-          </div>
-          <div
-            style={S.personalizationProgressTrack}
-            role="progressbar"
-            aria-label="Self-evolving prompt progress"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent}
-          >
-            <div
-              style={{ ...S.personalizationProgressFill, width: `${percent}%` }}
-            />
-          </div>
-        </>
-      )}
-      {status?.checkpointStatus && (
-        <div style={S.personalizationMeta}>
-          Checkpoint: {status.checkpointStatus}
-        </div>
-      )}
-      {status?.periodStart && status.periodEnd && (
-        <div style={S.personalizationMeta}>
-          Data period: {formatPersonalizationTime(status.periodStart, true)} –{' '}
-          {formatPersonalizationTime(status.periodEnd, true)}
-        </div>
-      )}
-      {status?.signals && (
-        <div style={S.personalizationMeta}>
-          {status.signals.signalCount} signals from{' '}
-          {status.signals.observationCount} observations and{' '}
-          {status.signals.feedbackEventCount} feedback events
-        </div>
-      )}
-      {status?.lastRun && (
-        <div style={S.personalizationMeta}>
-          Last job: {PERSONALIZATION_JOB_LABELS[status.lastRun.job]} ·{' '}
-          {status.lastRun.outcome.replace('_', ' ')} ·{' '}
-          {formatPersonalizationTime(status.lastRun.endedAt)}
-        </div>
-      )}
-      {status?.nextEvolveAttemptAt && status.state !== 'running' && (
-        <div style={S.personalizationMeta}>
-          Next eligible retry: {formatPersonalizationTime(status.nextEvolveAttemptAt)}
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -1075,6 +762,8 @@ export default function SessionChatView() {
   const [expanded, setExpanded] = useState(false);
   const [contentZoomFactor, setContentZoomFactor] = useState(1);
   const [showSettings, setShowSettings] = useState(false);
+  const [showPersonalizationCenter, setShowPersonalizationCenter] =
+    useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showFriends, setShowFriends] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1145,10 +834,6 @@ export default function SessionChatView() {
   const [memoryFlash, setMemoryFlash] = useState(false);
   const [trainingScreenshotRetention, setTrainingScreenshotRetention] =
     useState<TrainingScreenshotRetentionInfo | null>(null);
-  const [personalizationStatus, setPersonalizationStatus] =
-    useState<PersonalizationStatusInfo | null>(null);
-  const [personalizationStatusLoading, setPersonalizationStatusLoading] =
-    useState(false);
   // Current thumbs vote per tutor message, keyed by message id. Users may
   // replace it by choosing the opposite rating.
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
@@ -1207,6 +892,19 @@ export default function SessionChatView() {
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on(
+      'float-window-state',
+      (value) => {
+        const state = value as { isFloat?: boolean } | undefined;
+        setExpanded(state?.isFloat === false);
+      },
+    );
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
+  }, []);
+
   const applyCocoSleepMode = useCallback((sleeping: boolean) => {
     cocoSleepingRef.current = sleeping;
     setCocoSleeping(sleeping);
@@ -1249,23 +947,6 @@ export default function SessionChatView() {
       if (!cocoSleepingRef.current) setHealthLoading(false);
     }
   }, [applyCocoSleepMode]);
-
-  const refreshPersonalizationStatus = useCallback(
-    async (showLoading = true) => {
-      if (showLoading) setPersonalizationStatusLoading(true);
-      try {
-        const result = await window.electron?.ipcRenderer.invoke(
-          'get-personalization-status',
-        ) as PersonalizationStatusInfo | undefined;
-        if (result) setPersonalizationStatus(result);
-      } catch {
-        setPersonalizationStatus(null);
-      } finally {
-        if (showLoading) setPersonalizationStatusLoading(false);
-      }
-    },
-    [],
-  );
 
   const persistConversationSnapshot = useCallback(
     (flushBeforeUnload = false) => {
@@ -1945,15 +1626,6 @@ export default function SessionChatView() {
   }, [showSettings]);
 
   useEffect(() => {
-    if (!showSettings) return undefined;
-    void refreshPersonalizationStatus();
-    const interval = window.setInterval(() => {
-      void refreshPersonalizationStatus(false);
-    }, 2000);
-    return () => window.clearInterval(interval);
-  }, [refreshPersonalizationStatus, showSettings]);
-
-  useEffect(() => {
     window.electron?.ipcRenderer
       .invoke('get-coco-sleep-mode')
       .then((result: { sleeping?: boolean } | undefined) => {
@@ -2053,6 +1725,7 @@ export default function SessionChatView() {
     const cleanup = window.electron?.ipcRenderer.on(
       'open-chat-settings',
       () => {
+        setShowPersonalizationCenter(false);
         setShowHistory(false);
         setReviewing(null);
         setShowSettings(true);
@@ -2065,6 +1738,7 @@ export default function SessionChatView() {
     const cleanup = window.electron?.ipcRenderer.on(
       'open-social-inbox',
       () => {
+        setShowPersonalizationCenter(false);
         setShowSettings(false);
         setShowHistory(false);
         setReviewing(null);
@@ -2328,6 +2002,7 @@ export default function SessionChatView() {
   };
 
   const openHistory = async () => {
+    setShowPersonalizationCenter(false);
     setShowFriends(false);
     setShowSettings(false);
     setReviewing(null);
@@ -2526,6 +2201,7 @@ export default function SessionChatView() {
               title={chatHealthTitle}
               aria-label={`${chatHealthLabel}. Open Settings`}
               onClick={() => {
+                setShowPersonalizationCenter(false);
                 setShowFriends(false);
                 setShowHistory(false);
                 setReviewing(null);
@@ -2559,6 +2235,7 @@ export default function SessionChatView() {
             style={S.iconBtn}
             activeStyle={S.iconBtnActive}
             onClick={() => {
+              setShowPersonalizationCenter(false);
               setShowSettings(false);
               setShowHistory(false);
               setReviewing(null);
@@ -2576,13 +2253,23 @@ export default function SessionChatView() {
           </button>
           <button
             type="button"
-            style={{ ...S.iconBtn, ...(showSettings ? S.iconBtnActive : {}) }}
+            style={{
+              ...S.iconBtn,
+              ...(showSettings || showPersonalizationCenter
+                ? S.iconBtnActive
+                : {}),
+            }}
             title="Settings"
             onClick={() => {
               setShowFriends(false);
               setShowHistory(false);
               setReviewing(null);
-              setShowSettings((v) => !v);
+              if (showPersonalizationCenter) {
+                setShowPersonalizationCenter(false);
+                setShowSettings(true);
+              } else {
+                setShowSettings((v) => !v);
+              }
             }}
           >
             ⚙
@@ -2592,8 +2279,27 @@ export default function SessionChatView() {
             style={S.iconBtn}
             title={expanded ? 'Collapse' : 'Expand'}
             onClick={() => {
-              setExpanded((v) => !v);
-              window.electron?.ipcRenderer.sendMessage('toggle-float-window');
+              const nextExpanded = !expanded;
+              const closePersonalization =
+                !nextExpanded && showPersonalizationCenter;
+              if (closePersonalization) {
+                // Restore the compact Settings view before Electron narrows the
+                // right-anchored window, so the full Personalization Center is
+                // never rendered inside the narrow panel.
+                setShowPersonalizationCenter(false);
+                setShowSettings(true);
+              }
+              setExpanded(nextExpanded);
+              const resizeWindow = () =>
+                window.electron?.ipcRenderer.sendMessage(
+                  'set-chat-window-expanded',
+                  { expanded: nextExpanded },
+                );
+              if (closePersonalization) {
+                window.setTimeout(resizeWindow, 0);
+              } else {
+                resizeWindow();
+              }
             }}
           >
             {expanded ? '⇥' : '⇤'}
@@ -2614,6 +2320,15 @@ export default function SessionChatView() {
             height: `${100 / contentZoomFactor}%`,
           }}
         >
+
+      {showPersonalizationCenter && (
+        <PersonalizationCenter
+          onBack={() => {
+            setShowPersonalizationCenter(false);
+            setShowSettings(true);
+          }}
+        />
+      )}
 
       {showFriends && <FriendsView onClose={() => setShowFriends(false)} />}
       {showSettings && (
@@ -2656,10 +2371,16 @@ export default function SessionChatView() {
             Coco-PE runs only while Coco is sleeping or the Mac is idle. It is
             checkpointed and pauses immediately for interactive work.
           </div>
-          <PersonalizationStatusPanel
-            status={personalizationStatus}
-            loading={personalizationStatusLoading}
-            onRefresh={() => void refreshPersonalizationStatus()}
+              <PersonalizationSettingsCard
+                onOpen={() => {
+                  setShowSettings(false);
+                  setShowPersonalizationCenter(true);
+                  setExpanded(true);
+                  window.electron?.ipcRenderer.sendMessage(
+                    'set-chat-window-expanded',
+                    { expanded: true },
+                  );
+                }}
           />
           <div style={S.sectionDivider} />
           <div style={S.groupLabel}>Desktop</div>

@@ -738,10 +738,20 @@ function PetView() {
       'daily-memory-draft-refresh',
       loadDraft,
     );
+    const cleanupApplied = window.electron?.ipcRenderer.on(
+      'daily-memory-draft-applied',
+      (result) => {
+        const applied = result as { draftId?: string } | undefined;
+        setDailyMemoryDraft((current) =>
+          current?.draftId === applied?.draftId ? null : current,
+        );
+      },
+    );
     return () => {
       cancelled = true;
       if (midnightTimer) clearTimeout(midnightTimer);
       if (typeof cleanup === 'function') cleanup();
+      if (typeof cleanupApplied === 'function') cleanupApplied();
     };
   }, []);
 

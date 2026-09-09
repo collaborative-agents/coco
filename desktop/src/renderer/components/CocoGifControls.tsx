@@ -68,7 +68,15 @@ export function cocoGifLabel(id: CocoGifId): string {
   return COCO_GIFS[id].label;
 }
 
-export function AnimatedCocoGif({ id, size }: { id: CocoGifId; size: number }) {
+export function AnimatedCocoGif({
+  id,
+  size,
+  frameIntervalMs,
+}: {
+  id: CocoGifId;
+  size: number;
+  frameIntervalMs?: number;
+}) {
   const definition = COCO_GIFS[id];
   const [frameIndex, setFrameIndex] = useState(0);
 
@@ -83,10 +91,10 @@ export function AnimatedCocoGif({ id, size }: { id: CocoGifId; size: number }) {
     const timer = window.setInterval(
       () =>
         setFrameIndex((current) => (current + 1) % definition.frames.length),
-      definition.intervalMs,
+      frameIntervalMs ?? definition.intervalMs,
     );
     return () => window.clearInterval(timer);
-  }, [definition]);
+  }, [definition, frameIntervalMs]);
 
   return (
     <img
@@ -104,6 +112,10 @@ export function AnimatedCocoGif({ id, size }: { id: CocoGifId; size: number }) {
     />
   );
 }
+
+AnimatedCocoGif.defaultProps = {
+  frameIntervalMs: undefined,
+};
 
 export function CocoGifPicker({
   label,

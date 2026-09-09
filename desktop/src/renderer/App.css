@@ -227,12 +227,27 @@ body,
 /* Revealed instant suggestion: wider bubble + scrollable, ready-to-copy body. */
 .observation-bubble.has-suggestion {
   max-width: 320px;
+  /* The avatar renderer lives in a fixed-height transparent window. Keep the
+     complete card inside that viewport so feedback confirmations cannot push
+     the title and dismiss control above its top edge. The suggestion body is
+     the flexible/scrollable region; controls and feedback remain reachable. */
+  max-height: calc(100% - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow-anchor: none;
+}
+
+.observation-bubble.has-suggestion > :not(.observation-suggestion-body) {
+  flex-shrink: 0;
 }
 
 .observation-suggestion-body {
+  flex: 1 1 auto;
+  min-height: 0;
   margin-top: 4px;
   max-height: 320px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   white-space: pre-wrap;
   font-size: 13px;
   line-height: 1.45;
