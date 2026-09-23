@@ -211,6 +211,58 @@ def test_evolve_mines_retrospective_opportunities_when_idle(tmp_path, monkeypatc
     assert [row["kind"] for row in stored] == ["retrospective:repetitive_work"]
 
 
+def test_evolve_retrospective_scans_only_unanalysed_observations(tmp_path, monkeypatch):
+    observations = [
+        ObservationRecord(
+            observation_id=f"obs-{index}",
+            session_id="s1",
+            ts=float(index),
+            type="snapshot",
+            model="model",
+            observer_input="input",
+            observer_output='{"need_support":"no"}',
+        )
+        for index in range(1, 31)
+    ]
+    records = SessionRecords(path="session", observations=observations)
+    monkeypatch.setattr(runtime, "load_records", lambda _root: [records])
+    captured_cutoffs = []
+
+    def fake_retrospective(_sessions, **kwargs):
+        captured_cutoffs.append(kwargs["candidate_since_ts"])
+        kwargs["resume_out"].write_text(json.dumps({"last_observation_ts": 25.0}))
+        return []
+
+    monkeypatch.setattr(runtime, "derive_retrospective_signals", fake_retrospective)
+    monkeypatch.setattr(runtime, "label_records", lambda *_args, **_kwargs: [])
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    (state_root / "evolve_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "completed_until": 10.0,
+                "retrospective_observation_count": 10,
+            }
+        )
+    )
+
+    result = runtime.process_evolve_step(
+        tmp_path / "records",
+        state_root,
+        model="model",
+        memory_root=tmp_path / "memory",
+        collect_training_screenshots=True,
+        retrospective_observation_interval=5,
+    )
+
+    assert result == {"status": "no_work", "moments": 0}
+    assert len(captured_cutoffs) == 1
+    assert captured_cutoffs[0] > 10.0
+    checkpoint = json.loads((state_root / "evolve_checkpoint.json").read_text())
+    assert checkpoint["retrospective_observation_count"] == 25
+    assert checkpoint["retrospective_completed_until"] == 25.0
+
+
 def test_evolve_continues_when_retrospective_mining_fails(tmp_path, monkeypatch):
     records = SessionRecords(
         path="session",
@@ -254,6 +306,48 @@ def test_evolve_continues_when_retrospective_mining_fails(tmp_path, monkeypatch)
     checkpoint = json.loads((state_root / "evolve_checkpoint.json").read_text())
     assert checkpoint["last_retrospective_error"]["observation_count"] == 20
     assert "retrospective_observation_count" not in checkpoint
+
+
+def test_evolve_can_skip_retrospective_without_advancing_checkpoint(
+    tmp_path, monkeypatch
+):
+    records = SessionRecords(
+        path="session",
+        observations=[
+            ObservationRecord(
+                observation_id=f"obs-{index}",
+                session_id="s1",
+                ts=float(index),
+                type="snapshot",
+                model="model",
+                observer_input="input",
+                observer_output='{"need_support":"no"}',
+            )
+            for index in range(20)
+        ],
+    )
+    monkeypatch.setattr(runtime, "load_records", lambda _root: [records])
+    monkeypatch.setattr(
+        runtime,
+        "derive_retrospective_signals",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("retrospective scan should be bypassed")
+        ),
+    )
+    monkeypatch.setattr(runtime, "label_records", lambda *_args, **_kwargs: [])
+    state_root = tmp_path / "state"
+
+    result = runtime.process_evolve_step(
+        tmp_path / "records",
+        state_root,
+        model="model",
+        memory_root=tmp_path / "memory",
+        collect_training_screenshots=True,
+        run_retrospective=False,
+    )
+
+    assert result == {"status": "no_work", "moments": 0}
+    assert not (state_root / "evolve_checkpoint.json").exists()
 
 
 def test_evolve_rebuilds_active_run_from_older_signal_policy(tmp_path, monkeypatch):

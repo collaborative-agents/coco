@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import multiprocessing
 import os
 import re
@@ -268,6 +269,7 @@ def process_evolve_step(
     min_moments: int = 8,
     max_moments: int = 64,
     retrospective_observation_interval: int = 20,
+    run_retrospective: bool = True,
     llm_concurrency: int = DEFAULT_EVOLVE_LLM_CONCURRENCY,
 ) -> dict[str, int | str]:
     """Run or resume one frozen Coco-PE period and apply retention on success."""
@@ -303,13 +305,21 @@ def process_evolve_step(
         sessions = load_records(records_path)
         records = flatten_sessions(sessions)
         observation_count = len(records.observations)
-        last_retrospective_count = int(
-            runtime_state.get("retrospective_observation_count", 0) or 0
+        retrospective_boundary = runtime_state.get("retrospective_completed_until")
+        if retrospective_boundary is None and completed_until > 0:
+            retrospective_boundary = completed_until
+        retrospective_completed_until = float(retrospective_boundary or 0.0)
+        unanalysed_observation_count = (
+            sum(
+                observation.ts > retrospective_completed_until
+                for observation in records.observations
+            )
+            if retrospective_boundary is not None
+            else observation_count
         )
         should_run_retrospective = (
-            observation_count >= retrospective_observation_interval
-            and observation_count - last_retrospective_count
-            >= retrospective_observation_interval
+            run_retrospective
+            and unanalysed_observation_count >= retrospective_observation_interval
         )
         retrospective_signals = []
         retrospective_succeeded = False
@@ -318,8 +328,15 @@ def process_evolve_step(
                 retrospective_signals = derive_retrospective_signals(
                     sessions,
                     model=model,
+                    candidate_since_ts=(
+                        math.nextafter(retrospective_completed_until, math.inf)
+                        if retrospective_boundary is not None
+                        else None
+                    ),
                     show_progress=False,
                     trace_out=state_dir / "retrospective_trace.jsonl",
+                    progress_out=state_dir / "retrospective_progress.json",
+                    resume_out=state_dir / "retrospective_resume.json",
                 )
                 retrospective_succeeded = True
             except Exception as error:  # noqa: BLE001 - supplemental background work
@@ -339,7 +356,26 @@ def process_evolve_step(
             state_dir / "signals.jsonl", retrospective_signals
         )
         if retrospective_succeeded:
-            runtime_state["retrospective_observation_count"] = observation_count
+            retrospective_resume = _read_json(
+                state_dir / "retrospective_resume.json", {}
+            )
+            fallback_processed_until = max(
+                (observation.ts for observation in records.observations),
+                default=retrospective_completed_until,
+            )
+            retrospective_processed_until = float(
+                retrospective_resume.get(
+                    "last_observation_ts", fallback_processed_until
+                )
+                or fallback_processed_until
+            )
+            runtime_state["retrospective_observation_count"] = sum(
+                observation.ts <= retrospective_processed_until
+                for observation in records.observations
+            )
+            runtime_state["retrospective_completed_until"] = (
+                retrospective_processed_until
+            )
             runtime_state["retrospective_updated_at"] = time.time()
             runtime_state["retrospective_signal_count"] = sum(
                 signal.kind.startswith("retrospective:") for signal in stored_signals
@@ -590,6 +626,11 @@ def main(argv: list[str] | None = None) -> int:
         help="parallel prediction/reflection requests per Coco-PE batch",
     )
     parser.add_argument("--collect-training-screenshots", action="store_true")
+    parser.add_argument(
+        "--skip-retrospective",
+        action="store_true",
+        help="skip retrospective preparation without advancing its checkpoint",
+    )
     args = parser.parse_args(effective_argv)
 
     if args.job == "signals":
@@ -615,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
             collect_training_screenshots=args.collect_training_screenshots,
             min_moments=args.min_moments,
             max_moments=args.max_moments,
+            run_retrospective=not args.skip_retrospective,
             llm_concurrency=args.llm_concurrency,
         )
     print(json.dumps(result))

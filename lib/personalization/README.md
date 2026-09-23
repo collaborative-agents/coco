@@ -12,6 +12,10 @@ weights.
 The Electron app runs `personalization.runtime` as a disposable low-priority
 subprocess. Feedback triggers an incremental signal checkpoint immediately;
 missed-opportunity signals refresh after each bounded observation interval.
+The retrospective scan checkpoints its latest analyzed observation and sends
+only newer activity to subsequent desktop runs. Its observation set is frozen
+for the duration of a run, and completed discovery, verification, and grounding
+chunks resume after worker preemption instead of being scanned again.
 When the system has spare compute, one label disagreement is revised per job.
 After a longer idle interval—or while the user has explicitly put Coco to
 sleep—the worker runs/resumes Coco-PE against a frozen data-period snapshot.
@@ -37,6 +41,15 @@ not added to the live prompt. Approval atomically replaces Coco's learned-memory
 section while preserving user-written memory, then applies it to the running
 tutor. The observer reads that memory on its next observation. Choosing **Not
 now** defers the draft until the next day.
+
+The Settings panel keeps personalization status compact. **Open
+Personalization** expands the existing chat window (it does not create another
+Electron window) into a full-page view of pipeline progress, provisional
+checkpoint memory, recent batch activity, and completed drafts. Drafts are
+reviewed one preference at a time with keep, edit, or reject decisions saved
+immediately, so the review can be closed and resumed later. Provisional
+preferences are inspection-only and cannot enter the live prompt; a completed
+draft is applied only after every preference has been reviewed.
 
 For a development-only UI preview, point
 `COCO_DAILY_MEMORY_DRAFT_FIXTURE` at a Coco-PE `memory_state.json`. The desktop

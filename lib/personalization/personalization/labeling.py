@@ -43,12 +43,6 @@ _REVISION_SYSTEM_PROMPT = """\
 You correct observation annotations after user behavior has established that the
 original proactive-support prediction had the wrong polarity.
 
-Return only a JSON object with exactly these string fields:
-{
-  "observation": "<revised factual description of the user's current situation>",
-  "user_intent": "<the user's immediate goal, in under 15 words>"
-}
-
 Treat the derived need_support label as authoritative, but remain grounded in the
 provided record. Do not invent screen contents, actions, errors, or goals. If
 need_support is "yes", clarify the concrete need or useful assistance opportunity
@@ -63,6 +57,12 @@ error messages, artifacts, workflow state, and what changed over time. Do not
 replace necessary screenshot details with a vague summary. Preserve only details
 supported by the record, and avoid incidental or sensitive details that are not
 needed to understand the user's work.
+
+Return only a JSON object with exactly these string fields:
+{
+  "observation": "<revised factual description of the user's current situation>",
+  "user_intent": "<the user's immediate goal, in under 15 words>"
+}
 """
 
 

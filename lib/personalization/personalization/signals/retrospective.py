@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -10,7 +12,7 @@ from typing import Any
 from external_api.llm import chat_completion
 from tqdm import tqdm
 
-from personalization.records import write_jsonl
+from personalization.records import read_jsonl, write_jsonl
 from personalization.schemas import (
     ObservationRecord,
     SessionRecords,
@@ -47,12 +49,7 @@ Use these retrospective principles:
 - Respect stated user preferences and prior negative feedback. Never infer a preference merely from silence.
 - Be conservative and use only supplied evidence.
 
-Reason across the WHOLE timeline instead of labeling each observation independently. Merge repeated local symptoms into the underlying workflow. We want rules at this level:
-
-1. If the user spends a sustained period reading a PDF for a project, it may be helpful to suggest working together to create structured notes, comparisons, or a project-specific synthesis.
-2. If the user frequently launches, monitors, or records experiments manually, suggest using an agent to launch the experiments, monitor failures, and organize the results for review.
-
-Do not produce narrow opportunities such as fixing one SSH failure, correcting one command, flagging one typo, or explaining one transient error. Those events may be evidence of a broader workflow, but the proposed support must remain useful if the local symptom disappears.
+Reason across the WHOLE timeline instead of labeling each observation independently. Merge repeated local symptoms into the underlying workflow. Do not produce narrow opportunities such as fixing one SSH failure, correcting one command, flagging one typo, or explaining one transient error. Those events may be evidence of a broader workflow, but the proposed support must remain useful if the local symptom disappears.
 
 At this stage, find the opportunity and its supporting evidence only.
 Do NOT select a correction target or trigger. evidence_observation_ids must contain at least three UNIQUE supplied IDs establishing what the user later did or that the workflow recurred.
@@ -179,8 +176,11 @@ def derive_retrospective_signals(
     candidate_since_ts: float | None = None,
     show_progress: bool = False,
     trace_out: str | Path | None = None,
+    progress_out: str | Path | None = None,
+    resume_out: str | Path | None = None,
 ) -> list[ShortWindowSignal]:
     """Discover chunk-level workflow patterns, then ground missed moments."""
+    progress_started_at = time.time()
     _validate_config(
         model=model,
         min_confidence=min_confidence,
@@ -196,7 +196,73 @@ def derive_retrospective_signals(
         record_sets,
         candidate_since_ts=candidate_since_ts,
     )
+    resume_config = {
+        "model": model,
+        "min_confidence": min_confidence,
+        "max_observations": max_observations,
+        "trigger_max_observations": trigger_max_observations,
+        "max_field_chars": max_field_chars,
+        "max_input_chars": max_input_chars,
+        "max_opportunities": max_opportunities,
+        "min_pattern_span_s": min_pattern_span_s,
+        "ttl_s": ttl_s,
+        "candidate_since_ts": candidate_since_ts,
+    }
+    resume_state = _read_resume_state(resume_out, resume_config)
+    observations_by_available_id = {
+        observation.observation_id: observation for observation in observations
+    }
+    source_observation_ids = resume_state.get("source_observation_ids", [])
+    if source_observation_ids and all(
+        observation_id in observations_by_available_id
+        for observation_id in source_observation_ids
+    ):
+        observations = [
+            observations_by_available_id[observation_id]
+            for observation_id in source_observation_ids
+        ]
+        eligible_ids &= set(source_observation_ids)
+        if resume_state.get("status") == "complete":
+            return sorted(
+                _deduplicate_signals(
+                    [
+                        ShortWindowSignal.from_dict(row)
+                        for row in resume_state.get("accepted_signals", [])
+                        if isinstance(row, dict)
+                    ]
+                ),
+                key=lambda signal: signal.ts,
+            )
+    else:
+        resume_state = {}
+        source_observation_ids = [
+            observation.observation_id for observation in observations
+        ]
+    last_observation_ts = max(
+        (observation.ts for observation in observations),
+        default=candidate_since_ts or 0.0,
+    )
     if len(observations) < 3 or not eligible_ids:
+        _write_resume_state(
+            resume_out,
+            config=resume_config,
+            status="complete",
+            source_observation_ids=source_observation_ids,
+            last_observation_ts=last_observation_ts,
+            completed_discovery_chunks=0,
+            completed_trigger_chunks=0,
+            verified_opportunities=[],
+            accepted_signals=[],
+        )
+        _write_progress(
+            progress_out,
+            status="complete",
+            completed_steps=0,
+            total_steps=0,
+            processed_observations=len(observations),
+            total_observations=len(observations),
+            started_at=progress_started_at,
+        )
         _write_empty_trace(
             trace_out,
             model=model,
@@ -220,21 +286,77 @@ def derive_retrospective_signals(
         max_opportunities=max_opportunities,
         max_input_chars=max_input_chars,
     )
+    # Trigger chunks are finalized after evidence discovery because their prompt
+    # size depends on the verified opportunities. This count-based approximation
+    # gives the UI a stable early ETA and is replaced with the exact count later.
+    estimated_trigger_steps = math.ceil(
+        len(compact_observations) / trigger_max_observations
+    )
+    resume_phase = str(resume_state.get("status") or "")
+    completed_discovery_chunks = int(
+        resume_state.get("completed_discovery_chunks", 0) or 0
+    )
+    if resume_phase == "grounding":
+        completed_discovery_chunks = len(chunks)
+    existing_trace_rows = read_jsonl(trace_out) if trace_out and resume_state else []
+    if (
+        not 0 <= completed_discovery_chunks <= len(chunks)
+        or len(existing_trace_rows) < completed_discovery_chunks
+    ):
+        resume_state = {}
+        resume_phase = ""
+        completed_discovery_chunks = 0
+        existing_trace_rows = []
+    completed_steps = 2 * completed_discovery_chunks
+    processed_observations = 0
+    total_steps = 2 * len(chunks) + estimated_trigger_steps
+    _write_progress(
+        progress_out,
+        status="discovering",
+        completed_steps=completed_steps,
+        total_steps=total_steps,
+        processed_observations=processed_observations,
+        total_observations=len(compact_observations),
+        started_at=progress_started_at,
+    )
     progress = tqdm(
         total=2 * len(chunks),
         desc="Mining workflow opportunities",
         unit="stage",
         disable=not show_progress,
     )
-    trace_rows: list[dict[str, Any]] = []
-    all_signals: list[ShortWindowSignal] = []
-    all_verified_opportunities: list[dict[str, Any]] = []
+    progress.update(completed_steps)
+    trace_rows = existing_trace_rows[:completed_discovery_chunks]
+    all_signals = [
+        ShortWindowSignal.from_dict(row)
+        for row in resume_state.get("accepted_signals", [])
+        if isinstance(row, dict)
+    ]
+    all_verified_opportunities = [
+        row
+        for row in resume_state.get("verified_opportunities", [])
+        if isinstance(row, dict)
+    ]
+    if not resume_state:
+        _write_resume_state(
+            resume_out,
+            config=resume_config,
+            status="discovering",
+            source_observation_ids=source_observation_ids,
+            last_observation_ts=last_observation_ts,
+            completed_discovery_chunks=0,
+            completed_trigger_chunks=0,
+            verified_opportunities=[],
+            accepted_signals=[],
+        )
     observations_by_id = {
         observation.observation_id: observation for observation in observations
     }
     # Phase 1: discover and verify evidence across every chunk before choosing
     # any correction targets.
     for chunk_index, (compact, discovery_user_prompt) in enumerate(chunks, start=1):
+        if chunk_index <= completed_discovery_chunks:
+            continue
         chunk_ids = {str(row["observation_id"]) for row in compact}
         trace_row: dict[str, Any] = {
             "strategy": "large_context_chunks",
@@ -278,6 +400,16 @@ def derive_retrospective_signals(
             required_list_field="support_opportunities",
         )
         progress.update(1)
+        completed_steps += 1
+        _write_progress(
+            progress_out,
+            status="verifying",
+            completed_steps=completed_steps,
+            total_steps=total_steps,
+            processed_observations=processed_observations,
+            total_observations=len(compact_observations),
+            started_at=progress_started_at,
+        )
         candidates, discovery_reviews = _review_discovery(
             discovery_parsed,
             observation_ids=chunk_ids,
@@ -341,6 +473,16 @@ def derive_retrospective_signals(
             )
             all_verified_opportunities.extend(verified_opportunities)
         progress.update(1)
+        completed_steps += 1
+        _write_progress(
+            progress_out,
+            status="discovering",
+            completed_steps=completed_steps,
+            total_steps=total_steps,
+            processed_observations=processed_observations,
+            total_observations=len(compact_observations),
+            started_at=progress_started_at,
+        )
         trace_row.update(
             {
                 "status": "evidence_verification_complete",
@@ -352,6 +494,18 @@ def derive_retrospective_signals(
             }
         )
         _write_trace_snapshots(trace_out, trace_rows)
+        completed_discovery_chunks = chunk_index
+        _write_resume_state(
+            resume_out,
+            config=resume_config,
+            status="discovering",
+            source_observation_ids=source_observation_ids,
+            last_observation_ts=last_observation_ts,
+            completed_discovery_chunks=completed_discovery_chunks,
+            completed_trigger_chunks=0,
+            verified_opportunities=all_verified_opportunities,
+            accepted_signals=[],
+        )
 
     # Phase 2: every trigger-labeling call sees all verified opportunities,
     # while candidate triggers are scoped to smaller chunks. Keeping these
@@ -364,8 +518,42 @@ def derive_retrospective_signals(
         max_observations=trigger_max_observations,
         max_input_chars=max_input_chars,
     )
-    progress.total += len(trigger_chunks)
+    completed_trigger_chunks = (
+        int(resume_state.get("completed_trigger_chunks", 0) or 0)
+        if resume_phase == "grounding"
+        else 0
+    )
+    if not 0 <= completed_trigger_chunks <= len(trigger_chunks):
+        completed_trigger_chunks = 0
+        all_signals = []
+    processed_observations = sum(
+        len(compact) for compact in trigger_chunks[:completed_trigger_chunks]
+    )
+    completed_steps = 2 * len(chunks) + completed_trigger_chunks
+    total_steps = 2 * len(chunks) + len(trigger_chunks)
+    _write_progress(
+        progress_out,
+        status="grounding",
+        completed_steps=completed_steps,
+        total_steps=total_steps,
+        processed_observations=processed_observations,
+        total_observations=len(compact_observations),
+        started_at=progress_started_at,
+    )
+    progress.total = total_steps
+    progress.update(completed_trigger_chunks)
     progress.refresh()
+    _write_resume_state(
+        resume_out,
+        config=resume_config,
+        status="grounding",
+        source_observation_ids=source_observation_ids,
+        last_observation_ts=last_observation_ts,
+        completed_discovery_chunks=len(chunks),
+        completed_trigger_chunks=completed_trigger_chunks,
+        verified_opportunities=all_verified_opportunities,
+        accepted_signals=all_signals,
+    )
     discovery_trace_by_observation_id: dict[str, int] = {}
     for trace_index, (compact, _prompt) in enumerate(chunks):
         for row in compact:
@@ -374,6 +562,8 @@ def derive_retrospective_signals(
             )
 
     for chunk_index, compact in enumerate(trigger_chunks, start=1):
+        if chunk_index <= completed_trigger_chunks:
+            continue
         trace_index = discovery_trace_by_observation_id[
             str(compact[0]["observation_id"])
         ]
@@ -434,6 +624,17 @@ def derive_retrospective_signals(
             )
             all_signals.extend(accepted_signals)
         progress.update(1)
+        completed_steps += 1
+        processed_observations += len(compact)
+        _write_progress(
+            progress_out,
+            status="grounding",
+            completed_steps=completed_steps,
+            total_steps=total_steps,
+            processed_observations=processed_observations,
+            total_observations=len(compact_observations),
+            started_at=progress_started_at,
+        )
         trigger_run = {
             "trigger_chunk_index": chunk_index,
             "trigger_chunk_count": len(trigger_chunks),
@@ -479,9 +680,42 @@ def derive_retrospective_signals(
             }
         )
         _write_trace_snapshots(trace_out, trace_rows)
+        completed_trigger_chunks = chunk_index
+        _write_resume_state(
+            resume_out,
+            config=resume_config,
+            status="grounding",
+            source_observation_ids=source_observation_ids,
+            last_observation_ts=last_observation_ts,
+            completed_discovery_chunks=len(chunks),
+            completed_trigger_chunks=completed_trigger_chunks,
+            verified_opportunities=all_verified_opportunities,
+            accepted_signals=all_signals,
+        )
     for trace_row in trace_rows:
         trace_row["status"] = "complete"
     _write_trace_snapshots(trace_out, trace_rows)
+    processed_observations = len(compact_observations)
+    _write_progress(
+        progress_out,
+        status="complete",
+        completed_steps=completed_steps,
+        total_steps=total_steps,
+        processed_observations=processed_observations,
+        total_observations=len(compact_observations),
+        started_at=progress_started_at,
+    )
+    _write_resume_state(
+        resume_out,
+        config=resume_config,
+        status="complete",
+        source_observation_ids=source_observation_ids,
+        last_observation_ts=last_observation_ts,
+        completed_discovery_chunks=len(chunks),
+        completed_trigger_chunks=len(trigger_chunks),
+        verified_opportunities=all_verified_opportunities,
+        accepted_signals=all_signals,
+    )
     progress.close()
     return sorted(_deduplicate_signals(all_signals), key=lambda signal: signal.ts)
 
@@ -1314,6 +1548,104 @@ def _write_trace_snapshots(
 ) -> None:
     if trace_out is not None:
         write_jsonl(trace_out, trace_rows)
+
+
+def _read_resume_state(
+    resume_out: str | Path | None,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if resume_out is None:
+        return {}
+    try:
+        value = json.loads(Path(resume_out).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    if value.get("version") != 1 or value.get("config") != config:
+        return {}
+    if value.get("status") not in {"discovering", "grounding", "complete"}:
+        return {}
+    if not isinstance(value.get("source_observation_ids"), list):
+        return {}
+    if not isinstance(value.get("verified_opportunities"), list):
+        return {}
+    if not isinstance(value.get("accepted_signals"), list):
+        return {}
+    for field in ("completed_discovery_chunks", "completed_trigger_chunks"):
+        if not isinstance(value.get(field), int) or value[field] < 0:
+            return {}
+    return value
+
+
+def _write_resume_state(
+    resume_out: str | Path | None,
+    *,
+    config: dict[str, Any],
+    status: str,
+    source_observation_ids: list[str],
+    last_observation_ts: float,
+    completed_discovery_chunks: int,
+    completed_trigger_chunks: int,
+    verified_opportunities: list[dict[str, Any]],
+    accepted_signals: list[ShortWindowSignal],
+) -> None:
+    if resume_out is None:
+        return
+    path = Path(resume_out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "config": config,
+                "status": status,
+                "source_observation_ids": source_observation_ids,
+                "last_observation_ts": last_observation_ts,
+                "completed_discovery_chunks": completed_discovery_chunks,
+                "completed_trigger_chunks": completed_trigger_chunks,
+                "verified_opportunities": verified_opportunities,
+                "accepted_signals": [signal.to_dict() for signal in accepted_signals],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+
+
+def _write_progress(
+    progress_out: str | Path | None,
+    *,
+    status: str,
+    completed_steps: int,
+    total_steps: int,
+    processed_observations: int,
+    total_observations: int,
+    started_at: float,
+) -> None:
+    if progress_out is None:
+        return
+    path = Path(progress_out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(
+        json.dumps(
+            {
+                "status": status,
+                "completed_steps": completed_steps,
+                "total_steps": total_steps,
+                "processed_observations": processed_observations,
+                "total_observations": total_observations,
+                "started_at": started_at,
+                "updated_at": time.time(),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
 
 
 def _truncate(value: Any, limit: int) -> str:

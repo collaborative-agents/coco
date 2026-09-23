@@ -827,11 +827,13 @@ def test_retrospective_max_observations_chunks_without_downsampling(
 
     monkeypatch.setattr(retrospective, "_complete", fake_completion)
     trace_out = tmp_path / "retrospective_chunks.jsonl"
+    progress_out = tmp_path / "retrospective_progress.json"
     signals = retrospective.derive_retrospective_signals(
         load_records(tmp_path),
         model="fake/model",
         max_observations=3,
         trace_out=trace_out,
+        progress_out=progress_out,
     )
 
     assert signals == []
@@ -843,6 +845,166 @@ def test_retrospective_max_observations_chunks_without_downsampling(
     assert all(prompt["chunk_count"] == 3 for prompt in prompts)
     trace_rows = [json.loads(line) for line in trace_out.read_text().splitlines()]
     assert [row["chunk_index"] for row in trace_rows] == [1, 2, 3]
+    progress = json.loads(progress_out.read_text())
+    assert progress["status"] == "complete"
+    assert progress["completed_steps"] == 7
+    assert progress["total_steps"] == 7
+    assert progress["processed_observations"] == 7
+    assert progress["total_observations"] == 7
+
+
+def test_retrospective_resumes_completed_chunks_and_freezes_observations(
+    tmp_path, monkeypatch
+):
+    session = tmp_path / "session_1"
+    session.mkdir()
+
+    def write_observations(count):
+        _append_jsonl(
+            session / "observations.jsonl",
+            [
+                {
+                    "observation_id": f"obs-{index}",
+                    "session_id": "s1",
+                    "ts": float(index),
+                    "type": "snapshot",
+                    "model": "fake",
+                    "observer_input": "prompt",
+                    "observer_output": json.dumps({"need_support": "no"}),
+                }
+                for index in range(count)
+            ],
+        )
+
+    write_observations(7)
+    prompts = []
+    failed = False
+
+    def flaky_completion(**kwargs):
+        nonlocal failed
+        prompt = json.loads(kwargs["user_prompt"])
+        prompts.append(prompt)
+        if prompt["chunk_index"] == 2 and not failed:
+            failed = True
+            raise RuntimeError("interrupted")
+        return json.dumps({"support_opportunities": []})
+
+    monkeypatch.setattr(retrospective, "_complete", flaky_completion)
+    trace_out = tmp_path / "retrospective_trace.jsonl"
+    progress_out = tmp_path / "retrospective_progress.json"
+    resume_out = tmp_path / "retrospective_resume.json"
+    with pytest.raises(RuntimeError, match="interrupted"):
+        retrospective.derive_retrospective_signals(
+            load_records(tmp_path),
+            model="fake/model",
+            max_observations=3,
+            trace_out=trace_out,
+            progress_out=progress_out,
+            resume_out=resume_out,
+        )
+
+    checkpoint = json.loads(resume_out.read_text())
+    assert checkpoint["completed_discovery_chunks"] == 1
+
+    # Activity captured while the worker is paused belongs to the next run.
+    write_observations(8)
+    assert (
+        retrospective.derive_retrospective_signals(
+            load_records(tmp_path),
+            model="fake/model",
+            max_observations=3,
+            trace_out=trace_out,
+            progress_out=progress_out,
+            resume_out=resume_out,
+        )
+        == []
+    )
+
+    assert [prompt["chunk_index"] for prompt in prompts].count(1) == 1
+    assert all(
+        row["observation_id"] != "obs-7"
+        for prompt in prompts
+        for row in prompt["timeline"]
+    )
+    checkpoint = json.loads(resume_out.read_text())
+    assert checkpoint["status"] == "complete"
+    assert checkpoint["source_observation_ids"] == [
+        f"obs-{index}" for index in range(7)
+    ]
+
+
+def test_retrospective_resumes_completed_grounding_chunks(tmp_path, monkeypatch):
+    session = tmp_path / "session_1"
+    session.mkdir()
+    _append_jsonl(
+        session / "observations.jsonl",
+        [
+            {
+                "observation_id": f"obs-{index}",
+                "session_id": "s1",
+                "ts": float(index),
+                "type": "snapshot",
+                "model": "fake",
+                "observer_input": "prompt",
+                "observer_output": json.dumps({"need_support": "no"}),
+            }
+            for index in range(7)
+        ],
+    )
+    monkeypatch.setattr(
+        retrospective,
+        "_complete",
+        lambda **_kwargs: json.dumps({"support_opportunities": []}),
+    )
+    original_write_resume = retrospective._write_resume_state
+    interrupted = False
+
+    def interrupt_after_first_grounding(*args, **kwargs):
+        nonlocal interrupted
+        original_write_resume(*args, **kwargs)
+        if (
+            not interrupted
+            and kwargs["status"] == "grounding"
+            and kwargs["completed_trigger_chunks"] == 1
+        ):
+            interrupted = True
+            raise RuntimeError("interrupted after grounding checkpoint")
+
+    monkeypatch.setattr(
+        retrospective,
+        "_write_resume_state",
+        interrupt_after_first_grounding,
+    )
+    trace_out = tmp_path / "retrospective_trace.jsonl"
+    resume_out = tmp_path / "retrospective_resume.json"
+    with pytest.raises(RuntimeError, match="grounding checkpoint"):
+        retrospective.derive_retrospective_signals(
+            load_records(tmp_path),
+            model="fake/model",
+            max_observations=3,
+            trigger_max_observations=2,
+            trace_out=trace_out,
+            resume_out=resume_out,
+        )
+
+    checkpoint = json.loads(resume_out.read_text())
+    assert checkpoint["completed_trigger_chunks"] == 1
+    assert (
+        retrospective.derive_retrospective_signals(
+            load_records(tmp_path),
+            model="fake/model",
+            max_observations=3,
+            trigger_max_observations=2,
+            trace_out=trace_out,
+            resume_out=resume_out,
+        )
+        == []
+    )
+    trace_rows = [json.loads(line) for line in trace_out.read_text().splitlines()]
+    trigger_indices = [
+        run["trigger_chunk_index"] for row in trace_rows for run in row["trigger_runs"]
+    ]
+    assert trigger_indices == [1, 2, 3, 4]
 
 
 def test_retrospective_default_character_budget_chunks_large_timelines(
