@@ -391,6 +391,11 @@
   transition: width 900ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+.personalization-progress--indeterminate span {
+  width: 28%;
+  animation: personalization-progress-indeterminate 1.5s ease-in-out infinite;
+}
+
 .personalization-discovery {
   margin-top: 11px;
   border: 1px solid #cfe0fb;
@@ -670,6 +675,15 @@
 @keyframes personalization-progress-flow {
   to {
     transform: translateX(100%);
+  }
+}
+
+@keyframes personalization-progress-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(360%);
   }
 }
 
@@ -983,6 +997,7 @@
   .personalization-milestone--current,
   .personalization-overview--completed,
   .personalization-progress--large span::after,
+  .personalization-progress--indeterminate span,
   .personalization-run-animation--discovered::before,
   .personalization-run-animation--discovered::after,
   .personalization-discovery {

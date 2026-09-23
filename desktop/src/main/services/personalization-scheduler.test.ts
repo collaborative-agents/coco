@@ -70,6 +70,125 @@ describe('PersonalizationScheduler status', () => {
     );
   });
 
+  it('does not report a previous completed run as current progress', () => {
+    const stateRoot = path.join(root, 'personalization');
+    const oldRunDir = path.join(stateRoot, 'runs', 'period-1000');
+    const oldSnapshotPath = path.join(oldRunDir, 'labeled_moments.jsonl');
+    fs.mkdirSync(oldRunDir, { recursive: true });
+    fs.writeFileSync(
+      oldSnapshotPath,
+      `${Array.from({ length: 8 }, (_, index) =>
+        JSON.stringify({ id: index }),
+      ).join('\n')}\n`,
+    );
+    fs.writeFileSync(
+      path.join(oldRunDir, 'resume_state.json'),
+      JSON.stringify({ status: 'complete', n_seen: 0 }),
+    );
+    fs.writeFileSync(
+      path.join(stateRoot, 'evolve_checkpoint.json'),
+      JSON.stringify({
+        active_run: {
+          run_id: 'period-1000',
+          status: 'complete',
+          period_start: 900,
+          period_end: 1000,
+          run_dir: oldRunDir,
+          snapshot_path: oldSnapshotPath,
+        },
+      }),
+    );
+
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot,
+      memoryRoot: root,
+      model: 'provider/model',
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+    });
+    const internals = scheduler as unknown as {
+      active: Record<string, never>;
+      activeJob: 'evolve';
+      activeStartedAt: number;
+      evolveCheckpointAtStart: { runId: string; status: string };
+    };
+    internals.active = {};
+    internals.activeJob = 'evolve';
+    internals.activeStartedAt = Date.now() - 40_000;
+    internals.evolveCheckpointAtStart = {
+      runId: 'period-1000',
+      status: 'complete',
+    };
+    fs.writeFileSync(
+      path.join(stateRoot, 'retrospective_progress.json'),
+      JSON.stringify({
+        status: 'grounding',
+        completed_steps: 4,
+        total_steps: 10,
+        processed_observations: 20,
+        total_observations: 80,
+        started_at: internals.activeStartedAt / 1_000,
+      }),
+    );
+
+    const preparingStatus = scheduler.getStatus();
+    expect(preparingStatus).toEqual(
+      expect.objectContaining({
+        state: 'running',
+        activeJob: 'evolve',
+        checkpointStatus: 'preparing',
+        preparation: expect.objectContaining({
+          completedSteps: 4,
+          totalSteps: 10,
+          totalObservations: 80,
+          remainingObservations: 60,
+          estimatedSecondsRemaining: expect.any(Number),
+        }),
+      }),
+    );
+    expect(preparingStatus.processedSamples).toBeUndefined();
+    expect(preparingStatus.totalSamples).toBeUndefined();
+
+    const currentRunDir = path.join(stateRoot, 'runs', 'period-2000');
+    const currentSnapshotPath = path.join(
+      currentRunDir,
+      'labeled_moments.jsonl',
+    );
+    fs.mkdirSync(currentRunDir, { recursive: true });
+    fs.writeFileSync(
+      currentSnapshotPath,
+      `${Array.from({ length: 6 }, (_, index) =>
+        JSON.stringify({ id: index }),
+      ).join('\n')}\n`,
+    );
+    fs.writeFileSync(
+      path.join(currentRunDir, 'resume_state.json'),
+      JSON.stringify({ status: 'running', n_seen: 2 }),
+    );
+    fs.writeFileSync(
+      path.join(stateRoot, 'evolve_checkpoint.json'),
+      JSON.stringify({
+        active_run: {
+          run_id: 'period-2000',
+          status: 'running',
+          run_dir: currentRunDir,
+          snapshot_path: currentSnapshotPath,
+        },
+      }),
+    );
+
+    expect(scheduler.getStatus()).toEqual(
+      expect.objectContaining({
+        state: 'running',
+        checkpointStatus: 'running',
+        processedSamples: 2,
+        totalSamples: 6,
+      }),
+    );
+  });
+
   it('counts unique successful desktop personalization updates', () => {
     const memoryRoot = path.join(root, 'memory');
     const draftsRoot = path.join(memoryRoot, 'memory_drafts');
@@ -151,6 +270,26 @@ describe('PersonalizationScheduler status', () => {
     const { args } = commandBuilder.command('evolve');
 
     expect(args).toEqual(expect.arrayContaining(['--llm-concurrency', '3']));
+  });
+
+  it('can bypass retrospective preparation for a local demo', () => {
+    const scheduler = new PersonalizationScheduler({
+      projectRoot: root,
+      recordsRoot: path.join(root, 'records'),
+      stateRoot: path.join(root, 'personalization'),
+      memoryRoot: root,
+      model: 'provider/model',
+      collectTrainingScreenshots: false,
+      getIdleSeconds: () => 0,
+      skipRetrospective: true,
+    });
+    const commandBuilder = scheduler as unknown as {
+      command: (job: 'evolve') => { args: string[] };
+    };
+
+    expect(commandBuilder.command('evolve').args).toContain(
+      '--skip-retrospective',
+    );
   });
 
   it('uses updated model settings without restarting the scheduler', () => {

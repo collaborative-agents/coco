@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import log from 'electron-log';
+import { readPersonalizationPreparationEstimate } from './personalization-preparation-estimate';
 
 export type PersonalizationJob = 'signals' | 'revise' | 'evolve';
 
@@ -39,6 +40,13 @@ export interface PersonalizationStatus {
   activeJob?: PersonalizationJob;
   activeStartedAt?: number;
   checkpointStatus?: string;
+  preparation?: {
+    completedSteps: number;
+    totalSteps: number;
+    totalObservations: number;
+    remainingObservations: number;
+    estimatedSecondsRemaining?: number;
+  };
   processedSamples?: number;
   totalSamples?: number;
   periodStart?: number;
@@ -140,6 +148,8 @@ export interface PersonalizationSchedulerOptions {
   missedObservationInterval?: number;
   /** Parallel prediction/reflection requests within one Coco-PE batch. */
   evolveConcurrency?: number;
+  /** Demo-only escape hatch; skipped work remains queued for a future run. */
+  skipRetrospective?: boolean;
   /** Dedicated subprocess log, alongside the sensing and tutor service logs. */
   logPath?: string;
   onJobComplete?: (job: PersonalizationJob) => void;
@@ -158,6 +168,10 @@ export class PersonalizationScheduler {
   private activeJob: PersonalizationJob | null = null;
 
   private activeStartedAt: number | null = null;
+
+  private evolveCheckpointAtStart:
+    | { runId?: string; status?: string }
+    | undefined;
 
   private activeOutput = '';
 
@@ -271,7 +285,21 @@ export class PersonalizationScheduler {
     const evolveCheckpoint = readJson(
       path.join(this.options.stateRoot, 'evolve_checkpoint.json'),
     );
-    const activeRun = asObject(evolveCheckpoint?.active_run);
+    const diskActiveRun = asObject(evolveCheckpoint?.active_run);
+    const diskRunId = stringValue(diskActiveRun?.run_id);
+    const diskRunStatus = stringValue(diskActiveRun?.status);
+    const awaitingCurrentEvolveCheckpoint = Boolean(
+      this.active &&
+        this.activeJob === 'evolve' &&
+        this.evolveCheckpointAtStart !== undefined &&
+        (this.evolveCheckpointAtStart.status === 'complete' ||
+          this.evolveCheckpointAtStart.runId === undefined) &&
+        diskRunStatus === this.evolveCheckpointAtStart.status &&
+        diskRunId === this.evolveCheckpointAtStart.runId,
+    );
+    const activeRun = awaitingCurrentEvolveCheckpoint
+      ? undefined
+      : diskActiveRun;
     const runDir = stringValue(activeRun?.run_dir);
     const snapshotPath = stringValue(activeRun?.snapshot_path);
     const resumeState = runDir
@@ -280,8 +308,16 @@ export class PersonalizationScheduler {
     const totalSamples = snapshotPath
       ? countJsonLines(snapshotPath)
       : undefined;
-    const checkpointStatus =
-      stringValue(resumeState?.status) ?? stringValue(activeRun?.status);
+    const checkpointStatus = awaitingCurrentEvolveCheckpoint
+      ? 'preparing'
+      : (stringValue(resumeState?.status) ?? stringValue(activeRun?.status));
+    const preparation =
+      awaitingCurrentEvolveCheckpoint && this.activeStartedAt
+        ? readPersonalizationPreparationEstimate(
+            this.options.stateRoot,
+            this.activeStartedAt,
+          )
+        : undefined;
     let processedSamples = numberValue(resumeState?.n_seen);
     if (
       totalSamples !== undefined &&
@@ -304,6 +340,7 @@ export class PersonalizationScheduler {
       ...(this.activeJob && { activeJob: this.activeJob }),
       ...(this.activeStartedAt && { activeStartedAt: this.activeStartedAt }),
       ...(checkpointStatus && { checkpointStatus }),
+      ...(preparation && { preparation }),
       ...(processedSamples !== undefined && { processedSamples }),
       ...(totalSamples !== undefined && { totalSamples }),
       ...(numberValue(activeRun?.period_start) !== undefined && {
@@ -381,6 +418,7 @@ export class PersonalizationScheduler {
       if (this.options.collectTrainingScreenshots) {
         common.push('--collect-training-screenshots');
       }
+      if (this.options.skipRetrospective) common.push('--skip-retrospective');
     }
     if (this.options.packagedExecutable) {
       return { command: this.options.packagedExecutable, args: common };
@@ -402,6 +440,22 @@ export class PersonalizationScheduler {
   private run(job: PersonalizationJob) {
     const runId = randomUUID();
     const startedAt = Date.now();
+    if (job === 'evolve') {
+      const checkpoint = readJson(
+        path.join(this.options.stateRoot, 'evolve_checkpoint.json'),
+      );
+      const activeRun = asObject(checkpoint?.active_run);
+      this.evolveCheckpointAtStart = {
+        ...(stringValue(activeRun?.run_id) && {
+          runId: stringValue(activeRun?.run_id),
+        }),
+        ...(stringValue(activeRun?.status) && {
+          status: stringValue(activeRun?.status),
+        }),
+      };
+    } else {
+      this.evolveCheckpointAtStart = undefined;
+    }
     const base = this.command(job);
     const useNice = process.platform !== 'win32';
     const command = useNice ? 'nice' : base.command;
@@ -484,6 +538,7 @@ export class PersonalizationScheduler {
       if (this.active === child) this.active = null;
       if (this.activeJob === job) this.activeJob = null;
       this.activeStartedAt = null;
+      if (job === 'evolve') this.evolveCheckpointAtStart = undefined;
       if (job === 'signals' && (code !== 0 || signal)) {
         this.pendingSignals = true;
       }

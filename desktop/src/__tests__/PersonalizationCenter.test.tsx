@@ -157,6 +157,51 @@ describe('PersonalizationCenter', () => {
     );
   });
 
+  it('shows indeterminate preparation instead of stale completed progress', async () => {
+    (window as any).electron = {
+      ipcRenderer: {
+        invoke: jest.fn().mockResolvedValue({
+          status: {
+            ...status,
+            checkpointStatus: 'preparing',
+            preparation: {
+              completedSteps: 4,
+              totalSteps: 10,
+              totalObservations: 80,
+              remainingObservations: 60,
+              estimatedSecondsRemaining: 600,
+            },
+            processedSamples: undefined,
+            totalSamples: undefined,
+          },
+          center,
+        }),
+        on: jest.fn(),
+        sendMessage: jest.fn(),
+      },
+    };
+
+    render(<PersonalizationCenter onBack={jest.fn()} />);
+
+    expect(
+      await screen.findByText('Preparing the learning run'),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Collect: current')).toBeInTheDocument();
+    expect(screen.getByLabelText('Learn: waiting')).toBeInTheDocument();
+    expect(screen.queryByText(/moments processed/)).not.toBeInTheDocument();
+    expect(screen.getByText(/About 10 min remaining/)).toBeInTheDocument();
+    expect(screen.getByText('60').parentElement).toHaveTextContent(
+      '60 observations to process',
+    );
+    expect(screen.queryByText(/completed updates/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('progressbar', {
+        name: 'Personalization run progress',
+      }),
+    ).toHaveAttribute('aria-valuetext', 'Preparing current run');
+    expect(screen.queryByText('Just learned')).not.toBeInTheDocument();
+  });
+
   it('shows live checkpoints and persists a card-by-card review', async () => {
     const invoke = jest.fn((channel: string) => {
       if (channel === 'get-personalization-center') {

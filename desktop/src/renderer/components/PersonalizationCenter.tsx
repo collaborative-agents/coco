@@ -21,6 +21,13 @@ export interface PersonalizationStatusInfo {
   activeJob?: 'signals' | 'revise' | 'evolve';
   activeStartedAt?: number;
   checkpointStatus?: string;
+  preparation?: {
+    completedSteps: number;
+    totalSteps: number;
+    totalObservations: number;
+    remainingObservations: number;
+    estimatedSecondsRemaining?: number;
+  };
   processedSamples?: number;
   totalSamples?: number;
   periodStart?: number;
@@ -167,6 +174,12 @@ function formatTime(timestamp: number, seconds = false): string {
 function statusTitle(status: PersonalizationStatusInfo | null): string {
   if (!status?.available) return 'Personalization is not ready';
   if (status.state === 'running') {
+    if (status.checkpointStatus === 'preparing') {
+      return 'Preparing the learning run';
+    }
+    if (status.checkpointStatus === 'complete') {
+      return 'Finishing the learning update';
+    }
     return status.activeJob
       ? JOB_LABELS[status.activeJob]
       : 'Personalization is running';
@@ -189,6 +202,19 @@ function progressOf(status: PersonalizationStatusInfo | null) {
     processed,
     percent: total > 0 ? Math.round((processed / total) * 100) : 0,
   };
+}
+
+function preparationTimeLabel(
+  status: PersonalizationStatusInfo | null,
+): string {
+  if (status?.checkpointStatus !== 'preparing') return '';
+  const seconds = status.preparation?.estimatedSecondsRemaining;
+  if (seconds === undefined) return 'Estimating time remaining…';
+  if (seconds < 60) return 'Less than a minute remaining';
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  if (minutes < 90) return `About ${minutes} min remaining`;
+  const hours = Math.round((minutes / 60) * 2) / 2;
+  return `About ${hours} ${hours === 1 ? 'hour' : 'hours'} remaining`;
 }
 
 function decisionLabel(decision?: ReviewDecision): string {
@@ -243,6 +269,12 @@ function dailyStatus(
 function detailedStatusTitle(status: PersonalizationStatusInfo | null): string {
   if (!status?.available) return 'Personalization is not ready';
   if (status.state === 'running') {
+    if (status.checkpointStatus === 'preparing') {
+      return 'Preparing the learning run';
+    }
+    if (status.checkpointStatus === 'complete') {
+      return 'Finishing the learning update';
+    }
     const label = status.activeJob
       ? JOB_LABELS[status.activeJob]
       : 'Personalization';
@@ -328,7 +360,7 @@ export function PersonalizationStatusPanel({
           </div>
         </div>
       )}
-      {progress.total > 0 && (
+      {status?.checkpointStatus !== 'preparing' && progress.total > 0 && (
         <>
           <div className="personalization-status-meta">
             {progress.processed} of {progress.total} samples processed ·{' '}
@@ -345,6 +377,11 @@ export function PersonalizationStatusPanel({
             <span style={{ width: `${progress.percent}%` }} />
           </div>
         </>
+      )}
+      {status?.checkpointStatus === 'preparing' && (
+        <div className="personalization-status-meta">
+          {preparationTimeLabel(status)}
+        </div>
       )}
       {status?.checkpointStatus && (
         <div className="personalization-status-meta">
@@ -481,6 +518,8 @@ export default function PersonalizationCenter({
   } = useProvisionalDiscovery(response ? provisional : undefined, {
     active:
       response?.status.checkpointStatus !== 'finalizing' &&
+      response?.status.checkpointStatus !== 'preparing' &&
+      response?.status.checkpointStatus !== 'complete' &&
       (response?.status.state === 'running' ||
         response?.status.state === 'checkpointed'),
   });
@@ -504,7 +543,14 @@ export default function PersonalizationCenter({
   const progress = progressOf(response?.status ?? null);
   const runStatus = response?.status;
   const runCompleted = runStatus?.state === 'completed';
-  const finalizing = runStatus?.checkpointStatus === 'finalizing';
+  const preparing = runStatus?.checkpointStatus === 'preparing';
+  const observationsToProcess = preparing
+    ? (runStatus?.preparation?.remainingObservations ?? 0)
+    : Math.max(0, progress.total - progress.processed);
+  const finalizing =
+    runStatus?.checkpointStatus === 'finalizing' ||
+    (runStatus?.state === 'running' &&
+      runStatus?.checkpointStatus === 'complete');
   const stageMilestones: Array<{
     label: string;
     state: MilestoneState;
@@ -513,29 +559,32 @@ export default function PersonalizationCenter({
       label: 'Collect',
       state: milestoneState(
         Boolean(
-          runStatus?.signals ||
-            runStatus?.activeJob === 'revise' ||
-            runStatus?.activeJob === 'evolve' ||
-            runCompleted,
+          !preparing &&
+            (runStatus?.signals ||
+              runStatus?.activeJob === 'revise' ||
+              runStatus?.activeJob === 'evolve' ||
+              runCompleted),
         ),
-        runStatus?.activeJob === 'signals',
+        preparing || runStatus?.activeJob === 'signals',
       ),
     },
     {
       label: 'Check',
       state: milestoneState(
         Boolean(
-          runStatus?.activeJob === 'evolve' || finalizing || runCompleted,
+          !preparing &&
+            (runStatus?.activeJob === 'evolve' || finalizing || runCompleted),
         ),
-        runStatus?.activeJob === 'revise',
+        !preparing && runStatus?.activeJob === 'revise',
       ),
     },
     {
       label: 'Learn',
       state: milestoneState(
         Boolean(finalizing || runCompleted),
-        runStatus?.activeJob === 'evolve' ||
-          runStatus?.state === 'checkpointed',
+        !preparing &&
+          (runStatus?.activeJob === 'evolve' ||
+            runStatus?.state === 'checkpointed'),
       ),
     },
     {
@@ -554,13 +603,25 @@ export default function PersonalizationCenter({
   if (currentMilestone) milestoneMessage = currentMilestone.label;
   else if (applied) milestoneMessage = 'Preferences applied';
   else if (runCompleted) milestoneMessage = 'Learning complete';
-  const activity = response?.center?.activity ?? [];
+  const activity = preparing ? [] : (response?.center?.activity ?? []);
   let cocoState: PersonalizationCocoState = 'sleeping';
   if (runStatus?.state === 'running' || runStatus?.state === 'checkpointed') {
     cocoState = 'training';
   } else if (runCompleted && !applied) {
     cocoState = 'waiting';
   }
+  let progressDescription = 'Coco checkpoints its work so it can pause safely.';
+  if (preparing) {
+    progressDescription = `Scanning recent activity before learning begins. ${preparationTimeLabel(runStatus ?? null)}`;
+  } else if (progress.total > 0) {
+    progressDescription = `${progress.processed} of ${progress.total} moments processed`;
+  }
+  let progressLabel = '';
+  if (preparing) progressLabel = 'Preparing';
+  else if (progress.total > 0) progressLabel = `${progress.percent}%`;
+  const progressStyle = preparing
+    ? undefined
+    : { width: `${progress.percent}%` };
 
   useEffect(() => {
     const nextState = response?.status.state;
@@ -690,11 +751,7 @@ export default function PersonalizationCenter({
             <div>
               <span className="personalization-kicker">Current run</span>
               <h2 aria-live="polite">{statusTitle(runStatus ?? null)}</h2>
-              <p>
-                {progress.total > 0
-                  ? `${progress.processed} of ${progress.total} moments processed`
-                  : 'Coco checkpoints its work so it can pause safely.'}
-              </p>
+              <p>{progressDescription}</p>
             </div>
             <div className="personalization-milestone-status">
               <div aria-label={`Current stage: ${milestoneMessage}`}>
@@ -712,16 +769,17 @@ export default function PersonalizationCenter({
           </div>
           <div className="personalization-progress-row">
             <div
-              className="personalization-progress personalization-progress--large"
+              className={`personalization-progress personalization-progress--large${preparing ? ' personalization-progress--indeterminate' : ''}`}
               role="progressbar"
               aria-label="Personalization run progress"
               aria-valuemin={0}
               aria-valuemax={100}
-              aria-valuenow={progress.percent}
+              aria-valuenow={preparing ? undefined : progress.percent}
+              aria-valuetext={preparing ? 'Preparing current run' : undefined}
             >
-              <span style={{ width: `${progress.percent}%` }} />
+              <span style={progressStyle} />
             </div>
-            <strong>{progress.total > 0 ? `${progress.percent}%` : ''}</strong>
+            <strong>{progressLabel}</strong>
           </div>
           {discoveredPreference && (
             <div
@@ -797,12 +855,9 @@ export default function PersonalizationCenter({
           </div>
           <div className="personalization-stats">
             <span>
-              <strong>{response?.status.signals?.signalCount ?? 0}</strong>{' '}
-              signals
-            </span>
-            <span>
-              <strong>{response?.status.successfulUpdateCount ?? 0}</strong>{' '}
-              completed updates
+              <strong>{observationsToProcess}</strong>{' '}
+              {observationsToProcess === 1 ? 'observation' : 'observations'} to
+              process
             </span>
           </div>
         </section>
