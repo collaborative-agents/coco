@@ -22,6 +22,8 @@ TutorSystem (prompts, chat history, memory, sensing, metrics)
 └── CompositeToolProvider
     ├── NativeToolProvider
     │   ├── observe_screen
+    │   ├── get_active_editing_context
+    │   │   └── MacOSAXProvider
     │   ├── get_user_context
     │   └── get_recent_observations
     ├── AppleCalendarProvider (EventKit)
@@ -35,6 +37,9 @@ and routes a call to its owner. A new email, Slack, or internal provider can be
 added in `proactive_tutor/tools/factory.py` without changing `TutorAgent`.
 
 Calendar tools are enabled for the `everyday_support` scenario.
+`get_active_editing_context` is available on macOS when Accessibility access is
+granted. It returns a bounded, secure-field-redacted semantic view of the
+focused editor and reports whether the exposed control text is complete.
 
 ### Usage
 

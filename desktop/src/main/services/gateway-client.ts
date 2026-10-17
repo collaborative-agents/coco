@@ -11,6 +11,7 @@ interface CocoGatewayClientOptions {
 
 export interface GatewayAuthCredentials {
   participantId: string;
+  email?: string;
   password: string;
   keepSignedIn: boolean;
 }
@@ -46,7 +47,7 @@ const silentLogger: GatewayLogger = {
   warn: () => {},
 };
 
-/** Authenticated HTTP client for the standalone dev/nv study Gateway. */
+/** Authenticated HTTP client for the shared Coco Gateway. */
 export class CocoGatewayClient {
   private readonly gatewayUrl: string;
 
@@ -55,6 +56,9 @@ export class CocoGatewayClient {
   private readonly logger: GatewayLogger;
 
   private authToken: string | null = null;
+
+  private readonly unsupportedOptionalOperations =
+    new Set<GatewayOperationType>();
 
   constructor(options: CocoGatewayClientOptions) {
     this.gatewayUrl = options.gatewayUrl.replace(/\/+$/, '');
@@ -122,6 +126,14 @@ export class CocoGatewayClient {
     }
   }
 
+  async signOut(): Promise<void> {
+    try {
+      await this.request('/api/auth/logout', 'POST');
+    } finally {
+      this.clearAuthSession();
+    }
+  }
+
   async issueRouterCredential(): Promise<GatewayRouterCredential> {
     const result = await this.request('/api/auth/router-credential', 'POST');
     const credential = {
@@ -146,7 +158,13 @@ export class CocoGatewayClient {
   async deliver(operation: GatewayQueuedOperation): Promise<void> {
     switch (operation.type) {
       case 'session_start':
-        await this.request('/api/storage/sessions', 'POST', operation.payload);
+        await this.request('/api/storage/sessions', 'POST', {
+          ...operation.payload,
+          // A manual start has no equivalent in the shared Gateway schema.
+          ...(operation.payload.start_trigger === 'manual'
+            ? { start_trigger: null }
+            : {}),
+        });
         return;
       case 'session_end': {
         const { session_id: sessionId, ...body } = operation.payload;
@@ -156,7 +174,14 @@ export class CocoGatewayClient {
         await this.request(
           `/api/storage/sessions/${encodeURIComponent(sessionId)}/end`,
           'PATCH',
-          body,
+          {
+            ...body,
+            // The shared Gateway requires recap/quiz fields even when Coco
+            // ends a conversation without a separate recap or quiz flow.
+            recap_completed_at: body.recap_completed_at ?? body.ended_at,
+            quiz_skipped: body.quiz_skipped ?? true,
+            quiz_answered: body.quiz_answered ?? false,
+          },
         );
         return;
       }
@@ -164,23 +189,23 @@ export class CocoGatewayClient {
         await this.request('/api/storage/messages', 'POST', operation.payload);
         return;
       case 'interaction_batch':
-        await this.request(
+        await this.deliverOptional(
+          operation.type,
           '/api/storage/interaction-events/batch',
-          'POST',
           operation.payload,
         );
         return;
       case 'fatal_error':
-        await this.request(
+        await this.deliverOptional(
+          operation.type,
           '/api/storage/fatal-errors',
-          'POST',
           operation.payload,
         );
         return;
       case 'personalization_run':
-        await this.request(
+        await this.deliverOptional(
+          operation.type,
           '/api/storage/personalization-run-events',
-          'POST',
           operation.payload,
         );
         return;
@@ -191,12 +216,37 @@ export class CocoGatewayClient {
     }
   }
 
+  private async deliverOptional(
+    type: GatewayOperationType,
+    path: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (this.unsupportedOptionalOperations.has(type)) return;
+    try {
+      await this.request(path, 'POST', payload);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        'status' in error &&
+        (error.status === 404 || error.status === 405)
+      ) {
+        this.unsupportedOptionalOperations.add(type);
+        this.logger.info(
+          `[Gateway] ${path} is unavailable; skipping optional events`,
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
   private async authenticate(
     path: string,
     credentials: GatewayAuthCredentials,
   ): Promise<GatewayAuthSession> {
     const result = await this.request(path, 'POST', {
       participant_id: credentials.participantId,
+      ...(credentials.email ? { email: credentials.email } : {}),
       password: credentials.password,
       keep_signed_in: credentials.keepSignedIn,
     });
@@ -248,7 +298,19 @@ export class CocoGatewayClient {
       // Non-JSON responses use the HTTP status fallback below.
     }
     if (!response.ok) {
-      throw new Error(String(result.detail ?? `HTTP ${response.status}`));
+      throw Object.assign(
+        new Error(
+          Array.isArray(result.detail)
+            ? result.detail
+                .map(
+                  (issue: { loc?: unknown[]; msg?: string }) =>
+                    `${issue.loc?.filter((part) => part !== 'body').join('.') || 'Request'}: ${issue.msg || 'Invalid value'}`,
+                )
+                .join('; ')
+            : String(result.detail ?? `HTTP ${response.status}`),
+        ),
+        { status: response.status },
+      );
     }
     return result;
   }

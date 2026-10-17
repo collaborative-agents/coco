@@ -32,6 +32,7 @@ type GatewayOperation = (
 
 export interface ChatSessionControllerOptions {
   appRunId: string;
+  isAgentBusy?: () => boolean;
   openChatForSession: (
     sessionId: string,
     problemStatement: string,
@@ -45,6 +46,12 @@ export default class ChatSessionController {
   private readonly options: ChatSessionControllerOptions;
 
   private active = false;
+
+  private ready: Promise<void> = Promise.resolve();
+
+  waitUntilReady(): Promise<void> {
+    return this.ready;
+  }
 
   private sessionId: string | null = null;
 
@@ -96,7 +103,11 @@ export default class ChatSessionController {
 
   registerConversationIpc(ipcMain: IpcMain): void {
     ipcMain.removeHandler('get-chat-conversations');
-    ipcMain.handle('get-chat-conversations', () => readConversations());
+    ipcMain.handle('get-chat-conversations', () =>
+      readConversations().filter(
+        (conversation) => conversation.messages.length > 0,
+      ),
+    );
 
     const save = (payload: Record<string, unknown> | null | undefined) => {
       saveConversation({
@@ -120,7 +131,29 @@ export default class ChatSessionController {
     );
   }
 
-  async start(
+  start(
+    problemStatement: string,
+    struggleSeconds: number,
+    seed?: ChatSeed,
+    startTrigger: SessionStartTrigger = 'manual',
+  ): Promise<string> {
+    if (this.options.isAgentBusy?.())
+      return Promise.reject(
+        new Error('Stop the current run before starting a new conversation.'),
+      );
+    const pending = this.startSession(
+      problemStatement,
+      struggleSeconds,
+      seed,
+      startTrigger,
+    );
+    this.ready = pending.then(() => undefined);
+    // The caller receives setup errors; keep the readiness promise handled too.
+    this.ready.catch(() => {});
+    return pending;
+  }
+
+  private async startSession(
     problemStatement: string,
     struggleSeconds: number,
     seed?: ChatSeed,
@@ -237,6 +270,11 @@ export default class ChatSessionController {
     tutorModelId?: string | null;
     error?: string;
   }> {
+    if (this.options.isAgentBusy?.())
+      return {
+        success: false,
+        error: 'Stop the current run before switching conversations.',
+      };
     const conversation = readConversations().find(
       (saved) => saved.sessionId === sessionId,
     );

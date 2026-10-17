@@ -53,4 +53,35 @@ describe('GatewayOutbox', () => {
       ).mode % 0o1000,
     ).toBe(0o600);
   });
+
+  it('continues to core writes when an optional route is absent', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({ detail: 'Not Found' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({ success: true }),
+      } as Response);
+    const client = new CocoGatewayClient({
+      gatewayUrl: 'https://study.example',
+      fetchImpl,
+    });
+    const outbox = new GatewayOutbox(directory, 'Participant-1', client);
+
+    outbox.enqueue('interaction_batch', { events: [] });
+    outbox.enqueue('message', { _id: 'message-1' });
+    await outbox.flush();
+
+    expect(outbox.pendingCount()).toBe(0);
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      'https://study.example/api/storage/messages',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
 });

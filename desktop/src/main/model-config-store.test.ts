@@ -2,6 +2,8 @@ import fs from 'fs';
 import {
   buildRoleModelEnvironments,
   credentialId,
+  prepareModelConnectionTest,
+  readModelConfiguration,
   MANAGED_DEFAULT_MODEL_CONFIGURATION,
   resolveTutorRuntimeConnection,
   routeModelConfigurationThroughLlmRouter,
@@ -348,5 +350,76 @@ describe('model configuration', () => {
     );
     expect(tutorEnv.TINKER_API_KEY).toBe('tinker-secret');
     expect(sensingEnv).not.toHaveProperty('TINKER_API_KEY');
+  });
+});
+
+describe('direct Settings connections', () => {
+  const connection = {
+    id: 'sensing',
+    label: 'NVIDIA',
+    provider: 'hosted_vllm' as const,
+    model: 'hosted_vllm/aws/anthropic/bedrock-claude-sonnet-4-6',
+    baseUrl: 'https://inference-api.nvidia.com/v1',
+  };
+  const config = {
+    version: 1 as const,
+    routing: 'direct' as const,
+    sensing: connection,
+    tutors: [{ ...connection, id: 'tutor', supportsAudio: false }],
+    defaultTutorId: 'tutor',
+  };
+
+  it('preserves direct NVIDIA endpoint settings instead of migrating them to the router', () => {
+    const read = jest
+      .spyOn(fs, 'readFileSync')
+      .mockReturnValue(JSON.stringify(config));
+    try {
+      expect(readModelConfiguration()).toEqual(config);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it('uses the configured endpoint and provider keys even with a router token present', () => {
+    const env = buildRoleModelEnvironments(
+      config,
+      {
+        'sensing:hosted_vllm': 'sensing-key',
+        'tutor:hosted_vllm': 'tutor-key',
+      },
+      {
+        LLM_ROUTER_URL: 'https://router.example.test',
+        LLM_ROUTER_API_KEY: 'router-key',
+      },
+    );
+    expect(env.sensingEnv.HOSTED_VLLM_API_BASE).toBe(connection.baseUrl);
+    expect(env.sensingEnv.HOSTED_VLLM_API_KEY).toBe('sensing-key');
+    expect(env.tutorEnv.HOSTED_VLLM_API_KEY).toBe('tutor-key');
+  });
+
+  it('tests the direct endpoint with the key entered in Settings', () => {
+    const previous = { ...process.env };
+    process.env.LLM_ROUTER_URL = 'https://router.example.test';
+    process.env.LLM_ROUTER_API_KEY = 'router-key';
+    const read = jest.spyOn(fs, 'readFileSync').mockReturnValue('{}');
+    try {
+      expect(
+        prepareModelConnectionTest(
+          connection,
+          'sensing',
+          'entered-key',
+          'direct',
+        ),
+      ).toEqual({
+        connection,
+        env: {
+          HOSTED_VLLM_API_BASE: connection.baseUrl,
+          HOSTED_VLLM_API_KEY: 'entered-key',
+        },
+      });
+    } finally {
+      read.mockRestore();
+      process.env = previous;
+    }
   });
 });

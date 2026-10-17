@@ -174,6 +174,7 @@ export function NotificationBubble({
   suggestion,
   onSuggestionAction,
   onChatAboutSuggestion,
+  onRunSuggestion,
   onOpenCocoChat,
   suggestionRating,
   onRateSuggestion,
@@ -193,6 +194,7 @@ export function NotificationBubble({
   suggestion?: InstantSuggestion;
   onSuggestionAction?: (toolId: string | null) => void;
   onChatAboutSuggestion?: () => void;
+  onRunSuggestion?: () => void;
   onOpenCocoChat?: () => void;
   suggestionRating?: 'up' | 'down' | null;
   onRateSuggestion?: (rating: 'up' | 'down') => void;
@@ -306,6 +308,7 @@ export function NotificationBubble({
               </button>
             ))}
           </div>
+          {onRunSuggestion && <button type="button" className="toast-action toast-coco-chat-action" onClick={onRunSuggestion}>Run this with Coco</button>}
           <button
             type="button"
             className="toast-action toast-coco-chat-action"
@@ -336,6 +339,7 @@ export function NotificationBubble({
       ) : (
         actionLabel && (
           <div className="toast-footer">
+            {isRevealedSuggestion && onRunSuggestion && <button type="button" className="toast-action toast-chat-action" onClick={onRunSuggestion}>Run this with Coco</button>}
             {isRevealedSuggestion && (
               <div className="toast-rating-actions">
                 {(['up', 'down'] as const).map((rating) => (
@@ -636,9 +640,10 @@ export default function NotificationView() {
     setCopyConfirmed(true);
   };
 
-  const handleChatAboutSuggestion = () => {
+  const handleChatAboutSuggestion = (execute = false) => {
     if (!payload.suggestion) return;
     ipc?.sendMessage('chat-about-suggestion', {
+      execute,
       observationId: payload.observationId,
       status: payload.status,
       rawObservation: payload.rawObservation,
@@ -672,7 +677,8 @@ export default function NotificationView() {
         onHoverChange={handleHoverChange}
         suggestion={payload.suggestion}
         onSuggestionAction={handleSuggestionAction}
-        onChatAboutSuggestion={handleChatAboutSuggestion}
+        onChatAboutSuggestion={() => handleChatAboutSuggestion()}
+        onRunSuggestion={() => handleChatAboutSuggestion(true)}
         onOpenCocoChat={handleOpenCocoChat}
         suggestionRating={suggestionRating}
         onRateSuggestion={rateInstantSuggestion}

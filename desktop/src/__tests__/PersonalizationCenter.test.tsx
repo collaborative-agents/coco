@@ -68,6 +68,22 @@ const center = {
 };
 
 describe('PersonalizationCenter', () => {
+  it('closes the page from its header', () => {
+    (window as any).electron = {
+      ipcRenderer: {
+        invoke: jest.fn().mockResolvedValue({ status, center }),
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+      },
+    };
+    const onBack = jest.fn();
+    render(<PersonalizationCenter onBack={onBack} />);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Close Personalization' }),
+    );
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
   it('uses sleeping, training, and waiting Coco art for the run state', () => {
     const { rerender } = render(
       <PersonalizationStatusPanel

@@ -9,8 +9,16 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import log from 'electron-log';
+import { parseAgentActivity } from '../shared/agent-execution';
+import type { AgentActivity } from '../shared/agent-execution';
+import { parseChatSuggestion } from '../shared/chat-suggestion';
+import type { ChatSuggestion } from '../shared/chat-suggestion';
 
 export interface StoredChatMessage {
+  activity?: AgentActivity[];
+  stopped?: boolean;
+  suggestion?: ChatSuggestion;
+  folded?: boolean;
   role: 'user' | 'tutor';
   text: string;
   images?: string[];
@@ -26,6 +34,7 @@ export interface StoredConversation {
   createdAt: number;
   updatedAt: number;
   tutorModelId?: string;
+  workingDirectory?: string;
   messages: StoredChatMessage[];
 }
 
@@ -140,6 +149,14 @@ export function readConversations(): StoredConversation[] {
       })
       .map((conversation) => ({
         ...conversation,
+        workingDirectory:
+          typeof conversation.workingDirectory === 'string'
+            ? conversation.workingDirectory
+            : undefined,
+        messages: conversation.messages.map((message) => ({
+          ...message,
+          activity: parseAgentActivity(message.activity, true),
+        })),
         title:
           typeof conversation.title === 'string' && conversation.title.trim()
             ? conversation.title
@@ -152,6 +169,35 @@ export function readConversations(): StoredConversation[] {
   } catch {
     return [];
   }
+}
+
+function writeConversations(conversations: StoredConversation[]): void {
+  const file = storePath();
+  const temp = `${file}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(conversations, null, 2)}\n`);
+  fs.renameSync(temp, file);
+}
+
+/** Keep folder choices even for drafts that have no messages yet. */
+export function saveConversationDirectory(
+  sessionId: string,
+  workingDirectory: string,
+): void {
+  const conversations = readConversations();
+  const existing = conversations.find((item) => item.sessionId === sessionId);
+  if (existing) {
+    existing.workingDirectory = workingDirectory;
+  } else {
+    conversations.push({
+      sessionId,
+      problem: '',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: [],
+      workingDirectory,
+    });
+  }
+  writeConversations(conversations);
 }
 
 export function saveConversation(input: {
@@ -172,6 +218,14 @@ export function saveConversation(input: {
   const messages = input.messages.filter(isMessage).map((message) => ({
     role: message.role,
     text: message.text,
+    ...(message.activity
+      ? { activity: parseAgentActivity(message.activity) }
+      : {}),
+    ...(message.stopped ? { stopped: true } : {}),
+    ...(parseChatSuggestion(message.suggestion)
+      ? { suggestion: parseChatSuggestion(message.suggestion)! }
+      : {}),
+    ...(message.folded ? { folded: true } : {}),
     ...(Array.isArray(message.images)
       ? { images: message.images.filter((image) => typeof image === 'string') }
       : {}),
@@ -195,7 +249,7 @@ export function saveConversation(input: {
   const next: StoredConversation = {
     sessionId: input.sessionId,
     title:
-      existing?.title ||
+      (existing?.messages.length ? existing.title : undefined) ||
       deriveConversationTitle(
         requestedProblem || existing?.problem || '',
         messages,
@@ -204,6 +258,9 @@ export function saveConversation(input: {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     ...(tutorModelId ? { tutorModelId } : {}),
+    ...(existing?.workingDirectory
+      ? { workingDirectory: existing.workingDirectory }
+      : {}),
     messages: existing
       ? mergeConversationMessages(existing.messages, messages)
       : messages,

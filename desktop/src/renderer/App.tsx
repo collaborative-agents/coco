@@ -593,16 +593,6 @@ function PetView() {
   // pinned: it never auto-hides and can only be closed with the × button.
   const bubblePinnedRef = useRef(false);
 
-  const reportSocialNotificationClosed = (
-    current: BubbleState | null = bubbleRef.current,
-  ) => {
-    if (current?.socialNotification) {
-      window.electron?.ipcRenderer.sendMessage(
-        'social-avatar-notification-closed',
-      );
-    }
-  };
-
   useEffect(() => {
     bubbleRef.current = bubble;
   }, [bubble]);
@@ -629,7 +619,6 @@ function PetView() {
       }
       setBubble((b) => (b ? { ...b, fadingOut: true } : null));
       fadeTimer.current = setTimeout(() => {
-        reportSocialNotificationClosed(current);
         setBubble(null);
         setMood('idle');
       }, FADE_MS);
@@ -800,7 +789,6 @@ function PetView() {
     if (result?.success) {
       setCocoSleeping(result.sleeping === true);
       if (result.sleeping) {
-        reportSocialNotificationClosed();
         setBubble(null);
         setMood('sleep');
       } else {
@@ -859,7 +847,6 @@ function PetView() {
     const cleanupSuspend = window.electron?.ipcRenderer.on(
       'system-suspend',
       () => {
-        reportSocialNotificationClosed();
         if (hideTimer.current) clearTimeout(hideTimer.current);
         if (fadeTimer.current) clearTimeout(fadeTimer.current);
         if (pulseTimer.current) clearTimeout(pulseTimer.current);
@@ -968,7 +955,6 @@ function PetView() {
         // Keep it in Activity history, but do not create or replace a bubble.
         if (incomingStatus === 'observing') return;
 
-        reportSocialNotificationClosed();
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
         const phrase = pickPhrase(incomingStatus, seed);
@@ -1022,7 +1008,6 @@ function PetView() {
         // same rule to the shared avatar-bubble surface.
         if (bubbleHoverRef.current && bubbleRef.current) return;
 
-        reportSocialNotificationClosed();
         if (hideTimer.current) clearTimeout(hideTimer.current);
         if (fadeTimer.current) clearTimeout(fadeTimer.current);
         if (pulseTimer.current) clearTimeout(pulseTimer.current);
@@ -1088,64 +1073,6 @@ function PetView() {
     };
   }, []);
 
-  // Social inbox alerts use the avatar even when the normal avatar is hidden.
-  useEffect(() => {
-    const cleanup = window.electron?.ipcRenderer.on(
-      'social-avatar-notification',
-      (data: unknown) => {
-        const notification = data as {
-          title?: unknown;
-          message?: unknown;
-          participantId?: unknown;
-        };
-        const title = String(notification?.title ?? '').trim();
-        const message = String(notification?.message ?? '').trim();
-        if (!title || !message) return;
-
-        if (hideTimer.current) clearTimeout(hideTimer.current);
-        if (fadeTimer.current) clearTimeout(fadeTimer.current);
-        if (pulseTimer.current) clearTimeout(pulseTimer.current);
-        bubbleHoverRef.current = false;
-        bubblePinnedRef.current = false;
-
-        setBubble({
-          status: 'ai_struggle',
-          phrase: '',
-          fadingOut: false,
-          socialNotification: {
-            title,
-            message,
-            participantId:
-              typeof notification.participantId === 'string'
-                ? notification.participantId
-                : undefined,
-          },
-        });
-        setMood('tool');
-
-        pulseKeyRef.current += 1;
-        setPulse({ status: 'ai_struggle', key: pulseKeyRef.current });
-        pulseTimer.current = setTimeout(() => setPulse(null), PULSE_MS);
-        scheduleBubbleHide(TUTOR_HOLD_MS);
-      },
-    );
-    const cleanupDismiss = window.electron?.ipcRenderer.on(
-      'dismiss-social-avatar-notification',
-      () => {
-        if (!bubbleRef.current?.socialNotification) return;
-        if (hideTimer.current) clearTimeout(hideTimer.current);
-        if (fadeTimer.current) clearTimeout(fadeTimer.current);
-        bubbleRef.current = null;
-        setBubble(null);
-        setMood('idle');
-      },
-    );
-    return () => {
-      if (typeof cleanup === 'function') cleanup();
-      if (typeof cleanupDismiss === 'function') cleanupDismiss();
-    };
-  }, []);
-
   // ── Tier 3: tutor notification routed from main when webapp is hidden ────────
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -1154,7 +1081,6 @@ function PetView() {
         const message = String((data as { message?: unknown })?.message ?? '');
         if (!message) return;
 
-        reportSocialNotificationClosed();
 
         // Tier 3 replaces any in-flight observation, including Tier 2.
         if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -1188,13 +1114,6 @@ function PetView() {
   // proactive suggestion — record the action as a false-negative signal.
   const handleOpenChat = (e?: SyntheticEvent) => {
     e?.stopPropagation?.();
-    if (bubble?.socialNotification) {
-      reportSocialNotificationClosed(bubble);
-      setBubble(null);
-      setMood('idle');
-      window.electron?.ipcRenderer.sendMessage('open-social-inbox');
-      return;
-    }
     if (bubble && !bubble.tutorMessage && !bubble.showHelpButton) {
       window.electron?.ipcRenderer.sendMessage('training-feedback', {
         kind: 'need_help',
@@ -1328,10 +1247,9 @@ function PetView() {
         { revealed: false },
       );
     }
-    const socialNotification = bubble.socialNotification;
     // Closing an expanded suggestion is not a rejection of the original offer;
     // engagement and any explicit rating have already been recorded.
-    if (!socialNotification && !revealedSuggestion) {
+    if (!revealedSuggestion) {
       window.electron?.ipcRenderer.sendMessage('training-feedback', {
         kind: 'dismiss',
         surface: 'bubble',
@@ -1352,16 +1270,16 @@ function PetView() {
     }
     setBubble((b) => (b ? { ...b, fadingOut: true } : null));
     fadeTimer.current = setTimeout(() => {
-      if (socialNotification) reportSocialNotificationClosed(bubble);
       setBubble(null);
       setMood('idle');
     }, FADE_MS);
   };
 
-  const handleChatAboutSuggestion = () => {
+  const handleChatAboutSuggestion = (execute = false) => {
     if (!bubble?.suggestion) return;
     const current = bubble;
     window.electron?.ipcRenderer.sendMessage('chat-about-suggestion', {
+      execute,
       observationId: current.observationId,
       status: current.status,
       rawObservation: current.rawObservation ?? '',
@@ -1403,16 +1321,9 @@ function PetView() {
 
   // Tier 3: user wants to read the full tutor guidance — open main window.
   const handleViewConversation = () => {
-    if (bubble?.socialNotification) {
-      reportSocialNotificationClosed(bubble);
-      setBubble(null);
-      setMood('idle');
-      window.electron?.ipcRenderer.sendMessage('open-social-inbox');
-    } else {
-      window.electron?.ipcRenderer.sendMessage('open-main-window', {
-        reopenCurrent: true,
-      });
-    }
+    window.electron?.ipcRenderer.sendMessage('open-main-window', {
+      reopenCurrent: true,
+    });
   };
 
   const loadHistoricalSuggestion = async (
@@ -1634,7 +1545,8 @@ function PetView() {
         onHelpMe={handleHelpMe}
         onDismiss={handleDismiss}
         onViewConversation={handleViewConversation}
-        onChatAboutSuggestion={handleChatAboutSuggestion}
+        onChatAboutSuggestion={() => handleChatAboutSuggestion()}
+        onRunSuggestion={() => handleChatAboutSuggestion(true)}
         onOpenCocoChat={handleOpenCocoChat}
         onMouseEnter={handleBubbleEnter}
         onMouseLeave={handleBubbleLeave}

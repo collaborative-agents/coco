@@ -1,5 +1,7 @@
 export interface TutorStreamEvent {
   type:
+    | 'agent_activity'
+    | 'transcription'
     | 'tool_call_started'
     | 'tool_call_completed'
     | 'text_delta'

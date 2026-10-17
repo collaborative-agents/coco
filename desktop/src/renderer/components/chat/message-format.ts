@@ -1,0 +1,141 @@
+import type { Guidance, ChatMessage } from './types';
+
+/** Scan for the first balanced {...} block, respecting strings and escapes. */
+function extractJsonObject(text: string): string | null {
+  let start = text.indexOf('{');
+  while (start !== -1) {
+    let depth = 0;
+    let inString = false;
+    let escapeNext = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      if (ch === '\\' && inString) {
+        escapeNext = true;
+        continue;
+      }
+      if (ch === '"') inString = !inString;
+      if (!inString) {
+        if (ch === '{') depth += 1;
+        else if (ch === '}') {
+          depth -= 1;
+          if (depth === 0) return text.slice(start, i + 1);
+        }
+      }
+    }
+    start = text.indexOf('{', start + 1);
+  }
+  return null;
+}
+
+/** LLMs embed LaTeX (\frac …) in JSON strings unescaped — repair before parse. */
+function repairJsonEscapes(text: string): string {
+  const structural = new Set(['"', '\\', '/']);
+  const ambiguous = new Set(['b', 'f', 'n', 'r', 't']);
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '\\' && i + 1 < text.length) {
+      const nxt = text[i + 1];
+      if (structural.has(nxt)) {
+        out.push(text[i], nxt);
+        i += 2;
+        continue;
+      }
+      if (
+        nxt === 'u' &&
+        i + 5 < text.length &&
+        /^[0-9a-fA-F]{4}$/.test(text.slice(i + 2, i + 6))
+      ) {
+        out.push(text.slice(i, i + 6));
+        i += 6;
+        continue;
+      }
+      if (ambiguous.has(nxt)) {
+        const after = i + 2 < text.length ? text[i + 2] : '';
+        if (/[a-zA-Z]/.test(after)) {
+          out.push('\\\\');
+          i += 1;
+          continue;
+        }
+        out.push(text[i], nxt);
+        i += 2;
+        continue;
+      }
+      out.push('\\\\');
+      i += 1;
+      continue;
+    }
+    out.push(text[i]);
+    i += 1;
+  }
+  return out.join('');
+}
+
+export function parseGuidance(raw: string): Guidance {
+  const tryParse = (s: string): any => {
+    try {
+      return JSON.parse(s);
+    } catch {
+      try {
+        return JSON.parse(repairJsonEscapes(s));
+      } catch {
+        return null;
+      }
+    }
+  };
+  let obj: any = tryParse(raw.trim());
+  if (!obj) {
+    const fence = raw.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
+    if (fence) obj = tryParse(fence[1].trim());
+  }
+  if (!obj) {
+    const block = extractJsonObject(raw);
+    if (block) obj = tryParse(block);
+  }
+  if (obj && typeof obj === 'object') {
+    const text = obj.guidance ?? obj['Text guidance'] ?? '';
+    const example = obj.example_prompt ?? obj.examplePrompt ?? null;
+    const viz = obj.visualization_code ?? obj.visualizationCode ?? null;
+    return {
+      text: String(text || raw),
+      examplePrompt:
+        example && String(example).toLowerCase() !== 'not applicable'
+          ? String(example)
+          : null,
+      vizCode: viz ? String(viz) : null,
+    };
+  }
+  return { text: raw };
+}
+
+export function copyableMessageText(message: ChatMessage): string {
+  if (message.role === 'tutor' && !message.isError) {
+    return parseGuidance(message.text).text;
+  }
+  return message.text;
+}
+
+export function messageCopyKey(message: ChatMessage, index: number): string {
+  return `${message.role}:${message.id ?? message.ts ?? index}`;
+}
+
+export const makeMessageId = (): string =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+export function formatMetricTokens(n?: number): string {
+  if (typeof n !== 'number') return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+export function formatMetricLatency(ms?: number): string {
+  if (typeof ms !== 'number') return '0s';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s`;
+  return `${Math.round(ms)}ms`;
+}

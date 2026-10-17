@@ -26,6 +26,7 @@ export interface TutorModelConnection extends ModelConnection {
 }
 
 export interface ModelConfiguration {
+  routing?: 'direct' | 'router';
   version: 1;
   sensing: ModelConnection;
   tutors: TutorModelConnection[];
@@ -33,6 +34,7 @@ export interface ModelConfiguration {
 }
 
 export interface ModelConfigurationInput {
+  routing?: 'direct' | 'router';
   sensing: ModelConnection;
   tutors: TutorModelConnection[];
   defaultTutorId: string;
@@ -296,6 +298,7 @@ export function validateModelConfiguration(
   }
   return {
     version: 1,
+    ...(input.routing ? { routing: input.routing } : {}),
     sensing,
     tutors,
     defaultTutorId: input.defaultTutorId,
@@ -333,6 +336,7 @@ export function readModelConfiguration(): ModelConfiguration | null {
     const config = validateModelConfiguration(parsed, {
       allowMissingAudioCapability: true,
     });
+    if (config.routing === 'direct') return config;
     return {
       ...config,
       sensing: migrateLegacyNvInferenceConnection(config.sensing),
@@ -384,7 +388,7 @@ export function saveModelConfiguration(
       item.provider,
     ]),
   ];
-  const routerManaged = isLlmRouterConfigured();
+  const routerManaged = config.routing !== 'direct' && isLlmRouterConfigured();
   required.forEach(([role, provider]) => {
     const envName = PROVIDER_KEY_ENV[provider];
     if (
@@ -417,9 +421,11 @@ function connectionEnv(
   role: 'sensing' | 'tutor',
   credentials: CredentialMap,
   fallbackEnv: Environment,
+  useRouter = true,
 ): Record<string, string> {
   const env: Record<string, string> = {};
   if (
+    useRouter &&
     fallbackEnv.LLM_ROUTER_URL?.trim() &&
     fallbackEnv.LLM_ROUTER_API_KEY?.trim()
   ) {
@@ -441,9 +447,10 @@ function connectionEnv(
   }
   if (
     connection.provider === 'nv_inference' &&
-    fallbackEnv.NV_INFERENCE_BASE_URL
+    (connection.baseUrl || fallbackEnv.NV_INFERENCE_BASE_URL)
   ) {
-    env.NV_INFERENCE_BASE_URL = fallbackEnv.NV_INFERENCE_BASE_URL;
+    env.NV_INFERENCE_BASE_URL =
+      connection.baseUrl || fallbackEnv.NV_INFERENCE_BASE_URL!;
   }
   if (connection.provider === 'lm_studio' && connection.baseUrl) {
     env.LM_STUDIO_HOST = connection.baseUrl;
@@ -458,13 +465,25 @@ export function buildRoleModelEnvironments(
 ): { sensingEnv: Record<string, string>; tutorEnv: Record<string, string> } {
   return {
     sensingEnv: {
-      ...connectionEnv(config.sensing, 'sensing', credentials, fallbackEnv),
+      ...connectionEnv(
+        config.sensing,
+        'sensing',
+        credentials,
+        fallbackEnv,
+        config.routing !== 'direct',
+      ),
       MEMORY_MODEL: config.sensing.model,
     },
     tutorEnv: Object.assign(
       {},
       ...config.tutors.map((item) =>
-        connectionEnv(item, 'tutor', credentials, fallbackEnv),
+        connectionEnv(
+          item,
+          'tutor',
+          credentials,
+          fallbackEnv,
+          config.routing !== 'direct',
+        ),
       ),
     ),
   };
@@ -477,9 +496,10 @@ export function resolveModelRuntime(): {
 } | null {
   const config = readModelConfiguration();
   if (!config) return null;
-  const runtimeConfig = isLlmRouterConfigured()
-    ? routeModelConfigurationThroughLlmRouter(config)
-    : config;
+  const runtimeConfig =
+    config.routing !== 'direct' && isLlmRouterConfigured()
+      ? routeModelConfigurationThroughLlmRouter(config)
+      : config;
   const credentials = readCredentials();
   const roleEnvironments = buildRoleModelEnvironments(
     runtimeConfig,
@@ -496,6 +516,7 @@ export function prepareModelConnectionTest(
   connectionInput: ModelConnection,
   role: 'sensing' | 'tutor',
   apiKey = '',
+  routing = readModelConfiguration()?.routing,
 ): { connection: ModelConnection; env: Record<string, string> } {
   const connection = normalizeConnection(connectionInput);
   if (!connection) {
@@ -505,13 +526,20 @@ export function prepareModelConnectionTest(
   if (apiKey.trim()) {
     credentials[credentialId(role, connection.provider)] = apiKey.trim();
   }
-  const runtimeConnection = isLlmRouterConfigured()
+  const routerManaged = routing !== 'direct' && isLlmRouterConfigured();
+  const runtimeConnection = routerManaged
     ? routeConnectionThroughLlmRouter(connection)
     : connection;
-  const env = connectionEnv(runtimeConnection, role, credentials, process.env);
+  const env = connectionEnv(
+    runtimeConnection,
+    role,
+    credentials,
+    process.env,
+    routerManaged,
+  );
   const keyName = PROVIDER_KEY_ENV[connection.provider];
   if (
-    !isLlmRouterConfigured() &&
+    !routerManaged &&
     PROVIDERS[connection.provider].requiresKey &&
     (!keyName || !env[keyName])
   ) {
@@ -522,7 +550,7 @@ export function prepareModelConnectionTest(
   if (
     connection.provider === 'hosted_vllm' &&
     !env.HOSTED_VLLM_API_BASE &&
-    !isLlmRouterConfigured()
+    !routerManaged
   ) {
     throw new Error('Enter the OpenAI-compatible endpoint base URL.');
   }

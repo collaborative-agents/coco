@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import pet1 from '../../../assets/pet1.png';
 import pet2 from '../../../assets/pet2.png';
 import pet3 from '../../../assets/pet3.png';
@@ -14,7 +14,6 @@ import wait4 from '../../../assets/wait4.png';
 import write1 from '../../../assets/write1.png';
 import write2 from '../../../assets/write2.png';
 import write3 from '../../../assets/write3.png';
-import useDismissiblePopover from './useDismissiblePopover';
 
 export const COCO_GIF_IDS = [
   'working',
@@ -59,14 +58,6 @@ const COCO_GIFS: Record<CocoGifId, CocoGifDefinition> = {
     intervalMs: 400,
   },
 };
-
-export function isCocoGifId(value: unknown): value is CocoGifId {
-  return COCO_GIF_IDS.includes(value as CocoGifId);
-}
-
-export function cocoGifLabel(id: CocoGifId): string {
-  return COCO_GIFS[id].label;
-}
 
 export function AnimatedCocoGif({
   id,
@@ -116,87 +107,3 @@ export function AnimatedCocoGif({
 AnimatedCocoGif.defaultProps = {
   frameIntervalMs: undefined,
 };
-
-export function CocoGifPicker({
-  label,
-  disabled,
-  onSelect,
-}: {
-  label: string;
-  disabled: boolean;
-  onSelect: (id: CocoGifId) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const dismiss = useCallback(() => setOpen(false), []);
-  useDismissiblePopover(containerRef, open, dismiss);
-
-  return (
-    <div ref={containerRef} style={{ position: 'relative', flex: '0 0 auto' }}>
-      {open && (
-        <div
-          role="group"
-          aria-label={label}
-          style={{
-            position: 'absolute',
-            zIndex: 6,
-            left: 0,
-            bottom: 'calc(100% + 5px)',
-            width: 230,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: 5,
-            border: '1px solid #e5e7eb',
-            borderRadius: 11,
-            padding: 7,
-            background: '#fff',
-            boxShadow: '0 6px 18px rgba(15, 23, 42, 0.15)',
-          }}
-        >
-          {COCO_GIF_IDS.map((id) => (
-            <button
-              key={id}
-              type="button"
-              aria-label={`Send ${cocoGifLabel(id)}`}
-              style={{
-                minWidth: 0,
-                border: '1px solid #e5e7eb',
-                borderRadius: 9,
-                padding: 3,
-                background: '#f9fafb',
-                cursor: 'pointer',
-              }}
-              onClick={() => {
-                onSelect(id);
-                setOpen(false);
-              }}
-            >
-              <AnimatedCocoGif id={id} size={64} />
-            </button>
-          ))}
-        </div>
-      )}
-      <button
-        type="button"
-        aria-label={label}
-        aria-expanded={open}
-        disabled={disabled}
-        style={{
-          height: 28,
-          border: '1px solid #e5e7eb',
-          borderRadius: 7,
-          padding: '0 7px',
-          background: '#fff',
-          color: '#204A79',
-          cursor: disabled ? 'default' : 'pointer',
-          fontSize: 10.5,
-          fontWeight: 700,
-          opacity: disabled ? 0.5 : 1,
-        }}
-        onClick={() => setOpen((current) => !current)}
-      >
-        GIF
-      </button>
-    </div>
-  );
-}

@@ -26,12 +26,6 @@ export interface BubbleState {
    * "View conversation" button.
    */
   tutorMessage?: string;
-  /** A one-shot social inbox alert displayed through the desktop avatar. */
-  socialNotification?: {
-    title: string;
-    message: string;
-    participantId?: string;
-  };
   /**
    * Instant suggestion revealed in-place after the user clicks "Help me with
    * this" (pre-computed while the bubble was on screen). When set, the bubble
@@ -68,6 +62,7 @@ export default function ObservationBubble({
   onDismiss,
   onViewConversation,
   onChatAboutSuggestion,
+  onRunSuggestion,
   onOpenCocoChat,
   onMouseEnter,
   onMouseLeave,
@@ -77,6 +72,7 @@ export default function ObservationBubble({
   onDismiss?: () => void;
   onViewConversation?: () => void;
   onChatAboutSuggestion?: () => void;
+  onRunSuggestion?: () => void;
   onOpenCocoChat?: () => void;
   /** Hovering pauses the auto-hide so the user can read / copy the bubble. */
   onMouseEnter?: () => void;
@@ -128,14 +124,11 @@ export default function ObservationBubble({
     fadingOut,
     showHelpButton,
     tutorMessage,
-    socialNotification,
     suggestion,
   } = bubble;
-  const isSocial = !!socialNotification;
-  const isTier3 = !!tutorMessage || isSocial;
+  const isTier3 = !!tutorMessage;
   let label = STATUS_LABEL[status] ?? STATUS_LABEL.observing;
   if (isTier3) label = 'AI Tutor';
-  if (isSocial) label = socialNotification.title;
 
   // Copy the prompt/content and, when a tool is chosen, launch it. `toolId` null
   // means copy-only.
@@ -178,24 +171,23 @@ export default function ObservationBubble({
 
   return (
     <div
-      className={`observation-bubble status-${status}${fadingOut ? ' is-leaving' : ''}${isTier3 ? ' is-tier3' : ''}${isSocial ? ' is-social' : ''}${suggestion ? ' has-suggestion' : ''}`}
+      className={`observation-bubble status-${status}${fadingOut ? ' is-leaving' : ''}${isTier3 ? ' is-tier3' : ''}${suggestion ? ' has-suggestion' : ''}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
       {/* Dismiss (×) on Tier-2 bubbles and on any revealed suggestion (which is
           pinned open and can only be closed here). */}
-      {(isSocial || (!isTier3 && (showHelpButton || suggestion))) &&
-        onDismiss && (
-          <button
-            type="button"
-            className="bubble-dismiss-btn"
-            aria-label="Dismiss"
-            title="Dismiss"
-            onClick={onDismiss}
-          >
-            ×
-          </button>
-        )}
+      {!isTier3 && (showHelpButton || suggestion) && onDismiss && (
+        <button
+          type="button"
+          className="bubble-dismiss-btn"
+          aria-label="Dismiss"
+          title="Dismiss"
+          onClick={onDismiss}
+        >
+          ×
+        </button>
+      )}
 
       {/* Tier-1 (progress/observing): no suggestion. A passive "?" explains that
           there's nothing proactive right now and points to clicking the pet. */}
@@ -227,7 +219,7 @@ export default function ObservationBubble({
         </div>
       ) : isTier3 ? (
         <div className="observation-bubble-text observation-bubble-tutor-preview">
-          {truncatePreview(socialNotification?.message ?? tutorMessage ?? '')}
+          {truncatePreview(tutorMessage ?? '')}
         </div>
       ) : (
         <div className="observation-bubble-text">{phrase}</div>
@@ -256,6 +248,7 @@ export default function ObservationBubble({
       {/* Revealed instant suggestion. `content` → one Copy button. `delegate` →
           Copy prompt plus one Open button per the user's chatbots/agents so
           they pick where to hand the prompt. */}
+      {suggestion && onRunSuggestion && <div className="bubble-tool-actions"><button type="button" className="bubble-action-btn bubble-coco-chat-action" onClick={onRunSuggestion}>Run this with Coco</button></div>}
       {suggestion && suggestion.kind === 'content' && (
         <div className="bubble-tool-actions">
           <button
@@ -336,7 +329,7 @@ export default function ObservationBubble({
           className="bubble-action-btn"
           onClick={onViewConversation}
         >
-          {isSocial ? 'Open Friends →' : 'View conversation →'}
+          View conversation →
         </button>
       )}
 

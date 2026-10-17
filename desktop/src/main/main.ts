@@ -59,18 +59,6 @@ import configureFullscreenCompanionWindow from './services/fullscreen-companion-
 import resizeBoundsKeepingRightEdge from './services/chat-window-bounds';
 import { CocoGatewayClient } from './services/gateway-client';
 import GatewayOutbox from './services/gateway-outbox';
-import KnowledgeAnswerService, {
-  registerKnowledgeAnswerIpcHandler,
-} from './services/knowledge-answer-service';
-import SocialBackgroundPoller from './services/social-background-poller';
-import {
-  SocialAvatarNotificationTracker,
-  type SocialAvatarNotification,
-} from './services/social-avatar-notifications';
-import {
-  registerSocialIpcHandlers,
-  SocialService,
-} from './services/social-service';
 import { sanitizeFatalErrorMessage } from './services/fatal-error-telemetry';
 import {
   clearAuthSession,
@@ -85,7 +73,12 @@ import {
   recordSupportSuggestion,
   pruneActivity,
 } from './activity-store';
-import { readConversations } from './conversation-store';
+import { readConversations, saveConversationDirectory } from './conversation-store';
+import PiHarness from './services/pi-harness';
+import setupWindowOptions from './setup-window-options';
+import configureMainWindow from './main-window-behavior';
+import { getSystemPermissionWarning, systemPermissionButtonLabel, systemPermissionExplanation } from './system-permission-warning';
+import { openSystemPermissionSettings } from './open-system-permission-settings';
 import {
   defaultTutor,
   ensureManagedDefaultModelConfiguration,
@@ -317,11 +310,6 @@ let hideAvatarMode = false;
 let avatarRendererReady = false;
 let avatarDragOffset: { x: number; y: number } | null = null;
 let pendingOpenHistory = false;
-let pendingOpenSocialInbox = false;
-let pendingSocialAvatarNotification: SocialAvatarNotification | null = null;
-let revealSocialAvatarNotification:
-  | ((notification: SocialAvatarNotification) => void)
-  | null = null;
 const hiddenAvatarVisibility = new HiddenAvatarVisibility();
 const observationSleepGuard = new ObservationSleepGuard();
 let personalizationScheduler: PersonalizationScheduler | null = null;
@@ -366,7 +354,7 @@ let systemSuspended = false;
 // and lets us defer startup until the user has chosen their models.
 let observerStarted = false;
 // isFloatMode: chat panel is in narrow side-panel mode (vs. expanded width).
-let isFloatMode = true;
+let isFloatMode = false;
 // Set true once the app is genuinely quitting so window 'close' handlers stop
 // intercepting (they otherwise hide-instead-of-close, which would block quit).
 let isQuitting = false;
@@ -382,32 +370,50 @@ let pendingAuthLaunch: 'signin' | 'signup' | null = null;
 let gatewayClient: CocoGatewayClient | null = null;
 let gatewayOutbox: GatewayOutbox | null = null;
 let telemetryFlushTimer: ReturnType<typeof setInterval> | null = null;
-const socialService = new SocialService(() => gatewayClient);
-const knowledgeAnswerService = new KnowledgeAnswerService(readLocalMemory);
-const socialAvatarNotificationTracker = new SocialAvatarNotificationTracker();
-const socialBackgroundPoller = new SocialBackgroundPoller(
-  socialService,
-  (snapshot) => {
-    if (chatWindow && !chatWindow.isDestroyed()) {
-      chatWindow.webContents.send('social-inbox-updated', snapshot);
-    }
-    const notification = socialAvatarNotificationTracker.next(snapshot);
-    const chatOpen =
-      chatWindow !== null &&
-      !chatWindow.isDestroyed() &&
-      chatWindow.isVisible();
-    if (notification && !chatOpen) {
-      revealSocialAvatarNotification?.(notification);
-    }
-  },
-  log,
-);
 const gatewayExposureIds = new Map<string, string>();
+const piHarness = new PiHarness();
+const piBridgeToken = randomUUID();
+let pendingChatRequest: { requestId: string; stopped: boolean } | null = null;
+function stopAgentRun() {
+  if (pendingChatRequest) pendingChatRequest.stopped = true;
+  return piHarness.abort();
+}
+function agentDirectory(sessionId: string | null = chatSessions.currentSessionId): string {
+  const conversation = sessionId ? readConversations().find((item) => item.sessionId === sessionId) : undefined;
+  let directory = conversation?.workingDirectory || path.join(app.getPath('userData'), 'workspace');
+  if (!conversation?.workingDirectory && conversation?.messages.length) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'agent-workspace.json'), 'utf8'));
+      if (typeof saved.directory === 'string' && saved.directory) directory = saved.directory;
+    } catch { /* No legacy folder setting. */ }
+  }
+  fs.mkdirSync(directory, { recursive: true });
+  if (sessionId) saveConversationDirectory(sessionId, directory);
+  return directory;
+}
+ipcMain.handle('get-agent-workspace', (_event, { sessionId }: {sessionId?: string | null} = {}) => ({ directory: agentDirectory(sessionId) }));
+ipcMain.handle('choose-agent-workspace', async (_event, { sessionId = chatSessions.currentSessionId }: {sessionId?: string | null} = {}) => {
+  if (!sessionId) throw new Error('Open a conversation before choosing a folder.');
+  if (pendingChatRequest) throw new Error('Stop the current run before changing folders.');
+  const result = await dialog.showOpenDialog({ title: 'Choose Coco’s working folder', defaultPath: agentDirectory(sessionId), properties: ['openDirectory', 'createDirectory'] });
+  if (result.canceled || !result.filePaths[0]) return null;
+  if (pendingChatRequest) throw new Error('Stop the current run before changing folders.');
+  const directory = fs.realpathSync(result.filePaths[0]);
+  saveConversationDirectory(sessionId, directory);
+  return {directory};
+});
+ipcMain.handle('stop-agent-run', (_event, requestId: string) => {
+  if (pendingChatRequest?.requestId === requestId) pendingChatRequest.stopped = true;
+  return piHarness.abort(requestId);
+});
+
 const chatSessions = new ChatSessionController({
   appRunId,
+  isAgentBusy: () => Boolean(pendingChatRequest),
   openChatForSession: (sessionId, problemStatement, seed) =>
     openChatForSession(sessionId, problemStatement, seed),
   onSessionEnded: () => {
+    void stopAgentRun();
     if (chatWindow && !chatWindow.isDestroyed()) {
       chatWindow.hide();
       avatarWindow?.show();
@@ -668,20 +674,8 @@ const createAuthWindow = () => {
     authWindow.focus();
     return;
   }
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
-  const width = 476;
-  const height = 650;
   authWindow = new BrowserWindow({
-    show: false,
-    x: Math.round((sw - width) / 2),
-    y: Math.round((sh - height) / 2),
-    width,
-    height,
-    transparent: true,
-    frame: false,
-    alwaysOnTop: true,
-    resizable: false,
-    skipTaskbar: process.platform !== 'darwin',
+    ...setupWindowOptions(screen.getPrimaryDisplay().workArea),
     webPreferences: { preload: preloadPath() },
   });
   authWindow.loadURL(`${resolveHtmlPath('index.html')}?view=auth`);
@@ -692,10 +686,29 @@ const createAuthWindow = () => {
   authWindow.on('close', (event) => {
     if (isQuitting || isAuthenticated) return;
     event.preventDefault();
-    authWindow?.hide();
-    createTray();
+    authWindow?.webContents.send('auth-quit-requested');
   });
 };
+
+ipcMain.on('quit-from-auth', (event) => { if(event.sender === authWindow?.webContents) app.quit(); });
+ipcMain.on('quit-from-avatar', (event) => { if(event.sender === avatarWindow?.webContents) app.quit(); });
+ipcMain.handle('get-llm-router-status', () => ({configured: Boolean(process.env.LLM_ROUTER_URL?.trim())}));
+ipcMain.handle('get-supported-modes', () => ['student_learning', 'everyday_support', 'ai_upskilling', 'custom']);
+ipcMain.handle('get-system-permissions', () => {
+  const warning = getSystemPermissionWarning(process.platform, {
+    accessibilityTrusted: process.platform !== 'darwin' || systemPreferences.isTrustedAccessibilityClient(false),
+    screenCaptureStatus: process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted',
+  });
+  return {missing: (warning?.settingsTargets ?? []).map((target) => ({target, label: systemPermissionButtonLabel(target).replace(/^Open /,''), actionLabel: systemPermissionButtonLabel(target), explanation: systemPermissionExplanation(target)}))};
+});
+ipcMain.handle('open-system-permissions', async (event, target: unknown) => {
+  if(event.sender !== chatWindow?.webContents && event.sender !== onboardingWindow?.webContents) return {success:false};
+  if(target !== 'accessibility' && target !== 'input-monitoring' && target !== 'screen-recording') return {success:false, error:'Unknown permission.'};
+  try {
+    await openSystemPermissionSettings(target, {screenStatus: () => systemPreferences.getMediaAccessStatus('screen'), requestScreenAccess: () => desktopCapturer.getSources({types:['screen']}), openExternal: (url) => shell.openExternal(url), warn: (message) => log.warn(message)});
+    return {success:true};
+  } catch(error) {return {success:false, error:String(error)};}
+});
 
 function syncHiddenAvatarWindowVisibility(): void {
   if (
@@ -714,38 +727,16 @@ function syncHiddenAvatarWindowVisibility(): void {
   }
 }
 
-function dismissSocialAvatarNotification(): void {
-  pendingSocialAvatarNotification = null;
-  hiddenAvatarVisibility.setVisible('social-notification', false);
-  syncHiddenAvatarWindowVisibility();
-}
-
 // ── Onboarding window ─────────────────────────────────────────────────────────
 // Shown once on first launch (when coco-profile.json doesn't exist yet).
 // Centered modal; after the user completes or skips it, the profile is written
 // and the normal avatar + webapp windows are created.
 
 const createOnboardingWindow = (modelsOnly = false) => {
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
-  const w = 440;
-  const h = 700;
-  const x = Math.round((sw - w) / 2);
-  const y = Math.round((sh - h) / 2);
-
   onboardingWindow = new BrowserWindow({
-    show: false,
-    x,
-    y,
-    width: w,
-    height: h,
-    transparent: true,
-    frame: false,
-    alwaysOnTop: true,
-    resizable: false,
-    skipTaskbar: true,
+    ...setupWindowOptions(screen.getPrimaryDisplay().workArea),
     webPreferences: { preload: preloadPath() },
   });
-
   const url = `${resolveHtmlPath('index.html')}?view=onboarding${
     modelsOnly ? '&modelsOnly=1' : ''
   }${process.env.LLM_ROUTER_API_KEY ? '&routerManaged=1' : ''}`;
@@ -839,18 +830,6 @@ const createAvatarWindow = () => {
   // (notification is screen-pinned; no need to reposition on move)
 };
 
-revealSocialAvatarNotification = (notification) => {
-  pendingSocialAvatarNotification = notification;
-  hiddenAvatarVisibility.setVisible('social-notification', true);
-  createAvatarWindow();
-  syncHiddenAvatarWindowVisibility();
-  if (!avatarWindow || avatarWindow.isDestroyed() || !avatarRendererReady) {
-    return;
-  }
-  avatarWindow.webContents.send('social-avatar-notification', notification);
-  pendingSocialAvatarNotification = null;
-};
-
 // ── Chat window (local tutor session) ─────────────────────────────────────────
 // A frameless right-edge side panel hosting the local SessionChatView. Unlike
 // the old webapp window there is no WebSocket to keep alive, so it is created on
@@ -859,7 +838,7 @@ revealSocialAvatarNotification = (notification) => {
 // the 'send-chat-message' IPC handler — no external backend involved.
 
 const CHAT_PANEL_W = 420;
-const CHAT_EXPANDED_W = 820;
+const CHAT_EXPANDED_W = 1120;
 const CHAT_MIN_W = 340;
 const CHAT_MIN_H = 360;
 const CHAT_LAYOUT_BREAKPOINT = (CHAT_PANEL_W + CHAT_EXPANDED_W) / 2;
@@ -886,15 +865,15 @@ const createChatWindow = () => {
 
   chatWindow = new BrowserWindow({
     show: false,
-    width: CHAT_PANEL_W,
+    width: CHAT_EXPANDED_W,
     height: 700,
     frame: false,
-    transparent: true,
+    backgroundColor: '#f8f9fb',
     resizable: true,
     minWidth: CHAT_MIN_W,
     minHeight: CHAT_MIN_H,
-    skipTaskbar: true,
-    alwaysOnTop: true,
+    skipTaskbar: false,
+    alwaysOnTop: false,
     webPreferences: { preload: preloadPath(), backgroundThrottling: false },
   });
 
@@ -941,10 +920,6 @@ const createChatWindow = () => {
   chatWindow.webContents.on('did-finish-load', () => {
     chatWindow?.webContents.setZoomFactor(1);
     reportChatContentZoom();
-    const socialSnapshot = socialBackgroundPoller.latestSnapshot();
-    if (socialSnapshot) {
-      chatWindow?.webContents.send('social-inbox-updated', socialSnapshot);
-    }
   });
 
   // Closing hides rather than destroys so the in-memory conversation survives
@@ -1004,16 +979,9 @@ const showChatPanel = () => {
     );
   }
   syncChatLayoutModeFromWindowSize();
-  chatWindow.setAlwaysOnTop(true, 'floating');
+  configureMainWindow(chatWindow);
   chatWindow.show();
   chatWindow.focus();
-
-  // Once chat is visible, the social inbox is directly accessible and no
-  // longer needs to keep a hidden avatar temporarily revealed.
-  dismissSocialAvatarNotification();
-  if (avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.webContents.send('dismiss-social-avatar-notification');
-  }
 
   // Chat is already the user's active support surface. Cancel suggestions that
   // have not been revealed yet and prevent an in-flight hidden-avatar request
@@ -1065,20 +1033,6 @@ const resizeChatPanelInPlace = () => {
 const isChatPanelOpen = (): boolean =>
   chatWindow !== null && !chatWindow.isDestroyed() &&
   chatWindow.isVisible();
-
-function openSocialInbox(): void {
-  pendingOpenSocialInbox = true;
-  dismissSocialAvatarNotification();
-  showChatPanel();
-  if (
-    chatWindow &&
-    !chatWindow.isDestroyed() &&
-    hotkeyCapture.isRendererReady
-  ) {
-    pendingOpenSocialInbox = false;
-    chatWindow.webContents.send('open-social-inbox');
-  }
-}
 
 const openChatSettings = () => {
   createChatWindow();
@@ -1682,17 +1636,19 @@ async function testModelConnection(
       role,
       connection,
       apiKey,
+      routing,
     }: {
       role?: 'sensing' | 'tutor';
       connection?: ModelConnection;
       apiKey?: string;
+      routing?: 'direct' | 'router';
     } = {},
   ): Promise<{ success: boolean; message?: string; error?: string }> {
     if ((role !== 'sensing' && role !== 'tutor') || !connection) {
       return { success: false, error: 'Invalid model test request.' };
     }
     try {
-    const prepared = prepareModelConnectionTest(connection, role, apiKey ?? '');
+    const prepared = prepareModelConnectionTest(connection, role, apiKey ?? '', routing);
       const providerEnvNames = new Set([
         'ANTHROPIC_API_KEY',
         'GEMINI_API_KEY',
@@ -1824,6 +1780,7 @@ async function restoreSessionAfterModelRestart(): Promise<void> {
 ipcMain.handle(
   'save-model-configuration',
   async (_event, input: ModelConfigurationInput) => {
+    if (pendingChatRequest) return {success:false,error:'Stop the current run before changing models.'};
     try {
       const config = saveModelConfiguration(input);
       modelHealthCache.clear();
@@ -1888,6 +1845,7 @@ ipcMain.handle(
 ipcMain.handle(
   'set-chat-model',
   async (_event, { modelId }: { modelId?: string } = {}) => {
+    if (pendingChatRequest) return {success:false,error:'Stop the current run before changing models.'};
     const selected = resolveTutorRuntimeConnection(modelId, {
       fallbackToDefault: false,
     });
@@ -1982,10 +1940,6 @@ ipcMain.on('hotkey-capture-ready', () => {
       tutorModelId: chatSessions.currentTutorModelId,
     });
   }
-  if (pendingOpenSocialInbox && chatWindow && !chatWindow.isDestroyed()) {
-    pendingOpenSocialInbox = false;
-    chatWindow.webContents.send('open-social-inbox');
-  }
 });
 
 // Pet/menu "Open Chat" is a user-initiated conversation boundary. Always start
@@ -2002,14 +1956,6 @@ ipcMain.on(
     open.catch((err) => log.warn(`[Chat] Could not open Coco: ${err}`));
   },
 );
-
-ipcMain.removeAllListeners('open-social-inbox');
-ipcMain.on('open-social-inbox', () => openSocialInbox());
-
-ipcMain.removeAllListeners('social-avatar-notification-closed');
-ipcMain.on('social-avatar-notification-closed', () => {
-  dismissSocialAvatarNotification();
-});
 
 // "Help me with this" on a proactive bubble.
 //   • Active session  → open the chat panel and inject the observation as a new
@@ -2332,9 +2278,9 @@ ipcMain.on(
 // The renderer sends this when the user clicks the expand / collapse button to
 // switch the chat between the narrow side panel and a wider reading width.
 ipcMain.removeAllListeners('toggle-float-window');
-ipcMain.on('toggle-float-window', () => {
+ipcMain.on('toggle-float-window', (_event, { expanded }: {expanded?: boolean} = {}) => {
   if (!chatWindow || chatWindow.isDestroyed()) return;
-  isFloatMode = !isFloatMode; // isFloatMode === narrow side-panel
+  isFloatMode = typeof expanded === 'boolean' ? !expanded : !isFloatMode; // isFloatMode === narrow side-panel
   resizeChatPanelInPlace();
   chatWindow.webContents.send('float-window-state', { isFloat: isFloatMode });
 });
@@ -2561,13 +2507,6 @@ ipcMain.removeAllListeners('avatar-renderer-ready');
 ipcMain.on('avatar-renderer-ready', () => {
   avatarRendererReady = true;
   if (pendingOpenHistory) openHistory();
-  if (pendingSocialAvatarNotification && avatarWindow) {
-    avatarWindow.webContents.send(
-      'social-avatar-notification',
-      pendingSocialAvatarNotification,
-    );
-    pendingSocialAvatarNotification = null;
-  }
 });
 
 ipcMain.removeAllListeners('avatar-suggestion-revealed-state');
@@ -2912,6 +2851,7 @@ ipcMain.on(
       suggestion?: ReadyInstantSuggestion;
       surface?: 'bubble' | 'notification';
       copyPromptToInput?: boolean;
+      execute?: boolean;
     },
   ) => {
     const suggestion = payload?.suggestion;
@@ -2930,7 +2870,7 @@ ipcMain.on(
           phrase: suggestion.title,
           label: payload.status?.replace(/_/g, ' ') || 'suggestion',
           rawObservation: [
-            'I’d like to chat about this suggestion:',
+            payload.execute ? 'Carry out this suggestion for me:' : 'I’d like to chat about this suggestion:',
             `**${suggestion.title}**`,
             suggestionText || suggestion.copyText,
             rawObservation
@@ -2939,7 +2879,7 @@ ipcMain.on(
           ]
             .filter(Boolean)
             .join('\n\n'),
-          deferUntilUserMessage: true,
+          deferUntilUserMessage: !payload.execute,
         };
 
     if (payload.observationId) {
@@ -3058,11 +2998,8 @@ ipcMain.on('proactive-session-end-confirmed', () => {
 });
 
 // ── Local chat turn ────────────────────────────────────────────────────────────
-// The renderer (SessionChatView) sends the user's message here. We generate an
-// observation of the current screen (best-effort) and ask the local tutor server
-// for guidance, returning it synchronously — no backend, DB, or WebSocket.
-// Pasted images arrive as data URLs; we persist them to temp files so the tutor
-// server (which reads image paths from disk) can include them in the LLM call.
+// Pi executes each turn in a persistent conversation workspace. Coco supplies
+// configured models, context and tools, and records streamed progress.
 ipcMain.removeHandler('send-chat-message');
 ipcMain.handle(
   'send-chat-message',
@@ -3080,6 +3017,9 @@ ipcMain.handle(
       hotkeyImages?: string[];
     },
   ) => {
+    if (pendingChatRequest) return { error: 'Coco is already working. Stop the current run first.' };
+    if (!chatSessions.currentSessionId) return { error: 'Open a conversation before sending a message.' };
+    pendingChatRequest = { requestId, stopped: false };
     const tutorPort = process.env.TUTOR_PORT || '8081';
     const requestStartedAt = new Date();
     const assistantMessageId = `assistant-${requestId}`;
@@ -3095,30 +3035,8 @@ ipcMain.handle(
     });
     personalizationScheduler?.beginInteractiveInference();
 
-    // Persist any pasted images to temp files for the tutor's vision call.
-    const imagePaths: string[] = [];
     const hotkeyImageSet = new Set(hotkeyImages ?? []);
-    let hotkeyImageCount = 0;
-    for (const dataUrl of images ?? []) {
-      const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/.exec(dataUrl);
-      if (!m) continue;
-      const ext = m[1].split('/')[1]?.split('+')[0] || 'png';
-      const isHotkeyCapture = hotkeyImageSet.has(dataUrl);
-      const sourceLabel = isHotkeyCapture ? 'hotkey' : 'paste';
-      const file = path.join(
-        os.tmpdir(),
-        `coco-${sourceLabel}-${randomUUID()}.${ext}`,
-      );
-      try {
-        fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
-        imagePaths.push(file);
-        if (isHotkeyCapture) hotkeyImageCount += 1;
-      } catch (err) {
-        log.warn(
-          `[Chat] Failed to write pasted image: ${(err as Error).message}`,
-        );
-      }
-    }
+    const hotkeyImageCount = (images ?? []).filter((image) => hotkeyImageSet.has(image)).length;
 
     const contextualizedUserText =
       hotkeyImageCount > 0
@@ -3134,17 +3052,19 @@ ipcMain.handle(
       : userText;
 
     try {
-      await consumeTutorStream(
-        `http://127.0.0.1:${tutorPort}/events/user_prompt/stream`,
-        {
-          // Current-screen context is now retrieved only when the tutor calls
-          // observe_screen; ordinary chat turns skip the observer entirely.
-          observation: '',
-          session_id: chatSessions.currentSessionId,
-          user_text: contextualizedUserText,
-          image_paths: imagePaths.length ? imagePaths : null,
-        },
-        (streamEvent: TutorStreamEvent) => {
+      await chatSessions.waitUntilReady();
+      if (pendingChatRequest?.stopped) {
+        ipcEvent.sender.send('chat-stream-event', {requestId,type:'done',guidance:'Stopped.',stopped:true});
+        return {streamed:true};
+      }
+      await piHarness.run({
+        requestId,
+        sessionId: chatSessions.currentSessionId!,
+        directory: agentDirectory(),
+        tutorUrl: `http://127.0.0.1:${tutorPort}`,
+        token: piBridgeToken,
+        text: contextualizedUserText, images: images ?? [],
+        emit: (streamEvent: TutorStreamEvent) => {
           if (streamEvent.type === 'text_delta') {
             if (!firstTokenAt) firstTokenAt = new Date();
             if (typeof streamEvent.text === 'string') {
@@ -3187,15 +3107,7 @@ ipcMain.handle(
               : {}),
           });
         },
-        undefined,
-        {
-          // This is an activity timeout, refreshed by every SSE chunk (including
-          // server keep-alives), plus a separate ceiling for genuinely runaway
-          // tool/model loops.
-          idleMs: 60_000,
-          hardMs: 5 * 60_000,
-        },
-      );
+      });
       return { streamed: true };
     } catch (err) {
       const ax = err as { response?: { data?: unknown }; message?: string };
@@ -3206,7 +3118,7 @@ ipcMain.handle(
       const error =
         err instanceof TutorStreamTimeoutError
           ? 'The tutor took too long to respond. Please retry.'
-          : 'The tutor could not generate a response. Please try again.';
+          : err instanceof Error ? err.message : 'Coco could not complete this request.';
       ipcEvent.sender.send('chat-stream-event', {
         requestId,
         type: 'error',
@@ -3215,6 +3127,7 @@ ipcMain.handle(
       return { error };
     } finally {
       personalizationScheduler?.endInteractiveInference();
+      pendingChatRequest = null;
     }
   },
 );
@@ -3249,6 +3162,9 @@ ipcMain.handle(
           'The selected tutor model does not support audio input. Choose an audio-capable tutor or type your message.',
       };
     }
+    if (pendingChatRequest) return { error: 'Coco is already working. Stop the current run first.' };
+    if (!chatSessions.currentSessionId) return { error: 'Open a conversation before sending a message.' };
+    pendingChatRequest = { requestId, stopped: false };
     const tutorPort = process.env.TUTOR_PORT || '8081';
     const requestStartedAt = new Date();
     const assistantMessageId = `assistant-${requestId}`;
@@ -3264,14 +3180,19 @@ ipcMain.handle(
     });
     personalizationScheduler?.beginInteractiveInference();
     try {
-      await consumeTutorStream(
-        `http://127.0.0.1:${tutorPort}/events/audio_prompt/stream`,
-        {
-          audio_data: audioData,
-          audio_format: 'wav',
-          session_id: chatSessions.currentSessionId,
-        },
-        (streamEvent: TutorStreamEvent) => {
+      await chatSessions.waitUntilReady();
+      if (pendingChatRequest?.stopped) {
+        ipcEvent.sender.send('chat-stream-event', {requestId,type:'done',guidance:'Stopped.',stopped:true});
+        return {streamed:true};
+      }
+      await piHarness.run({
+        requestId,
+        sessionId: chatSessions.currentSessionId!,
+        directory: agentDirectory(),
+        tutorUrl: `http://127.0.0.1:${tutorPort}`,
+        token: piBridgeToken,
+        text: '', images: [], audioData,
+        emit: (streamEvent: TutorStreamEvent) => {
           if (streamEvent.type === 'text_delta') {
             if (!firstTokenAt) firstTokenAt = new Date();
             if (typeof streamEvent.text === 'string') {
@@ -3311,12 +3232,7 @@ ipcMain.handle(
               : {}),
           });
         },
-        undefined,
-        {
-          idleMs: 60_000,
-          hardMs: 5 * 60_000,
-        },
-      );
+      });
       return { streamed: true };
     } catch (err) {
       log.error(
@@ -3335,6 +3251,7 @@ ipcMain.handle(
       return { error };
     } finally {
       personalizationScheduler?.endInteractiveInference();
+      pendingChatRequest = null;
     }
   },
 );
@@ -3697,6 +3614,7 @@ ipcMain.handle('set-user-id', async (event, userId) => {
 
 interface DesktopAuthCredentials {
   participantId?: string;
+  email?: string;
   password?: string;
   keepSignedIn?: boolean;
 }
@@ -3705,7 +3623,6 @@ const initializeGatewayParticipant = (participantId: string): void => {
   currentUserId = participantId;
   isAuthenticated = true;
   if (!gatewayClient) return;
-  socialBackgroundPoller.start();
   gatewayOutbox = new GatewayOutbox(
     app.getPath('userData'),
     participantId,
@@ -3720,11 +3637,20 @@ const initializeGatewayParticipant = (participantId: string): void => {
 };
 
 const configureParticipantRouterCredential = async (): Promise<void> => {
-  if (!gatewayClient || !process.env.LLM_ROUTER_URL?.trim()) return;
-  const credential = await gatewayClient.issueRouterCredential();
-  process.env.LLM_ROUTER_API_KEY = credential.token;
-  ensureManagedDefaultModelConfiguration();
-  log.info('[Auth] participant-scoped LLM Router credential configured');
+  if (
+    !gatewayClient ||
+    !process.env.LLM_ROUTER_URL?.trim() ||
+    readModelConfiguration()?.routing === 'direct'
+  ) return;
+  try {
+    const credential = await gatewayClient.issueRouterCredential();
+    process.env.LLM_ROUTER_API_KEY = credential.token;
+    ensureManagedDefaultModelConfiguration();
+    log.info('[Auth] participant-scoped LLM Router credential configured');
+  } catch (error) {
+    delete process.env.LLM_ROUTER_API_KEY;
+    log.warn(`[Auth] model Router credential unavailable: ${String(error)}`);
+  }
 };
 
 const authenticate = async (
@@ -3743,6 +3669,9 @@ const authenticate = async (
   try {
     const request = {
       participantId: credentials.participantId.trim(),
+      ...(mode === 'signup' && typeof credentials.email === 'string'
+        ? { email: credentials.email.trim() }
+        : {}),
       password: credentials.password,
       keepSignedIn: credentials.keepSignedIn !== false,
     };
@@ -3780,7 +3709,16 @@ ipcMain.handle('auth-signin', (_event, credentials: DesktopAuthCredentials) =>
   authenticate('signin', credentials),
 );
 ipcMain.removeAllListeners('auth-logout');
-ipcMain.on('auth-logout', () => {
+ipcMain.on('auth-logout', async () => {
+  isAuthenticated = false;
+  if (telemetryFlushTimer) clearInterval(telemetryFlushTimer);
+  void stopAgentRun();
+  try {
+    await gatewayClient?.signOut();
+  } catch (error) {
+    log.warn(`[Auth] server logout failed: ${String(error)}`);
+  }
+  delete process.env.LLM_ROUTER_API_KEY;
   try {
     clearAuthSession(app.getPath('userData'));
     log.info('[Auth] signed out; restarting at the authentication screen');
@@ -3790,8 +3728,6 @@ ipcMain.on('auth-logout', () => {
     log.error(`[Auth] could not clear the saved session: ${String(error)}`);
   }
 });
-registerSocialIpcHandlers(ipcMain, socialService);
-registerKnowledgeAnswerIpcHandler(ipcMain, knowledgeAnswerService);
 
 ipcMain.removeAllListeners('authentication-ui-complete');
 ipcMain.on('authentication-ui-complete', () => {
@@ -3890,10 +3826,10 @@ app.on('second-instance', () => {
 });
 
 app.on('will-quit', () => {
+  void piHarness.dispose();
   // Unregister all shortcuts
   globalShortcut.unregisterAll();
   eveningPersonalizationScheduler?.stop();
-  socialBackgroundPoller.stop();
   if (telemetryFlushTimer) clearInterval(telemetryFlushTimer);
 });
 
@@ -4321,6 +4257,9 @@ app
     // service startup. The manager delays its first network request briefly.
     desktopAppUpdater.start();
     await configureLocalServicePorts(serviceManager);
+    serviceManager.configureServiceEnv('tutor-server', {
+      COCO_PI_BRIDGE_TOKEN: piBridgeToken,
+    });
     initializeDailyMemoryDraftService();
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
@@ -4431,6 +4370,7 @@ app.on('before-quit', (event) => {
   if (isQuitting) return;
   event.preventDefault();
   isQuitting = true;
+  void stopAgentRun();
   chatSessions.recordGatewayEnd('app_quit');
   log.info('App quitting: waiting up to 10s for services to stop...');
   desktopAppUpdater.stop();

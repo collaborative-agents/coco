@@ -5,6 +5,7 @@ import trainingAnimation from '../../../assets/training.gif';
 import { AnimatedCocoGif } from './CocoGifControls';
 import useProvisionalDiscovery from './useProvisionalDiscovery';
 import './PersonalizationCenter.css';
+import WorkspaceIcon from './chat/WorkspaceIcon';
 
 export interface PersonalizationStatusInfo {
   available: boolean;
@@ -729,6 +730,15 @@ export default function PersonalizationCenter({
           <h1>Personalization</h1>
           <p>See what Coco is learning and review updates</p>
         </div>
+        <button
+          type="button"
+          className="personalization-center__close"
+          aria-label="Close Personalization"
+          title="Close Personalization"
+          onClick={onBack}
+        >
+          <WorkspaceIcon name="close" />
+        </button>
       </header>
 
       {error && (
