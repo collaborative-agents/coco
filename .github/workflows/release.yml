@@ -258,9 +258,9 @@ jobs:
         working-directory: ./desktop
         shell: bash
         run: |
-          app_path="$(find release/build -maxdepth 2 -name 'Coco.app' -print -quit)"
+          app_path="$(find release/build -maxdepth 2 -name 'coco.app' -print -quit)"
           if [[ -z "$app_path" ]]; then
-            echo "Packaged Coco.app was not found" >&2
+            echo "Packaged coco.app was not found" >&2
             exit 1
           fi
 
