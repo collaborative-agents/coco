@@ -30,6 +30,7 @@ const result = spawnSync(
   'uv',
   [
     'run',
+    '--locked',
     'python',
     '-m',
     'PyInstaller',

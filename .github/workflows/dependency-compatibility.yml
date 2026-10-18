@@ -1,0 +1,37 @@
+name: Dependency compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev/nv]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: Python dependencies (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install reviewed dependency versions
+        run: uv sync --locked --group dev
+      - name: Check installed dependency requirements
+        run: uv pip check
+      - name: Exercise real SDK tool calls against a local API
+        run: uv run --locked python -m external_api.dependency_smoke
+      - name: Test model adapter and tutor tools
+        run: >-
+          uv run --locked pytest -q
+          lib/external_api/external_api/litellm_test.py
+          lib/proactive_tutor/proactive_tutor/agents/tutor_test.py

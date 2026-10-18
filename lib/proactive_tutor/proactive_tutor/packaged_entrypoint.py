@@ -5,6 +5,12 @@ import sys
 
 def main() -> None:
     """Run either the MCP stdio server or the normal tutor HTTP server."""
+    if sys.argv[1:] == ["--dependency-smoke-test"]:
+        from external_api.dependency_smoke import main as smoke_main
+
+        smoke_main()
+        return
+
     if sys.argv[1:] == ["--memory-mcp"]:
         # Keep this branch free of tutor imports. Tutor logging uses stdout,
         # which would corrupt the memory server's JSON-RPC stdio transport.
