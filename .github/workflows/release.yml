@@ -46,7 +46,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Resolve version from current tags
         id: version
@@ -92,6 +92,9 @@ jobs:
             } catch (error) {
               if (error.status !== 404) throw error;
             }
+
+      - name: Test packaging recovery tooling
+        run: node --test desktop/scripts/package-recovery.test.mjs
 
       - name: Test macOS update manifest tooling
         run: node --test desktop/scripts/create-mac-update-manifest.test.mjs
@@ -140,40 +143,97 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: "npm"
           cache-dependency-path: desktop/package-lock.json
 
+      # Run-scoped checkpoints intentionally have no fallback keys: never mix releases.
+      - name: Identify package checkpoint
+        id: checkpoint
+        shell: bash
+        env:
+          CHECKPOINT_SOURCE: ${{ github.sha }}
+          CHECKPOINT_RUN: ${{ github.run_id }}
+          CHECKPOINT_PLATFORM: ${{ matrix.platform }}
+        run: |
+          echo "ELECTRON_CACHE=$RUNNER_TEMP/electron-cache" >> "$GITHUB_ENV"
+          node -e '
+            const { createHash } = require("node:crypto");
+            const { appendFileSync } = require("node:fs");
+            const values = ["v1", process.env.CHECKPOINT_RUN, process.env.CHECKPOINT_SOURCE,
+              process.env.CHECKPOINT_PLATFORM, process.env.RELEASE_VERSION,
+              process.env.COCO_GATEWAY_URL, process.env.LLM_ROUTER_URL];
+            const key = createHash("sha256").update(JSON.stringify(values)).digest("hex");
+            appendFileSync(process.env.GITHUB_OUTPUT, `key=${key}\n`);
+          '
+
+      - name: Restore signed macOS app
+        if: startsWith(matrix.platform, 'macos')
+        id: signed
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/coco-signed.zip
+          key: signed-app-${{ steps.checkpoint.outputs.key }}
+
+      - name: Restore service build
+        if: steps.signed.outputs.cache-hit != 'true'
+        id: services
+        uses: actions/cache/restore@v4
+        with:
+          path: desktop/service-dist
+          key: services-${{ steps.checkpoint.outputs.key }}
+
+      - name: Restore Electron downloads
+        id: electron-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/electron-cache
+          key: electron-v1-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('desktop/package-lock.json') }}
+
       - uses: actions/setup-python@v5
+        if: steps.signed.outputs.cache-hit != 'true'
         with:
           python-version: "3.12"
 
       - uses: astral-sh/setup-uv@v5
+        if: steps.signed.outputs.cache-hit != 'true'
         with:
           version: "latest"
 
       - name: Install Python dependencies
-        run: uv sync --locked --group dev
+        if: steps.signed.outputs.cache-hit != 'true'
+        run: node desktop/scripts/retry-command.mjs bash -c "uv sync --locked --group dev"
 
       - name: Check installed dependency requirements
+        if: steps.signed.outputs.cache-hit != 'true'
         run: uv pip check
 
       - name: Check real SDK tool calls before packaging
+        if: steps.signed.outputs.cache-hit != 'true'
         run: uv run --locked python -m external_api.dependency_smoke
 
       - name: Install desktop dependencies
         working-directory: ./desktop
-        run: npm ci
+        run: node scripts/retry-command.mjs bash -c "npm ci"
+
+      - name: Save Electron downloads before later steps can fail
+        if: steps.electron-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/electron-cache
+          key: ${{ steps.electron-cache.outputs.cache-primary-key }}
 
       - name: Apply requested app version
         shell: bash
         run: node desktop/scripts/set-release-version.mjs "$RELEASE_VERSION"
 
       - name: Build services
+        if: steps.signed.outputs.cache-hit != 'true' && steps.services.outputs.cache-hit != 'true'
         working-directory: ./desktop
         run: npm run build:services
 
       - name: Check packaged SDK tool calls before signing
+        if: steps.signed.outputs.cache-hit != 'true'
         shell: bash
         run: |
           service="desktop/service-dist/coco-services/tutor-server"
@@ -182,7 +242,15 @@ jobs:
           fi
           "$service" --dependency-smoke-test
 
+      - name: Save validated service build
+        if: steps.signed.outputs.cache-hit != 'true' && steps.services.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: desktop/service-dist
+          key: ${{ steps.services.outputs.cache-primary-key }}
+
       - name: Clean dist
+        if: steps.signed.outputs.cache-hit != 'true'
         working-directory: ./desktop
         run: npx ts-node ./.erb/scripts/clean.js dist
 
@@ -202,10 +270,12 @@ jobs:
           }
 
       - name: Build Electron app
+        if: steps.signed.outputs.cache-hit != 'true'
         working-directory: ./desktop
         run: npm run build
 
       - name: Verify embedded study configuration
+        if: steps.signed.outputs.cache-hit != 'true'
         working-directory: ./desktop
         shell: bash
         run: |
@@ -221,6 +291,7 @@ jobs:
           '
 
       - name: Test updater and companion windows
+        if: steps.signed.outputs.cache-hit != 'true'
         working-directory: ./desktop
         run: npm test -- --runInBand --silent --runTestsByPath src/main/app-updater.test.ts src/main/services/fullscreen-companion-window.test.ts
 
@@ -258,39 +329,112 @@ jobs:
           chmod 600 "$key_path"
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
-      - name: Package Electron app (macOS signed and notarized)
-        if: startsWith(matrix.platform, 'macos')
+      - name: Build and sign macOS app
+        if: startsWith(matrix.platform, 'macos') && steps.signed.outputs.cache-hit != 'true'
         working-directory: ./desktop
-        run: npx electron-builder build --publish never --${{ matrix.arch }}
+        run: node scripts/retry-command.mjs npx electron-builder build --publish never --${{ matrix.arch }} --dir -c.mac.notarize=false -c.afterPack=./scripts/prepare-mac-update.cjs
         env:
           CSC_LINK: ${{ secrets.MAC_CERT }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PWD }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
+      - name: Archive signed app checkpoint
+        if: startsWith(matrix.platform, 'macos') && steps.signed.outputs.cache-hit != 'true'
+        working-directory: ./desktop
+        shell: bash
+        run: |
+          app_path="$(find release/build -maxdepth 2 -name 'coco.app' -print -quit)"
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$RUNNER_TEMP/coco-signed.zip"
+
+      - name: Save signed app before contacting Apple
+        if: startsWith(matrix.platform, 'macos') && steps.signed.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/coco-signed.zip
+          key: ${{ steps.signed.outputs.cache-primary-key }}
+
+      - name: Restore app and identify notarization checkpoint
+        if: startsWith(matrix.platform, 'macos')
+        id: notarization
+        working-directory: ./desktop
+        shell: bash
+        run: |
+          # ditto preserves framework symlinks, modes, and the code signature.
+          mkdir -p release/build/checkpoint
+          ditto -x -k "$RUNNER_TEMP/coco-signed.zip" release/build/checkpoint
+          echo "APP_PATH=$PWD/release/build/checkpoint/coco.app" >> "$GITHUB_ENV"
+          digest="$(shasum -a 256 "$RUNNER_TEMP/coco-signed.zip" | cut -d ' ' -f 1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Apple submission ID
+        if: startsWith(matrix.platform, 'macos')
+        id: submission
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/coco-notary.json
+          # Tie the submission to the exact signed bytes, even if the app cache was evicted.
+          key: notary-${{ steps.checkpoint.outputs.key }}-${{ steps.notarization.outputs.digest }}
+
+      - name: Submit signed app to Apple
+        if: startsWith(matrix.platform, 'macos') && steps.submission.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: node desktop/scripts/notarize-app.mjs submit "$RUNNER_TEMP/coco-signed.zip" "$RUNNER_TEMP/coco-notary.json"
+
+      - name: Save Apple submission ID before waiting
+        if: startsWith(matrix.platform, 'macos') && steps.submission.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/coco-notary.json
+          key: ${{ steps.submission.outputs.cache-primary-key }}
+
+      - name: Wait for Apple notarization
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        timeout-minutes: 85
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: node desktop/scripts/notarize-app.mjs wait "$RUNNER_TEMP/coco-signed.zip" "$RUNNER_TEMP/coco-notary.json"
+
+      - name: Staple notarization ticket
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: node desktop/scripts/retry-command.mjs xcrun stapler staple "$APP_PATH"
+
       - name: Verify macOS signature and notarization ticket
         if: startsWith(matrix.platform, 'macos')
         working-directory: ./desktop
         shell: bash
         run: |
-          app_path="$(find release/build -maxdepth 2 -name 'coco.app' -print -quit)"
+          app_path="$APP_PATH"
           if [[ -z "$app_path" ]]; then
             echo "Packaged coco.app was not found" >&2
             exit 1
           fi
 
           codesign --verify --deep --strict --verbose=2 "$app_path"
-          spctl --assess --verbose --type exec "$app_path"
-          xcrun stapler validate "$app_path"
+          node scripts/retry-command.mjs spctl --assess --verbose --type exec "$app_path"
+          node scripts/retry-command.mjs xcrun stapler validate "$app_path"
 
-          update_config="$(find release/build -path '*/Contents/Resources/app-update.yml' -print -quit)"
-          if [[ -z "$update_config" ]]; then
+          update_config="$APP_PATH/Contents/Resources/app-update.yml"
+          if [[ ! -f "$update_config" ]]; then
             echo "Packaged app-update.yml was not found" >&2
             exit 1
           fi
           grep -q 'provider: github' "$update_config"
           grep -q 'owner: collaborative-agents' "$update_config"
           grep -qx 'repo: coco' "$update_config"
+
+      - name: Create installers from notarized macOS app
+        if: startsWith(matrix.platform, 'macos')
+        working-directory: ./desktop
+        run: node scripts/retry-command.mjs npx electron-builder build --publish never --${{ matrix.arch }} --prepackaged "$APP_PATH" -c.mac.notarize=false
 
       - name: Package Electron app (Windows)
         if: ${{ !startsWith(matrix.platform, 'macos') }}
@@ -341,6 +485,7 @@ jobs:
             desktop/release/build/*.exe
             desktop/release/build/*.blockmap
             desktop/release/build/latest.yml
+          overwrite: true
           retention-days: 7
           compression-level: 6
           if-no-files-found: error
@@ -354,11 +499,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: coco-installer-*
           path: artifacts
 
       - name: Create combined macOS update manifest
