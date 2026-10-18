@@ -3,6 +3,15 @@ name: Package & Release
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: "auto = latest stable tag + next patch; or enter a newer version manually"
+        required: true
+        default: "auto"
+        type: string
+      release_notes:
+        description: "What's new in this version (Markdown supported)"
+        required: true
+        type: string
       platforms:
         description: "Target platforms"
         required: true
@@ -16,12 +25,68 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: coco-release
+  cancel-in-progress: false
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.result }}
+      version: ${{ steps.version.outputs.version }}
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve version from current tags
+        id: version
+        uses: actions/github-script@v7
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        with:
+          script: |
+            const resolve = require('./desktop/scripts/resolve-release-version.cjs');
+            const tags = await github.paginate(github.rest.repos.listTags, { ...context.repo, per_page: 100 });
+            const result = resolve(process.env.REQUESTED_VERSION, tags.map(tag => tag.name));
+            core.setOutput('version', result.version);
+            core.info(`Latest stable tag: ${result.current || '(none)'}; building: ${result.version}`);
+            await core.summary.addHeading('Release version').addTable([
+              ['Latest stable tag', result.current || '(none)'],
+              ['Suggested next version', result.suggested],
+              ['Building', result.version],
+            ]).write();
+
+      - name: Validate stable release version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
+        run: |
+          node --test desktop/scripts/set-release-version.test.mjs
+          node --test desktop/scripts/resolve-release-version.test.cjs
+          node desktop/scripts/set-release-version.mjs "$RELEASE_VERSION"
+          if [[ -z "${RELEASE_NOTES//[[:space:]]/}" ]]; then
+            echo "Release notes must describe what's new in this version" >&2
+            exit 1
+          fi
+
+      - name: Prevent reusing a release tag
+        uses: actions/github-script@v7
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        with:
+          script: |
+            try {
+              await github.rest.git.getRef({ ...context.repo, ref: `tags/v${process.env.RELEASE_VERSION}` });
+              core.setFailed('This version tag already exists. Choose a new version for an update.');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
       - id: matrix
         run: |
           case "${{ github.event.inputs.platforms }}" in
@@ -38,6 +103,8 @@ jobs:
 
   package:
     needs: prepare
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -66,6 +133,10 @@ jobs:
       - name: Install desktop dependencies
         working-directory: ./desktop
         run: npm ci
+
+      - name: Apply requested app version
+        shell: bash
+        run: node desktop/scripts/set-release-version.mjs "$RELEASE_VERSION"
 
       - name: Build services
         working-directory: ./desktop
@@ -157,7 +228,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: package
+    needs: [prepare, package]
     if: ${{ success() }}
     runs-on: ubuntu-latest
     steps:
@@ -170,12 +241,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Coco ${{ github.ref_name }} Build ${{ github.run_number }}
-          tag_name: build-${{ github.run_number }}
+          name: Coco v${{ needs.prepare.outputs.version }}
+          tag_name: v${{ needs.prepare.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body: ${{ inputs.release_notes }}
           files: artifacts/**
           draft: false
-          prerelease: true
-          generate_release_notes: true
+          prerelease: false
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
