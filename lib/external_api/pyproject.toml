@@ -5,7 +5,7 @@ description = "API for calling external services like LLM provider."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "litellm[caching]>=1.77.5",
+    "litellm[caching]==1.91.0",
     "lmstudio>=1.5.0",
     "httpx>=0.27.0",
     "openai>=1.0.0",
