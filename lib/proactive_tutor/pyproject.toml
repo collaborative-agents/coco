@@ -9,7 +9,6 @@ dependencies = [
     "external_api",
     "py_utils",
     "memory-mcp",
-    "screen-context",
     "mcp>=1.8.1,<2",
     # Web server
     "fastapi>=0.104.0",
@@ -32,7 +31,6 @@ packages = ["."]
 external_api = { workspace = true }
 py_utils = { workspace = true }
 memory-mcp = { workspace = true }
-screen-context = { workspace = true }
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py", "*_test.py"]
