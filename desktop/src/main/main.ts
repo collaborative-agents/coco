@@ -2046,7 +2046,7 @@ const showNotification = (payload: {
   const { workArea } = screen.getPrimaryDisplay();
   const x = workArea.x + workArea.width - initialWidth - 16;
   const y = workArea.y + 16;
-  const adjustable = hideAvatarMode;
+  const adjustable = hideAvatarMode || payload.notifType === 'daily-summary';
 
   const nextNotificationWindow = new BrowserWindow({
     show: false,
@@ -3248,9 +3248,9 @@ ipcMain.on(
   'set-notification-expanded',
   (_event, { expanded }: { expanded?: boolean }) => {
     if (
-      !hideAvatarMode ||
       !notificationWindow ||
-      notificationWindow.isDestroyed()
+      notificationWindow.isDestroyed() ||
+      !notificationWindow.isResizable()
     ) {
       return;
     }
