@@ -93,3 +93,37 @@ test('failed submission keeps the answers available for retry', async () => {
     (screen.getByRole('radio', { name: /Brief/ }) as HTMLInputElement).checked,
   ).toBe(true);
 });
+
+test('hides pending, failed, and malformed questions without showing technical errors', () => {
+  const { container, rerender } = render(
+    <QuestionCard call={{ ...call, result: undefined }} interactive />,
+  );
+  expect(container.textContent).toBe('');
+  rerender(
+    <QuestionCard
+      call={{ ...call, status: 'error', result: { error: 'Invalid JSON' } }}
+      interactive
+    />,
+  );
+  expect(container.textContent).toBe('');
+  rerender(
+    <QuestionCard
+      call={{
+        ...call,
+        status: 'completed',
+        result: { ...call.result, error: 'Validation failed' },
+      }}
+      interactive
+    />,
+  );
+  expect(container.textContent).toBe('');
+  rerender(
+    <QuestionCard
+      call={{ ...call, result: { questions: [null] as any } }}
+      interactive
+    />,
+  );
+  expect(container.textContent).toBe('');
+  rerender(<QuestionCard call={call} interactive />);
+  expect(screen.getByText('Which style?')).toBeTruthy();
+});

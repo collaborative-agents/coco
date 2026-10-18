@@ -10,7 +10,9 @@ export default function QuestionCard({
   call: TutorToolCall;
   interactive: boolean;
 }) {
-  const questions = call.result?.questions ?? [];
+  const questions = Array.isArray(call.result?.questions)
+    ? call.result.questions
+    : [];
   const [drafts, setDrafts] = useState<
     Record<number, { selected: string[]; text: string }>
   >({});
@@ -20,6 +22,29 @@ export default function QuestionCard({
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
+  // Tool parsing/validation failures are for the agent to recover from, not
+  // user-facing questions. Wait until a complete questionnaire is available.
+  if (
+    call.status === 'error' ||
+    call.result?.error ||
+    questions.length === 0 ||
+    !questions.every(
+      (question) =>
+        question &&
+        typeof question.question === 'string' &&
+        question.question.trim() &&
+        Array.isArray(question.options) &&
+        question.options.every(
+          (option) =>
+            option &&
+            typeof option.label === 'string' &&
+            (option.description == null ||
+              typeof option.description === 'string') &&
+            (option.preview == null || typeof option.preview === 'string'),
+        ),
+    )
+  )
+    return null;
   const waiting =
     interactive &&
     call.status === 'running' &&
@@ -51,7 +76,6 @@ export default function QuestionCard({
     }
   };
   let heading = 'Your answers';
-  if (call.status === 'error') heading = 'Questions closed';
   if (call.result?.cancelled) heading = 'Questions skipped';
   if (call.status === 'running')
     heading = submitted ? 'Answers sent' : 'Preparing questions…';
@@ -204,9 +228,6 @@ export default function QuestionCard({
         <p role="alert" className="agent-question-error">
           {error}
         </p>
-      )}
-      {call.result?.error && (
-        <p className="agent-question-error">{call.result.error}</p>
       )}
     </section>
   );
