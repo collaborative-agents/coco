@@ -153,7 +153,13 @@ jobs:
           version: "latest"
 
       - name: Install Python dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
+
+      - name: Check installed dependency requirements
+        run: uv pip check
+
+      - name: Check real SDK tool calls before packaging
+        run: uv run --locked python -m external_api.dependency_smoke
 
       - name: Install desktop dependencies
         working-directory: ./desktop
@@ -166,6 +172,15 @@ jobs:
       - name: Build services
         working-directory: ./desktop
         run: npm run build:services
+
+      - name: Check packaged SDK tool calls before signing
+        shell: bash
+        run: |
+          service="desktop/service-dist/coco-services/tutor-server"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            service="$service.exe"
+          fi
+          "$service" --dependency-smoke-test
 
       - name: Clean dist
         working-directory: ./desktop

@@ -85,6 +85,26 @@ The avatar surfaces observations from the sensing service in three tiers:
 | `npm run package` | Full production build + electron-builder (DMG / NSIS / AppImage) |
 | `npm test` | Run Jest unit tests |
 
+### Dependency compatibility checks
+
+`uv.lock` pins the Python dependency versions used by development, CI, and
+release builds. CI runs `uv sync --locked`; changing a dependency requires
+regenerating and committing the lockfile with the manifest change. To upgrade
+one dependency, run `uv lock --upgrade-package <package>` and review the diff.
+
+The Dependency compatibility workflow tests Python 3.12 on Apple Silicon,
+Intel macOS, and Windows. It checks installed requirements and sends real
+synchronous and asynchronous LiteLLM tool calls to a local HTTP server. It needs
+no provider credentials and does not call a real model. Run it locally with:
+
+```bash
+uv run --locked python -m external_api.dependency_smoke
+```
+
+Release builds repeat this check before packaging, then run
+`tutor-server --dependency-smoke-test` from the frozen services bundle before
+signing. A failure stops the release before installers are published.
+
 ### Nightly builds
 
 The [Nightly Package & Release workflow](../.github/workflows/nightly.yml)

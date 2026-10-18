@@ -12,8 +12,7 @@ downloads/
 .venv/
 venv/
 
-# uv
-uv.lock
+# uv.lock is tracked so CI and releases use reviewed dependency versions.
 
 # PyInstaller
 *.manifest

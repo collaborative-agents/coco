@@ -4,7 +4,7 @@
 import platform
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, copy_metadata
 
 
 ROOT = Path(SPEC).resolve().parents[2]
@@ -121,6 +121,9 @@ elif platform.system() == "Linux":
 
 tutor_datas = collect_data_files("proactive_tutor")
 tutor_datas += collect_data_files("litellm")
+# Report the exact SDK versions from the packaged dependency smoke check.
+tutor_datas += copy_metadata("litellm")
+tutor_datas += copy_metadata("mcp")
 
 sensing_datas = collect_data_files("sensing")
 sensing_datas += collect_data_files("litellm")
