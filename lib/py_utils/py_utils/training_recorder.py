@@ -18,14 +18,14 @@ Append-only JSONL streams, all joinable on ``session_id`` + ids + ``ts``:
   *(sensing, judge mode only)*
 - ``tutor_calls.jsonl``  — one row per TUTOR LLM call: full prompt + generated
   guidance (the delivered-assistance content). *(proactive_tutor)*
-- ``feedback.jsonl``     — one row per user reaction (engage / dismiss / thumbs
-  up / down) or automatic tutor abstention. *(routed via sensing)*
+- ``feedback.jsonl``     — one row per explicit user reaction (engage / dismiss /
+  thumbs up / down) to a bubble or a chat message. *(routed via sensing)*
 
 All writes are best-effort: any failure is swallowed so data collection can
-never break the live pipeline. Observer screenshots are retained until a
-checkpointed personalization update consumes their data. When
-``COLLECT_TRAINING_SCREENSHOTS=1`` they remain after that update; otherwise the
-personalization runtime deletes the exact consumed files on successful completion.
+never break the live pipeline. Screenshot retention is gated behind the
+``COLLECT_TRAINING_SCREENSHOTS`` env var because it is privacy-sensitive and
+disk-heavy — only the observer needs the pixels; the judge/timing work is
+purely textual.
 """
 
 from __future__ import annotations
@@ -69,10 +69,9 @@ class TrainingRecorder:
         self._dec_path = self._dir / "decisions.jsonl"
         self._epi_path = self._dir / "episodes.jsonl"
         self._shot_dir = self._dir / "observer_screenshots"
-        self._retain_forever = _screenshots_enabled()
-        # The production default keeps pixels temporarily for Coco-PE/LoRA.
-        # An explicit value remains available for focused tests and embedders.
-        self._retain = True if retain_screenshots is None else retain_screenshots
+        self._retain = (
+            _screenshots_enabled() if retain_screenshots is None else retain_screenshots
+        )
         self._session_id: str | None = None
         self._lock = threading.Lock()
         try:
@@ -81,8 +80,7 @@ class TrainingRecorder:
             logger.warning(f"TrainingRecorder: could not create {self._dir}: {e}")
         logger.info(
             f"TrainingRecorder writing to {self._dir} "
-            f"(retain_screenshots={self._retain}, "
-            f"retain_after_personalization={self._retain_forever})"
+            f"(retain_screenshots={self._retain})"
         )
 
     # ------------------------------------------------------------------
@@ -248,8 +246,7 @@ class TrainingRecorder:
     ) -> None:
         """Log one suggestion-interaction signal.
 
-        ``kind``: ``abstain`` (the instant tutor rejected the observer's support
-        request) | ``shown`` (an actionable suggestion was displayed) | ``engage``
+        ``kind``: ``shown`` (an actionable suggestion was displayed) | ``engage``
         (accepted a suggestion) | ``dismiss`` (declined a suggestion) |
         ``need_help`` (asked for help on a calm/``progress`` bubble where nothing
         was suggested — a false-negative signal) | ``thumbs_up`` | ``thumbs_down``.

@@ -16,7 +16,6 @@ export interface ModelDraft {
   model: string;
   apiKey: string;
   baseUrl: string;
-  supportsAudio?: boolean;
 }
 
 export interface ConnectionTestStatus {
@@ -108,18 +107,6 @@ function ModelFields({
           autoComplete="off"
           onChange={(event) => update('apiKey', event.target.value)}
         />
-      )}
-      {!sensing && (
-        <label className="ob-default-model">
-          <input
-            type="checkbox"
-            checked={value.supportsAudio === true}
-            onChange={(event) =>
-              onChange({ ...value, supportsAudio: event.target.checked })
-            }
-          />{' '}
-          Supports audio input
-        </label>
       )}
       <div className="ob-connection-test-row">
         <button

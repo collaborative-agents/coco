@@ -1,0 +1,65 @@
+.tool-activity-call,
+.tool-activity-group {
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface-subtle);
+  font-size: var(--coco-text-secondary);
+  color: var(--coco-color-text-muted);
+  min-width: 0;
+}
+.tool-activity-call > summary,
+.tool-activity-group > summary {
+  padding: 9px 12px;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.tool-activity-call > summary:focus-visible,
+.tool-activity-group > summary:focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 2px;
+  border-radius: var(--coco-radius-control);
+}
+.tool-activity-description {
+  color: var(--coco-color-text-secondary);
+}
+.tool-activity-status,
+.tool-activity-detail-label {
+  font-size: var(--coco-text-caption);
+  margin-left: 10px;
+  white-space: nowrap;
+}
+.tool-activity-status.running {
+  color: var(--coco-color-primary);
+}
+.tool-activity-status.error {
+  color: var(--coco-color-danger);
+}
+.tool-activity-detail-label {
+  opacity: 0.8;
+}
+.tool-activity-details {
+  padding: 0 12px 10px;
+  border-top: 1px solid var(--coco-color-border);
+}
+.tool-activity-caption {
+  font-size: var(--coco-text-caption);
+  margin-top: 10px;
+  font-weight: 600;
+}
+.tool-activity-steps {
+  display: grid;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+.tool-activity-details pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 280px;
+  overflow: auto;
+  font: var(--coco-text-caption) var(--coco-font-mono);
+}
+
+.tool-activity-call > summary,
+.tool-activity-group > summary {
+  cursor: pointer;
+}

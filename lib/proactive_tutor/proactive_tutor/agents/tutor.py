@@ -421,3 +421,44 @@ class TutorAgent:
             operation=operation,
             max_tool_calls=max_tool_calls,
         )
+
+    def transcribe_audio_with_metrics(
+        self,
+        audio_data: str,
+        audio_format: str = "wav",
+    ) -> tuple[str, LLMCallMetrics]:
+        """Transcribe one audio payload without adding it to conversation state."""
+        response, metrics = self._complete_chat_messages(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Transcribe the user's audio faithfully. Return only the "
+                        "spoken words as plain text. Do not answer the user, add a "
+                        "summary, or include labels. If there is no clearly "
+                        "intelligible speech, return exactly <NO_SPEECH>. Never "
+                        "guess or invent words from silence or background noise."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Transcribe this voice message.",
+                        },
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": audio_data,
+                                "format": audio_format,
+                            },
+                        },
+                    ],
+                },
+            ],
+            image_paths=None,
+            operation="audio_transcription",
+            allow_tools=False,
+        )
+        return self._response_text(response).strip(), metrics

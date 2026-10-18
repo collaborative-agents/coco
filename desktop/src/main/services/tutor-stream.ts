@@ -1,13 +1,15 @@
 export interface TutorStreamEvent {
   type:
     | 'agent_activity'
-    | 'transcription'
     | 'tool_call_started'
     | 'tool_call_completed'
+    | 'transcription'
     | 'text_delta'
     | 'done'
     | 'error';
   [key: string]: unknown;
+  four_d_dimension?: 'delegation' | 'description' | 'discernment' | 'diligence';
+  teaching_depth?: 'introduce' | 'reinforce' | 'deepen' | 'not_applicable';
 }
 
 export interface TutorStreamTimeouts {
@@ -26,6 +28,34 @@ export class TutorStreamTimeoutError extends Error {
     );
     this.name = 'TutorStreamTimeoutError';
     this.kind = kind;
+  }
+}
+
+/** Tracks user-visible, end-to-end timing for one streamed tutor turn. */
+export class TutorTurnTiming {
+  readonly requestStartedAt: Date;
+
+  private firstTokenAt?: Date;
+
+  private readonly now: () => Date;
+
+  constructor(now: () => Date = () => new Date()) {
+    this.now = now;
+    this.requestStartedAt = now();
+  }
+
+  recordTextDelta(text: unknown): void {
+    if (this.firstTokenAt || String(text ?? '').trim().length === 0) return;
+    this.firstTokenAt = this.now();
+  }
+
+  complete(model?: string) {
+    return {
+      requestStartedAt: this.requestStartedAt,
+      ...(this.firstTokenAt ? { firstTokenAt: this.firstTokenAt } : {}),
+      responseCompletedAt: this.now(),
+      ...(model ? { model } : {}),
+    };
   }
 }
 

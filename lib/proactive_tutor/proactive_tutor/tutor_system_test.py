@@ -8,12 +8,33 @@ uv run python -m pytest proactive_tutor/tutor_system_test.py
 """
 
 import base64
+import io
 import json
+import math
 import os
+import struct
+import threading
+import wave
 
 import pytest
-from proactive_tutor.tutor_system import TutorSystem
+from proactive_tutor.tutor_system import _RECAP_SYSTEM_PROMPT, TutorSystem
 from py_utils.training_recorder import TrainingRecorder
+
+
+def _voiced_wav_base64() -> str:
+    sample_rate = 16_000
+    samples = [
+        int(0.2 * 32767 * math.sin(2 * math.pi * 440 * i / sample_rate))
+        for i in range(sample_rate // 5)
+    ]
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"".join(struct.pack("<h", sample) for sample in samples))
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
 
 MODEL = "gemini/gemini-3-flash-preview"
 
@@ -330,21 +351,36 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
         "tool_calls": [],
     }
     captured = {}
-    wav_header = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + bytes(36)
-    audio_data = base64.b64encode(wav_header).decode("ascii")
+    events = []
+    transcription_started = threading.Event()
+    release_transcription = threading.Event()
+    audio_data = _voiced_wav_base64()
 
     def fake_chat(messages, image_paths=None, on_event=None):
+        assert transcription_started.wait(timeout=1)
         captured["messages"] = messages
         captured["image_paths"] = image_paths
         captured["on_event"] = on_event
+        release_transcription.set()
         return "Here is what I see.", metrics
 
+    def fake_transcribe(audio, audio_format="wav"):
+        transcription_started.set()
+        assert release_transcription.wait(timeout=1)
+        captured["transcription_audio"] = audio
+        captured["transcription_format"] = audio_format
+        return "Please explain this spreadsheet.", metrics
+
     monkeypatch.setattr(ts.tutor_agent, "chat_with_metrics", fake_chat)
+    monkeypatch.setattr(
+        ts.tutor_agent, "transcribe_audio_with_metrics", fake_transcribe
+    )
     ts._recorder = TrainingRecorder(str(tmp_path), retain_screenshots=False)
     monkeypatch.setattr("proactive_tutor.tutor_system.time.time", lambda: 1234.5)
 
     answer, returned_metrics = ts.handle_audio_prompt_with_metrics(
         audio_data,
+        on_event=events.append,
         session_id="audio-session",
     )
 
@@ -354,10 +390,16 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
         "role": "user",
         "content": "Earlier typed context",
     }
+    assert captured["transcription_audio"] == audio_data
+    assert captured["transcription_format"] == "wav"
     assert captured["messages"][-1]["content"][0]["type"] == "input_audio"
     assert captured["messages"][-1]["content"][0]["input_audio"]["data"] == audio_data
+    assert events[0] == {
+        "type": "transcription",
+        "text": "Please explain this spreadsheet.",
+    }
     assert ts._chat_messages[-2:] == [
-        {"role": "user", "content": "[Voice message]"},
+        {"role": "user", "content": "Please explain this spreadsheet."},
         {"role": "assistant", "content": "Here is what I see."},
     ]
     assert audio_data not in json.dumps(ts._chat_messages)
@@ -369,6 +411,7 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
     assert rows[0]["trigger"] == "audio_prompt"
     assert rows[0]["session_id"] == "audio-session"
     assert rows[0]["ts"] == 1234.5
+    assert rows[0]["tutor_input"] == "Please explain this spreadsheet."
 
 
 def test_daily_review_is_stateless_and_requires_todays_memory(monkeypatch):
@@ -460,3 +503,184 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_recap_prompt_requires_behavior_based_choices_for_4d_questions():
+    assert "Do not use the four competency names" in _RECAP_SYSTEM_PROMPT
+    assert "four plausible actions" in _RECAP_SYSTEM_PROMPT
+    assert "present a practical situation" in _RECAP_SYSTEM_PROMPT
+
+
+def test_shown_suggestion_is_recorded_as_its_own_role():
+    ts = TutorSystem(model_name=MODEL, scenario="ai_upskilling")
+    ts.record_proactive_suggestion("**Draft the update with Claude**\n\nStage: ...")
+
+    assert ts.conversation_history[-1].endswith(
+        "[Coco suggestion]: **Draft the update with Claude**\n\nStage: ..."
+    )
+    assert ts._chat_messages[-1] == {
+        "role": "assistant",
+        "content": "**Draft the update with Claude**\n\nStage: ...",
+    }
+    assert "[Coco suggestion]" in ts._build_context_prompt()
+
+
+def test_shown_framework_introduction_marks_the_framework_introduced():
+    ts = TutorSystem(model_name=MODEL, scenario="ai_upskilling")
+    assert ts.curriculum_state["framework_introduced"] is False
+
+    ts.record_proactive_suggestion("**Try this**", trigger_type="struggle")
+    assert ts.curriculum_state["framework_introduced"] is False
+
+    ts.record_proactive_suggestion(
+        "**Try this**", trigger_type="framework_introduction"
+    )
+    assert ts.curriculum_state["framework_introduced"] is True
+
+
+def test_parse_recap_accepts_fenced_valid_json():
+    recap = TutorSystem._parse_recap(
+        """```json
+        {
+          "summary_title": "You learned to evaluate AI output",
+          "bullets": ["You checked claims.", "You compared the result to the goal."],
+          "quiz": {
+            "question": "What should you do before using AI output?",
+            "choices": ["Check it", "Ignore it", "Delete it", "Publish immediately"],
+            "correct_index": 0,
+            "explanation": "Checking the output helps catch errors."
+          }
+        }
+        ```"""
+    )
+
+    assert recap["quiz"]["correct_index"] == 0
+    assert len(recap["quiz"]["choices"]) == 4
+
+
+def test_parse_recap_rejects_quiz_without_four_choices():
+    raw = json.dumps(
+        {
+            "summary_title": "You learned to evaluate AI output",
+            "bullets": ["You checked claims.", "You compared the result to the goal."],
+            "quiz": {
+                "question": "What should you do before using AI output?",
+                "choices": ["Check it", "Ignore it"],
+                "correct_index": 0,
+                "explanation": "Checking the output helps catch errors.",
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="exactly four choices"):
+        TutorSystem._parse_recap(raw)
+
+
+def test_recap_quality_rejects_stage_task_rules_label_quiz():
+    recap = {
+        "quiz": {
+            "question": "Which concept best matches this prompt component?",
+            "choices": ["Stage", "Rules", "Task", "Discernment"],
+        }
+    }
+
+    with pytest.raises(ValueError, match="vocabulary labels"):
+        TutorSystem._validate_recap_quiz_quality(recap)
+
+
+def test_recap_quality_accepts_concrete_action_choices():
+    recap = {
+        "quiz": {
+            "question": "What should you do before using AI-generated totals?",
+            "choices": [
+                "Check the totals against the source data",
+                "Publish the first result immediately",
+                "Remove the calculation notes",
+                "Assume every generated value is correct",
+            ],
+        }
+    }
+
+    TutorSystem._validate_recap_quiz_quality(recap)
+
+
+def test_generate_recap_retries_when_first_quiz_uses_labels(monkeypatch):
+    bad = {
+        "summary_title": "You practiced describing AI tasks",
+        "bullets": ["You added context.", "You specified the desired result."],
+        "quiz": {
+            "question": "Which concept belongs in this prompt?",
+            "choices": ["Stage", "Rules", "Task", "Discernment"],
+            "correct_index": 0,
+            "explanation": "Stage supplies context.",
+        },
+    }
+    good = {
+        "summary_title": "You practiced describing AI tasks",
+        "bullets": ["You added context.", "You specified the desired result."],
+        "quiz": {
+            "question": "What should you add when AI lacks enough context?",
+            "choices": [
+                "Describe the relevant background and available inputs",
+                "Remove all details from the request",
+                "Accept the first answer without checking",
+                "Switch tools without changing the request",
+            ],
+            "correct_index": 0,
+            "explanation": "Relevant context helps AI understand the task.",
+        },
+    }
+    responses = [json.dumps(bad), json.dumps(good)]
+    prompts = []
+
+    def fake_completion(**kwargs):
+        prompts.append(kwargs["user_prompt"])
+        return responses.pop(0), {}
+
+    monkeypatch.setattr(
+        "proactive_tutor.tutor_system.prompt_to_text_with_metrics",
+        fake_completion,
+    )
+    tutor = _make_tutor_system()
+    tutor.conversation_history = ["[User]: Help me write a clearer request."]
+
+    recap, _metrics = tutor.generate_recap()
+
+    assert recap["quiz"]["question"] == good["quiz"]["question"]
+    assert len(prompts) == 2
+    assert "previous quiz was rejected" in prompts[1].lower()
+
+
+def test_audio_prompt_does_not_retain_or_publish_no_speech_transcription(monkeypatch):
+    ts = _make_tutor_system()
+    ts._chat_messages = [{"role": "user", "content": "Earlier context"}]
+    events = []
+    metrics = {
+        "operation": "tutor",
+        "model": MODEL,
+        "duration_ms": 1,
+        "tool_calls": [],
+    }
+
+    monkeypatch.setattr(
+        ts.tutor_agent,
+        "chat_with_metrics",
+        lambda messages, image_paths=None, on_event=None: (
+            "Hallucinated guidance",
+            metrics,
+        ),
+    )
+    monkeypatch.setattr(
+        ts.tutor_agent,
+        "transcribe_audio_with_metrics",
+        lambda audio, audio_format="wav": ("<NO_SPEECH>", metrics),
+    )
+
+    with pytest.raises(ValueError, match="No intelligible speech"):
+        ts.handle_audio_prompt_with_metrics(
+            _voiced_wav_base64(),
+            on_event=events.append,
+        )
+
+    assert events == []
+    assert ts._chat_messages == [{"role": "user", "content": "Earlier context"}]

@@ -75,7 +75,104 @@ function repairJsonEscapes(text: string): string {
   return out.join('');
 }
 
+function parseCompetency(value: unknown): Guidance['competency'] {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return ['delegation', 'description', 'discernment', 'diligence'].includes(
+    normalized,
+  )
+    ? (normalized as Guidance['competency'])
+    : undefined;
+}
+
+// Coaching can follow an ordinary answer. Find a standalone envelope outside
+// fenced code so examples in Markdown remain visible and the answer is retained.
+function guidanceOffset(raw: string): number {
+  let offset = 0;
+  let fence: string | null = null;
+  for (const line of raw.split('\n')) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (
+        marker &&
+        marker[1][0] === fence[0] &&
+        marker[1].length >= fence.length &&
+        line.slice(marker[0].length).trim() === ''
+      )
+        fence = null;
+    } else if (marker) {
+      fence = marker[1];
+    } else {
+      const candidate = line.trimStart();
+      if (
+        line.length - candidate.length <= 3 &&
+        (/^<guidance\s*>/i.test(candidate) ||
+          (candidate && '<guidance>'.startsWith(candidate.toLowerCase())))
+      )
+        return offset + line.length - candidate.length;
+    }
+    offset += line.length + 1;
+  }
+  return -1;
+}
+
+function parseXmlGuidance(raw: string): Guidance | null {
+  const offset = guidanceOffset(raw);
+  if (offset < 0) return null;
+  const prefix = raw.slice(0, offset).trimEnd();
+  const source = raw.slice(offset).trimStart();
+  const opening = '<guidance>';
+  if (source && opening.startsWith(source.toLowerCase()))
+    return { text: prefix };
+  if (!/^<guidance\s*>/i.test(source)) return null;
+  const body = source.replace(/^<guidance\s*>/i, '');
+  const boundary = body.search(
+    /<\/guidance\s*>|<(?:four_d_dimension|teaching_depth|example_prompt|visualization|html_code)\s*>/i,
+  );
+  let text = boundary < 0 ? body : body.slice(0, boundary);
+  // Streaming may stop midway through a closing tag or a metadata field.
+  const tail = text.lastIndexOf('<');
+  if (tail >= 0) {
+    const fragment = text.slice(tail).toLowerCase();
+    if (
+      [
+        '</guidance>',
+        '<four_d_dimension>',
+        '<teaching_depth>',
+        '<example_prompt>',
+        '<visualization>',
+        '<html_code>',
+      ].some((tag) => tag.startsWith(fragment))
+    ) {
+      text = text.slice(0, tail);
+    }
+  }
+  const example = source
+    .match(/<example_prompt\s*>([\s\S]*?)<\/example_prompt\s*>/i)?.[1]
+    .trim();
+  const viz = source
+    .match(/<html_code\s*>([\s\S]*?)<\/html_code\s*>/i)?.[1]
+    .trim();
+  const competency = parseCompetency(
+    source.match(
+      /<four_d_dimension\s*>([\s\S]*?)<\/four_d_dimension\s*>/i,
+    )?.[1],
+  );
+  return {
+    ...(competency ? { competency } : {}),
+    text: [prefix, text.trim()].filter(Boolean).join('\n\n'),
+    ...(text.trim() && (prefix || competency)
+      ? { mainText: prefix, coaching: text.trim() }
+      : {}),
+    examplePrompt:
+      example && example.toLowerCase() !== 'not applicable' ? example : null,
+    vizCode: viz || null,
+  };
+}
+
 export function parseGuidance(raw: string): Guidance {
+  const xml = parseXmlGuidance(raw);
+  if (xml) return xml;
   const tryParse = (s: string): any => {
     try {
       return JSON.parse(s);
@@ -100,8 +197,18 @@ export function parseGuidance(raw: string): Guidance {
     const text = obj.guidance ?? obj['Text guidance'] ?? '';
     const example = obj.example_prompt ?? obj.examplePrompt ?? null;
     const viz = obj.visualization_code ?? obj.visualizationCode ?? null;
+    const nested = parseXmlGuidance(String(text || raw));
+    const competency =
+      parseCompetency(obj.four_d_dimension) ?? nested?.competency;
+    const parsedText = nested?.text ?? String(text || raw);
     return {
-      text: String(text || raw),
+      ...(competency ? { competency } : {}),
+      text: parsedText,
+      ...(nested?.coaching
+        ? { mainText: nested.mainText, coaching: nested.coaching }
+        : competency
+          ? { mainText: '', coaching: parsedText }
+          : {}),
       examplePrompt:
         example && String(example).toLowerCase() !== 'not applicable'
           ? String(example)

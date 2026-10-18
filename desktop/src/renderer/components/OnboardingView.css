@@ -334,29 +334,3 @@
     gap: 10px;
   }
 }
-
-.ob-workflow-field {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 20px;
-}
-.ob-workflow-field select,
-.ob-workflow-field textarea {
-  padding: 10px;
-  border: 1px solid var(--coco-color-border);
-  border-radius: var(--coco-radius-control);
-}
-.ob-workflow-tools {
-  border: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-.ob-workflow-tools legend {
-  margin-bottom: 12px;
-}
-.ob-workflow-tools label {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}

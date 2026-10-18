@@ -7,7 +7,7 @@ import {
   saveAuthSession,
 } from './auth-session-store';
 
-describe('study auth session store', () => {
+describe('auth session store', () => {
   let directory: string;
 
   beforeEach(() => {
@@ -18,18 +18,18 @@ describe('study auth session store', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  it('persists and clears a keep-signed-in token with private permissions', () => {
+  it('persists and clears a keep-signed-in token', () => {
     const session = {
       token: 'token-1',
       participantId: 'participant-1',
       expiresAt: '2099-01-01T00:00:00.000Z',
     };
+
     saveAuthSession(directory, session);
 
     expect(readAuthSession(directory)).toEqual(session);
     expect(
-      fs.statSync(path.join(directory, 'coco-study-auth-session.json')).mode %
-        0o1000,
+      fs.statSync(path.join(directory, 'coco-auth-session.json')).mode & 0o777,
     ).toBe(0o600);
 
     clearAuthSession(directory);
@@ -42,6 +42,7 @@ describe('study auth session store', () => {
       participantId: 'participant-1',
       expiresAt: '2000-01-01T00:00:00.000Z',
     });
+
     expect(readAuthSession(directory)).toBeNull();
   });
 });

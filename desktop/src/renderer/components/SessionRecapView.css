@@ -1,0 +1,404 @@
+/* ── Session-recap floating window ─────────────────────────────────────────
+   Follows the evaluation_platform design language:
+   Uses the shared Coco primary, accent surface, typography, and control shape.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.recap-root {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  background: transparent;
+}
+
+.recap-card {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--coco-color-surface);
+  border-radius: var(--coco-radius-card);
+  border: 1px solid #e0e0e0;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.06),
+    0 8px 24px rgba(32, 74, 121, 0.1);
+  font-family: var(--coco-font-family);
+  overflow: hidden;
+}
+
+.recap-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* ── Header ── */
+
+.recap-header {
+  display: flex;
+  align-items: center;
+  gap: var(--coco-space-2);
+  flex-shrink: 0;
+  padding: var(--coco-space-3) var(--coco-space-4) 11px;
+  background: var(--coco-color-surface);
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.recap-header-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--coco-color-primary);
+  flex-shrink: 0;
+}
+
+.recap-header-title {
+  font-size: var(--coco-text-caption);
+  font-weight: 700;
+  color: var(--coco-color-primary);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.recap-close {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid #e0e0e0;
+  background: transparent;
+  color: #4f4f4f;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.recap-close:hover {
+  background: var(--coco-color-accent-soft);
+  border-color: var(--coco-color-accent-border);
+  color: var(--coco-color-primary);
+}
+
+/* ── Loading state ── */
+
+.recap-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px var(--coco-space-6);
+  gap: 14px;
+}
+
+.recap-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--coco-color-accent-soft);
+  border-top-color: var(--coco-color-primary);
+  border-radius: 50%;
+  animation: recap-spin 0.75s linear infinite;
+}
+
+@keyframes recap-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.recap-loading-text {
+  font-size: var(--coco-text-body);
+  color: #4f4f4f;
+  margin: 0;
+}
+
+/* ── Error state ── */
+
+.recap-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 36px var(--coco-space-6);
+  font-size: var(--coco-text-body);
+  color: #4f4f4f;
+}
+
+.recap-error p {
+  margin: 0;
+}
+
+/* ── Summary section ── */
+
+.recap-summary {
+  padding: var(--coco-space-4) 18px 14px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.recap-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--coco-text-caption);
+  font-weight: 700;
+  color: var(--coco-color-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 10px;
+}
+
+.recap-section-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-primary);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.recap-summary-title {
+  font-size: var(--coco-text-body);
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.87);
+  margin: 0 0 10px;
+  line-height: 1.4;
+}
+
+.recap-bullets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.recap-bullet {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: var(--coco-text-body);
+  color: #4f4f4f;
+  line-height: var(--coco-leading-body);
+}
+
+.recap-bullet-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--coco-color-primary);
+  margin-top: 6px;
+}
+
+/* ── Quiz section ── */
+
+.recap-quiz {
+  padding: 14px 18px var(--coco-space-4);
+}
+
+.recap-question {
+  font-size: var(--coco-text-body);
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.87);
+  margin: 0 0 var(--coco-space-3);
+  line-height: var(--coco-leading-body);
+}
+
+.recap-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.recap-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 13px;
+  border-radius: var(--coco-radius-control);
+  border: 1px solid #e0e0e0;
+  background: var(--coco-color-surface);
+  color: rgba(0, 0, 0, 0.87);
+  font-size: var(--coco-text-body);
+  font-family: var(--coco-font-family);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+  line-height: var(--coco-leading-body);
+}
+
+.recap-choice:hover:not(:disabled) {
+  background: var(--coco-color-accent-soft);
+  border-color: var(--coco-color-accent-border);
+}
+
+.recap-choice-letter {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #f8f8f8;
+  border: 1px solid #e0e0e0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--coco-text-control);
+  font-weight: 700;
+  color: #4f4f4f;
+}
+
+.recap-choice-text {
+  flex: 1;
+}
+
+.recap-choice--correct {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #14532d;
+}
+
+.recap-choice--correct .recap-choice-letter {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: var(--coco-color-success);
+}
+
+.recap-choice--wrong {
+  background: var(--coco-color-danger-soft);
+  border-color: #fca5a5;
+  color: #7f1d1d;
+}
+
+.recap-choice--wrong .recap-choice-letter {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+.recap-choice--dimmed {
+  opacity: 0.38;
+}
+
+/* ── Feedback box ── */
+
+.recap-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--coco-space-2);
+  margin-top: 10px;
+  padding: 10px 13px;
+  border-radius: var(--coco-radius-control);
+  font-size: var(--coco-text-control);
+  line-height: var(--coco-leading-body);
+}
+
+.recap-feedback-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 1px;
+}
+
+.recap-feedback--correct {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #14532d;
+}
+
+.recap-feedback--correct .recap-feedback-icon {
+  background: #dcfce7;
+  color: var(--coco-color-success);
+}
+
+.recap-feedback--wrong {
+  background: var(--coco-color-danger-soft);
+  border: 1px solid #fca5a5;
+  color: #7f1d1d;
+}
+
+.recap-feedback--wrong .recap-feedback-icon {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+/* ── Footer ── */
+
+.recap-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--coco-space-2);
+  padding: 11px 18px 14px;
+  border-top: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+
+.recap-btn-skip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 20px;
+  border-radius: 999px;
+  border: 2px solid var(--coco-color-primary);
+  background: var(--coco-color-surface);
+  color: var(--coco-color-primary);
+  font-size: var(--coco-text-control);
+  font-weight: 600;
+  font-family: var(--coco-font-family);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.recap-btn-skip:hover {
+  background: var(--coco-color-primary);
+  color: var(--coco-color-surface);
+}
+
+.recap-btn-continue {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 20px;
+  border-radius: 999px;
+  border: none;
+  background: var(--coco-color-primary);
+  color: var(--coco-color-surface);
+  font-size: var(--coco-text-control);
+  font-weight: 600;
+  font-family: var(--coco-font-family);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.recap-btn-continue:hover:not(:disabled) {
+  background: #1a3d66;
+}
+
+.recap-btn-continue:disabled {
+  background: var(--coco-color-accent-border);
+  color: var(--coco-color-surface);
+  cursor: not-allowed;
+}

@@ -286,10 +286,6 @@ def _observe(
     # Disable reasoning for sensing model
     if hosted_model.startswith("thinkingmachines/inkling"):
         completion_kwargs["reasoning_effort"] = "none"
-    if "qwen" in hosted_model:
-        completion_kwargs["extra_body"] = {
-            "chat_template_kwargs": {"enable_thinking": False}
-        }
 
     result, metrics = chat_completion(**completion_kwargs)
 

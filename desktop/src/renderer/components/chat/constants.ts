@@ -6,20 +6,14 @@ export const MODEL_PROVIDER_OPTIONS = [
   ['gemini', 'Google Gemini'],
   ['openai', 'OpenAI'],
   ['anthropic', 'Anthropic'],
-  ['nv_inference', 'NVIDIA InferenceHub'],
   ['tinker', 'Tinker'],
   ['tinfoil', 'Tinfoil'],
   ['hosted_vllm', 'OpenAI-compatible endpoint'],
   ['lm_studio', 'LM Studio'],
 ] as const;
-export const MODEL_ENDPOINT_PROVIDERS = new Set([
-  'hosted_vllm',
-  'nv_inference',
-  'lm_studio',
-]);
+export const MODEL_ENDPOINT_PROVIDERS = new Set(['hosted_vllm', 'lm_studio']);
 
 export const blankSensingModel = (): TutorModelOption => ({
-  supportsAudio: false,
   id: 'sensing',
   label: 'Sensing',
   provider: 'gemini',
@@ -27,7 +21,6 @@ export const blankSensingModel = (): TutorModelOption => ({
 });
 
 export const blankTutorModel = (): TutorModelOption => ({
-  supportsAudio: false,
   id: 'tutor-1',
   label: 'Primary tutor',
   provider: 'anthropic',

@@ -4,6 +4,11 @@ import path from 'path';
 import os from 'os';
 import { app } from 'electron';
 import log from 'electron-log';
+import {
+  DEFAULT_SUPPORTED_MODES,
+  normalizeSupportedModes,
+} from '../../shared/agent-modes';
+import type { AgentModeId } from '../../shared/agent-modes';
 
 const PROVIDER_ENV_NAMES = new Set([
   'ANTHROPIC_API_KEY',
@@ -13,10 +18,6 @@ const PROVIDER_ENV_NAMES = new Set([
   'TINFOIL_API_KEY',
   'HOSTED_VLLM_API_KEY',
   'HOSTED_VLLM_API_BASE',
-  'LLM_ROUTER_URL',
-  'LLM_ROUTER_API_KEY',
-  'NV_INFERENCE_API_KEY',
-  'NV_INFERENCE_BASE_URL',
   'TINKER_API_KEY',
   'TINKER_BASE_URL',
   'LM_STUDIO_HOST',
@@ -70,17 +71,6 @@ export interface ServiceProcess {
   crashTimestamps?: number[]; // recent crash timestamps for backoff logic
   restartTimer?: ReturnType<typeof setTimeout> | null; // scheduled restart timer
   logStream?: fs.WriteStream | null;
-  lastStderr?: string;
-}
-
-export interface ServiceFatalError {
-  serviceId: string;
-  failureType: 'spawn_error' | 'unexpected_exit';
-  message: string;
-  exitCode?: number;
-  signal?: string;
-  restartScheduled: boolean;
-  restartAttempt: number;
 }
 
 export class ServiceManager {
@@ -107,6 +97,8 @@ export class ServiceManager {
 
   private configPath: string | null = null;
 
+  private supportedModes: AgentModeId[] = [...DEFAULT_SUPPORTED_MODES];
+
   // Managed model configuration supplies each child only the credentials for
   // its role. Legacy/dev .env startup leaves this false for compatibility.
   private isolateProviderCredentials = false;
@@ -115,34 +107,9 @@ export class ServiceManager {
 
   private shutdownPromise: Promise<void> | null = null;
 
-  private fatalErrorHandler: ((error: ServiceFatalError) => void) | null = null;
-
-  private readonly expectedStops = new WeakSet<ChildProcess>();
-
-  private readonly reportedFailures = new WeakSet<ChildProcess>();
-
   constructor() {
     this.setupExitHandler();
     this.initializePaths();
-  }
-
-  public setFatalErrorHandler(
-    handler: ((error: ServiceFatalError) => void) | null,
-  ): void {
-    this.fatalErrorHandler = handler;
-  }
-
-  private reportFatalError(
-    child: ChildProcess,
-    error: ServiceFatalError,
-  ): void {
-    if (this.reportedFailures.has(child)) return;
-    this.reportedFailures.add(child);
-    try {
-      this.fatalErrorHandler?.(error);
-    } catch (handlerError) {
-      log.warn('[ServiceManager] fatal-error handler failed', handlerError);
-    }
   }
 
   private initializePaths() {
@@ -231,6 +198,7 @@ export class ServiceManager {
       }
       const raw = fs.readFileSync(candidate, 'utf8');
       const parsed = JSON.parse(raw);
+      this.supportedModes = normalizeSupportedModes(parsed.supportedModes);
       const services = parsed.services as ServiceConfig[];
       if (!Array.isArray(services)) return;
 
@@ -306,6 +274,12 @@ export class ServiceManager {
     }
   }
 
+  /** Return the mode allowlist embedded in the development or packaged config. */
+  public getSupportedModes(): AgentModeId[] {
+    if (!this.configPath) this.loadConfig();
+    return [...this.supportedModes];
+  }
+
   /** start all services declared in config */
   public async startAll() {
     if (this.services.size === 0) this.loadConfig();
@@ -320,6 +294,10 @@ export class ServiceManager {
 
   /** start a single service by id (uses registered config) */
   public startService(id: string) {
+    if (process.env.COCO_TUTORING_ALLOWED === '0' && ['sensing-server', 'tutor-server'].includes(id)) {
+      log.info(`[ServiceManager] skipping ${id}: tutoring is not authorized`);
+      return;
+    }
     if (this.isShuttingDown) {
       log.info(`[ServiceManager] skipping ${id}: shutdown is in progress`);
       return;
@@ -513,7 +491,6 @@ export class ServiceManager {
       `[ServiceManager] Final command for ${id}: ${command} ${args?.join(' ') || ''}, shell: ${useShell}`,
     );
 
-    svc.lastStderr = '';
     const child = this.spawnAndRegister(id, command, args, {
       cwd: cfg.cwd,
       logPath: cfg.logPath,
@@ -526,17 +503,8 @@ export class ServiceManager {
     svc.status = 'running';
 
     // attach a specialized exit handler to trigger restart/backoff
-    child.on('exit', (code, signal) => {
+    child.on('exit', (code) => {
       const now = Date.now();
-      const expectedStop = this.expectedStops.has(child) || this.isShuttingDown;
-      this.expectedStops.delete(child);
-      if (expectedStop) {
-        svc.status = 'stopped';
-        return;
-      }
-
-      let restartScheduled = false;
-      let restartAttempt = 0;
       if (cfg.restartOnCrash && code !== 0 && code !== null) {
         // prune timestamps older than window
         const windowMs = cfg.restartWindowMs || 60_000;
@@ -545,43 +513,25 @@ export class ServiceManager {
         );
         svc.crashTimestamps.push(now);
         const maxRestarts = cfg.maxRestartsInWindow || 3;
-        restartAttempt = svc.crashTimestamps.length;
         if ((svc.crashTimestamps || []).length >= maxRestarts) {
           svc.status = 'error';
           log.warn(
             `[ServiceManager] ${id} exceeded max restarts (${maxRestarts}) within ${windowMs}ms, not restarting`,
           );
-        } else {
-          // compute backoff delay
-          const base = cfg.initialRestartDelayMs || 1000;
-          const delay = Math.min(base * 2 ** (restartAttempt - 1), 60_000);
-          restartScheduled = true;
-          log.info(
-            `[ServiceManager] scheduling restart of ${id} in ${delay}ms`,
-          );
-          svc.restartTimer = setTimeout(() => {
-            svc.restartTimer = null;
-            this.startService(id);
-          }, delay);
+          return;
         }
+
+        // compute backoff delay
+        const base = cfg.initialRestartDelayMs || 1000;
+        const attempt = (svc.crashTimestamps || []).length;
+        const delay = Math.min(base * 2 ** (attempt - 1), 60_000);
+        log.info(`[ServiceManager] scheduling restart of ${id} in ${delay}ms`);
+        svc.restartTimer = setTimeout(() => {
+          svc.restartTimer = null;
+          this.startService(id);
+        }, delay);
       } else {
         svc.status = 'stopped';
-      }
-
-      // These services are long-running servers. Any exit that was not initiated
-      // by stopService/shutdown is fatal, even when a buggy process returns 0.
-      if (code !== null || signal) {
-        this.reportFatalError(child, {
-          serviceId: id,
-          failureType: 'unexpected_exit',
-          message:
-            svc.lastStderr?.trim() ||
-            `Process exited unexpectedly (code=${String(code)}, signal=${String(signal)}).`,
-          ...(typeof code === 'number' ? { exitCode: code } : {}),
-          ...(signal ? { signal } : {}),
-          restartScheduled,
-          restartAttempt,
-        });
       }
     });
   }
@@ -591,7 +541,6 @@ export class ServiceManager {
     id: string,
     child: ChildProcess,
     logStream?: fs.WriteStream | null,
-    onStderr?: (message: string) => void,
   ) {
     if (child.stdout) {
       child.stdout.on('data', (chunk: Buffer) => {
@@ -614,7 +563,6 @@ export class ServiceManager {
 
         if (msg) log.warn(`[${id}] ${msg}`);
         if (logStream && msg) logStream.write(`[stderr] ${msg}\n`);
-        if (msg) onStderr?.(msg);
       });
     }
   }
@@ -759,24 +707,11 @@ export class ServiceManager {
       if (log) {
         log.error(`[ServiceManager] child ${id} error`, err);
       }
-      this.reportFatalError(child, {
-        serviceId: id,
-        failureType: 'spawn_error',
-        message: err.message,
-        restartScheduled: false,
-        restartAttempt: 0,
-      });
     });
 
     log.info(`[ServiceManager] ✅ Process spawned: PID=${child.pid}`);
 
-    ServiceManager.attachPipesToChild(id, child, logStream, (message) => {
-      const service = this.services.get(id);
-      if (!service) return;
-      service.lastStderr = `${service.lastStderr ?? ''}\n${message}`.slice(
-        -4096,
-      );
-    });
+    ServiceManager.attachPipesToChild(id, child, logStream);
 
     this.registerProcess(id, child, {
       id,
@@ -823,7 +758,6 @@ export class ServiceManager {
     }
 
     const proc = s.process;
-    this.expectedStops.add(proc);
     const timeoutMs = opts?.timeoutMs ?? 5000;
     const force = opts?.force ?? true;
 

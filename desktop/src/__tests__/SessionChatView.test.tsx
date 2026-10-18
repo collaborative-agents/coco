@@ -1,11 +1,7 @@
 import React from 'react';
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
-import {
-  PersonalizationStatusPanel,
-  ToolCallCard,
-  TrainingScreenshotRetentionNotice,
-} from '../renderer/components/SessionChatView';
+import { render, screen } from '@testing-library/react';
+import { ToolCallCard } from '../renderer/components/SessionChatView';
 
 describe('Tutor tool-call visualization', () => {
   it('shows on-demand screen observation progress and evidence', () => {
@@ -89,116 +85,5 @@ describe('Tutor tool-call visualization', () => {
     expect(
       screen.getByText('Evidence: Reviewing a roadmap in Notion'),
     ).toHaveTextContent('Evidence: Reviewing a roadmap in Notion');
-  });
-});
-
-describe('Training screenshot retention notice', () => {
-  const info = {
-    enabled: true,
-    recordsRoot: '/Users/test/Library/Application Support/coco/coco-records',
-    screenshotPattern:
-      '/Users/test/Library/Application Support/coco/coco-records/session_*/observer_screenshots',
-    configurationPath: '/Users/test/Library/Application Support/coco/.env',
-  };
-
-  it('shows disable and cleanup guidance only when retention is enabled', () => {
-    const onOpenFolder = jest.fn();
-    const { rerender } = render(
-      <TrainingScreenshotRetentionNotice
-        info={{ ...info, enabled: false }}
-        onOpenFolder={onOpenFolder}
-      />,
-    );
-    expect(
-      screen.queryByText('You are currently in developer mode'),
-    ).not.toBeInTheDocument();
-
-    rerender(
-      <TrainingScreenshotRetentionNotice
-        info={info}
-        onOpenFolder={onOpenFolder}
-      />,
-    );
-    expect(
-      screen.getByText('You are currently in developer mode'),
-    ).toBeInTheDocument();
-    const disclosure = screen.getByRole('button', {
-      name: 'You are currently in developer mode',
-    });
-    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
-    expect(
-      screen.queryByText(/COLLECT_TRAINING_SCREENSHOTS=0/),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(disclosure);
-    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
-    expect(
-      screen.getByText(/COLLECT_TRAINING_SCREENSHOTS=0/),
-    ).toBeInTheDocument();
-    expect(screen.getByText(info.screenshotPattern)).toBeInTheDocument();
-
-    screen.getByRole('button', { name: 'Open local records folder' }).click();
-    expect(onOpenFolder).toHaveBeenCalledWith(info.recordsRoot);
-  });
-});
-
-describe('Personalization status', () => {
-  it('shows live self-evolving prompt progress and checkpoint details', () => {
-    const now = new Date();
-    const today = [
-      now.getFullYear(),
-      String(now.getMonth() + 1).padStart(2, '0'),
-      String(now.getDate()).padStart(2, '0'),
-    ].join('-');
-    render(
-      <PersonalizationStatusPanel
-        loading={false}
-        onExpand={jest.fn()}
-        readyCount={0}
-        waitingForReview={false}
-        status={{
-          available: true,
-          sleeping: true,
-          successfulUpdateCount: 7,
-          state: 'running',
-          activeJob: 'evolve',
-          checkpointStatus: 'running',
-          processedSamples: 8,
-          totalSamples: 20,
-          signals: {
-            signalCount: 4,
-            observationCount: 24,
-            feedbackEventCount: 2,
-          },
-          dailyRun: {
-            scheduledHour: 18,
-            lastStartedDate: today,
-            lastCompletedDate: today,
-            lastOutcome: 'completed',
-            lastCompletedAt: now.getTime(),
-          },
-        }}
-      />,
-    );
-
-    expect(
-      screen.getByText('Self-evolving prompt is running'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('8 of 20 samples processed · 40%'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Checkpoint: running')).toBeInTheDocument();
-    expect(screen.getByText('7 successful updates')).toBeInTheDocument();
-    expect(
-      screen.getByRole('img', { name: 'Coco training' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Latest growth completed today/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('progressbar', {
-        name: 'Self-evolving prompt progress',
-      }),
-    ).toHaveAttribute('aria-valuenow', '40');
   });
 });

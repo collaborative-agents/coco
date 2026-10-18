@@ -30,9 +30,9 @@ export default function createMacUpdateManifest({
   outputPath,
   version,
 }) {
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+  if (!/^\d+\.\d+\.\d+(?:-nightly\.[0-9]{14})?$/.test(version)) {
     throw new Error(
-      `Release version must be stable semver (for example 0.1.1): ${version}`,
+      `Release version must be stable or nightly semver (for example 0.1.1-nightly.20261016060000): ${version}`,
     );
   }
 

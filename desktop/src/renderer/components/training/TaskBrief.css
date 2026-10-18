@@ -1,0 +1,32 @@
+.training-task-brief > section {
+  margin-top: 20px;
+}
+.training-task-brief h3,
+.training-task-brief h4 {
+  margin: 0 0 10px;
+}
+.training-task-brief p {
+  margin: 8px 0;
+}
+.training-task-brief ul {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+.training-task-brief li + li {
+  margin-top: 6px;
+}
+.training-reference-download {
+  margin-top: 12px;
+}
+.training-task-brief details {
+  margin-top: 12px;
+}
+.training-task-brief summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.training-brief-outcome {
+  padding: 16px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+}

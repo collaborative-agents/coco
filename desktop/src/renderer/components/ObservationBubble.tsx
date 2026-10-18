@@ -4,12 +4,17 @@ import {
   ObservationStatus,
   STATUS_LABEL,
 } from './observation-types';
+import {
+  buildFrameworkOverview,
+  buildSuggestionExplanation,
+} from './framework-overview';
+import RatingButtons from './RatingButtons';
 
 export interface BubbleState {
   status: ObservationStatus;
   phrase: string;
   fadingOut: boolean;
-  /** Tier 2: show "Help me with this" after a suggestion is ready. */
+  /** Tier 2: show "Help me with this" button immediately. */
   showHelpButton?: boolean;
   /**
    * Raw observation text from the sensing server (cleaned of JSON wrappers /
@@ -33,6 +38,8 @@ export interface BubbleState {
    * with an Approve button, instead of the "Help me with this" button.
    */
   suggestion?: InstantSuggestion;
+  /** Tutor mode active when the suggestion was generated. */
+  scenario?: string;
 }
 
 const PREVIEW_CHARS = 120;
@@ -56,14 +63,21 @@ function formatMetricLatency(ms?: number): string {
   return `${Math.round(ms)}ms`;
 }
 
+function suggestionToolLabel(suggestion: InstantSuggestion): string {
+  const preferred = (suggestion.availableTools ?? []).find(
+    (tool) => tool.id === suggestion.targetTool,
+  );
+  if (preferred) return preferred.label;
+  if (suggestion.availableTools?.[0]) return suggestion.availableTools[0].label;
+  return 'an AI tool';
+}
+
 export default function ObservationBubble({
   bubble,
   onHelpMe,
   onDismiss,
   onViewConversation,
   onChatAboutSuggestion,
-  onRunSuggestion,
-  onOpenCocoChat,
   onMouseEnter,
   onMouseLeave,
 }: {
@@ -73,7 +87,6 @@ export default function ObservationBubble({
   onViewConversation?: () => void;
   onChatAboutSuggestion?: () => void;
   onRunSuggestion?: () => void;
-  onOpenCocoChat?: () => void;
   /** Hovering pauses the auto-hide so the user can read / copy the bubble. */
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -87,6 +100,7 @@ export default function ObservationBubble({
   // Current rating for the revealed suggestion. The opposite thumb remains
   // available so an accidental rating can be corrected.
   const [rated, setRated] = useState<'up' | 'down' | null>(null);
+  const [suggestionPage, setSuggestionPage] = useState<0 | 1>(0);
   // When the suggestion was revealed — lets latency_s capture time-to-rate.
   const suggestionShownAt = useRef<number>(Date.now());
 
@@ -101,7 +115,10 @@ export default function ObservationBubble({
   }, [bubble?.status, bubble?.phrase]);
 
   useEffect(() => {
-    if (bubble?.suggestion) suggestionShownAt.current = Date.now();
+    if (bubble?.suggestion) {
+      suggestionShownAt.current = Date.now();
+      setSuggestionPage(0);
+    }
   }, [bubble?.suggestion]);
 
   useEffect(
@@ -127,8 +144,22 @@ export default function ObservationBubble({
     suggestion,
   } = bubble;
   const isTier3 = !!tutorMessage;
-  let label = STATUS_LABEL[status] ?? STATUS_LABEL.observing;
-  if (isTier3) label = 'AI Tutor';
+  const isFrameworkPager =
+    suggestion != null && bubble.scenario === 'ai_upskilling';
+  const isFrameworkOverview = isFrameworkPager && suggestionPage === 0;
+  const explanation = suggestion
+    ? buildSuggestionExplanation(suggestion)
+    : null;
+  const frameworkOverview = suggestion
+    ? buildFrameworkOverview(
+        suggestion,
+        suggestionToolLabel(suggestion),
+        bubble.rawObservation,
+      )
+    : null;
+  const label = isTier3
+    ? 'AI Tutor'
+    : (STATUS_LABEL[status] ?? STATUS_LABEL.observing);
 
   // Copy the prompt/content and, when a tool is chosen, launch it. `toolId` null
   // means copy-only.
@@ -137,9 +168,6 @@ export default function ObservationBubble({
     window.electron?.ipcRenderer.sendMessage('suggestion-action', {
       toolId: toolId ?? null,
       copyText: suggestion.copyText ?? '',
-      observationId: bubble.observationId,
-      status,
-      surface: 'bubble',
     });
     showToast(
       toolId ? `Opening ${toolLabel} — paste with ⌘V` : 'Copied to clipboard',
@@ -169,9 +197,19 @@ export default function ObservationBubble({
     showToast(previousRating ? 'Feedback updated' : 'Thanks for the feedback');
   };
 
+  const ratingButtons =
+    suggestion && !isFrameworkOverview ? (
+      <RatingButtons
+        value={rated}
+        onRate={rate}
+        labels={{ up: 'Good suggestion', down: 'Not helpful' }}
+        className="coco-rating--compact"
+      />
+    ) : null;
+
   return (
     <div
-      className={`observation-bubble status-${status}${fadingOut ? ' is-leaving' : ''}${isTier3 ? ' is-tier3' : ''}${suggestion ? ' has-suggestion' : ''}`}
+      className={`observation-bubble status-${status}${fadingOut ? ' is-leaving' : ''}${isTier3 ? ' is-tier3' : ''}${suggestion ? ' has-suggestion' : ''}${isFrameworkOverview ? ' is-framework-overview' : ''}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -207,25 +245,51 @@ export default function ObservationBubble({
       )}
 
       <div className="observation-bubble-label">
-        {suggestion ? suggestion.title : label}
+        {/* eslint-disable-next-line no-nested-ternary */}
+        {isFrameworkOverview
+          ? (explanation?.competency ?? '4D framework')
+          : suggestion
+            ? suggestion.title
+            : label}
       </div>
 
       {/* eslint-disable-next-line no-nested-ternary */}
-      {suggestion ? (
+      {isFrameworkOverview && explanation ? (
+        <div className="bubble-framework-overview">
+          {explanation.sentences.map((sentence, index) => (
+            <div
+              key={sentence}
+              className={`bubble-why-line${index === 0 ? ' bubble-why-line--lead' : ''}`}
+            >
+              {sentence}
+            </div>
+          ))}
+        </div>
+      ) : isFrameworkOverview && suggestion ? (
+        <div className="bubble-framework-overview">
+          <div className="bubble-framework-heading">
+            {frameworkOverview?.heading}
+          </div>
+          {frameworkOverview?.concepts.map((concept) => (
+            <div className="bubble-framework-concept" key={concept.term}>
+              <span className="bubble-framework-term">{concept.term}</span>
+              <span>{concept.explanation}</span>
+            </div>
+          ))}
+        </div>
+      ) : suggestion ? (
         <div className="observation-bubble-text observation-suggestion-body">
-          {suggestion.kind === 'delegate'
-            ? suggestion.prompt
-            : suggestion.body}
+          {suggestion.kind === 'delegate' ? suggestion.prompt : suggestion.body}
         </div>
       ) : isTier3 ? (
         <div className="observation-bubble-text observation-bubble-tutor-preview">
-          {truncatePreview(tutorMessage ?? '')}
+          {truncatePreview(tutorMessage)}
         </div>
       ) : (
         <div className="observation-bubble-text">{phrase}</div>
       )}
 
-      {suggestion?.llm_metrics && (
+      {suggestion?.llm_metrics && !isFrameworkOverview && (
         <div className="bubble-metrics-row">
           <span>
             {formatMetricTokens(
@@ -245,38 +309,9 @@ export default function ObservationBubble({
         </div>
       )}
 
-      {/* Revealed instant suggestion. `content` → one Copy button. `delegate` →
-          Copy prompt plus one Open button per the user's chatbots/agents so
-          they pick where to hand the prompt. */}
-      {suggestion && onRunSuggestion && <div className="bubble-tool-actions"><button type="button" className="bubble-action-btn bubble-coco-chat-action" onClick={onRunSuggestion}>Run this with Coco</button></div>}
-      {suggestion && suggestion.kind === 'content' && (
+      {/* Copy the suggestion or continue discussing it with Coco. */}
+      {suggestion && !isFrameworkOverview && suggestion.kind === 'content' && (
         <div className="bubble-tool-actions">
-          <button
-            type="button"
-            className="bubble-action-btn"
-            onClick={() => act(null)}
-          >
-            Copy
-          </button>
-          <button
-            type="button"
-            className="bubble-action-btn bubble-chat-action"
-            onClick={onChatAboutSuggestion}
-          >
-            Chat about it
-          </button>
-        </div>
-      )}
-      {suggestion && suggestion.kind === 'delegate' && (
-        <div className="bubble-tool-actions">
-          <button
-            type="button"
-            className="bubble-action-btn bubble-coco-chat-action"
-            onClick={onOpenCocoChat}
-            autoFocus
-          >
-            Open Coco Chat
-          </button>
           <button
             type="button"
             className="bubble-action-btn"
@@ -284,41 +319,59 @@ export default function ObservationBubble({
           >
             Copy prompt
           </button>
-          {(suggestion.availableTools ?? []).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className="bubble-action-btn bubble-tool-btn"
-              onClick={() => act(t.id, t.label)}
-            >
-              Open {t.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Rate the suggested prompt/content; the opposite choice stays editable. */}
-      {suggestion && (
-        <div className="bubble-feedback-row">
           <button
             type="button"
-            className={`bubble-feedback-btn${rated === 'up' ? ' is-rated' : ''}`}
-            aria-label="Good suggestion"
-            title="Good suggestion"
-            disabled={rated === 'up'}
-            onClick={() => rate('up')}
+            className="bubble-action-btn bubble-chat-action"
+            onClick={onChatAboutSuggestion}
           >
-            👍
+            Chat with Coco
+          </button>
+        </div>
+      )}
+      {suggestion && !isFrameworkOverview && suggestion.kind === 'delegate' && (
+        <div className="bubble-tool-actions">
+          <button
+            type="button"
+            className="bubble-action-btn"
+            onClick={() => act(null)}
+            autoFocus
+          >
+            Copy prompt
           </button>
           <button
             type="button"
-            className={`bubble-feedback-btn${rated === 'down' ? ' is-rated' : ''}`}
-            aria-label="Not helpful"
-            title="Not helpful"
-            disabled={rated === 'down'}
-            onClick={() => rate('down')}
+            className="bubble-action-btn bubble-chat-action"
+            onClick={onChatAboutSuggestion}
           >
-            👎
+            Chat with Coco
+          </button>
+        </div>
+      )}
+
+      {/* Rate the suggestion; the opposite choice stays editable. */}
+      {ratingButtons && !isFrameworkPager && (
+        <div className="bubble-feedback-row">{ratingButtons}</div>
+      )}
+
+      {isFrameworkPager && (
+        <div className="bubble-framework-pager" aria-label="Suggestion pages">
+          {ratingButtons && (
+            <div className="bubble-pager-rating">{ratingButtons}</div>
+          )}
+          <div className="bubble-framework-page-bars" aria-hidden="true">
+            <span
+              className={`bubble-framework-page-bar${suggestionPage === 0 ? ' is-active' : ''}`}
+            />
+            <span
+              className={`bubble-framework-page-bar${suggestionPage === 1 ? ' is-active' : ''}`}
+            />
+          </div>
+          <button
+            type="button"
+            className="bubble-framework-arrow"
+            onClick={() => setSuggestionPage(suggestionPage === 0 ? 1 : 0)}
+          >
+            {suggestionPage === 0 ? 'Show me how →' : '← Why'}
           </button>
         </div>
       )}

@@ -51,7 +51,7 @@ export default function ModelSettings({
       <div style={S.helpText}>
         {routerManaged
           ? 'Models use the managed CoCo Router. Personal API keys are not required; the sensing model is fixed, while Gemini tutor models remain configurable.'
-          : 'Models connect directly using the provider, endpoint, and API key entered here. Saving bypasses the managed router and restarts the sensing and tutor services.'}
+          : 'The sensing model receives screenshots. Saving changes restarts the local sensing and tutor services.'}
       </div>
       {modelConfigLoading && (
         <div style={{ ...S.helpText, marginTop: 8 }}>
@@ -109,7 +109,7 @@ export default function ModelSettings({
               style={S.customInput}
               value={sensingModel.baseUrl ?? ''}
               placeholder={
-                sensingModel.provider !== 'lm_studio'
+                sensingModel.provider === 'hosted_vllm'
                   ? 'OpenAI-compatible base URL, ending in /v1'
                   : 'LM Studio host'
               }
@@ -236,7 +236,7 @@ export default function ModelSettings({
               style={S.customInput}
               value={model.baseUrl ?? ''}
               placeholder={
-                model.provider !== 'lm_studio'
+                model.provider === 'hosted_vllm'
                   ? 'OpenAI-compatible base URL, ending in /v1'
                   : 'LM Studio host'
               }
@@ -307,22 +307,6 @@ export default function ModelSettings({
               </button>
             )}
           </div>
-          <label style={S.toggleRow}>
-            <input
-              type="checkbox"
-              checked={model.supportsAudio}
-              onChange={(event) =>
-                setTutorModels((current) =>
-                  current.map((item) =>
-                    item.id === model.id
-                      ? { ...item, supportsAudio: event.target.checked }
-                      : item,
-                  ),
-                )
-              }
-            />{' '}
-            Supports audio input
-          </label>
           <div style={S.connectionTestRow}>
             <button
               type="button"
@@ -368,7 +352,6 @@ export default function ModelSettings({
               label: '',
               provider: routerManaged ? 'gemini' : 'anthropic',
               model: '',
-              supportsAudio: false,
             },
           ]);
         }}

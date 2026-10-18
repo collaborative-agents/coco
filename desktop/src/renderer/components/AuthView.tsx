@@ -110,8 +110,8 @@ export default function AuthView() {
             draggable={false}
           />
         }
-        description="Your proactive co-assistant for everyday work."
-        closeLabel="Close Coco"
+        description="A proactive agent helps you build AI literacy, keep your thinking active, and discover new possibilities."
+        closeLabel="Close Coco Learn"
         actions={null}
         footer={null}
         onClose={() => setShowQuitConfirmation(true)}

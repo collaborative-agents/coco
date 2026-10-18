@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import type React from 'react';
 import { S } from './styles';
 import ChatComposerActions from './ChatComposerActions';
 import './ChatComposer.css';
@@ -12,8 +12,6 @@ const HOTKEY_LABEL =
     : 'Ctrl + Shift + Space';
 
 interface Props {
-  voiceButtonDisabled?: boolean;
-  voiceButtonLabel?: string;
   workspaceSessionId: string | null;
   agentRunning: boolean;
   stopAgent: () => Promise<void>;
@@ -22,10 +20,9 @@ interface Props {
   setPendingContextLabel: React.Dispatch<React.SetStateAction<string | null>>;
   pendingImages: string[];
   openImagePreview: (imageDataUrl: string) => void;
-  openImageAnnotator: (imageDataUrl: string) => void;
   pendingHotkeyImagesRef: React.RefObject<Set<string>>;
   setPendingImages: React.Dispatch<React.SetStateAction<string[]>>;
-  finishTaskError: string;
+  understandingError: string;
   sending: boolean;
   voiceState: VoiceRecorderStatus | 'idle' | 'requesting';
   input: string;
@@ -37,8 +34,8 @@ interface Props {
   reviewing: SavedConversation | null;
   handleVoiceClick: (fromWakeWord?: boolean) => Promise<void>;
   profile: { scenario: string; aiTools: string[]; hideAvatar: boolean };
-  finishingTask: boolean;
-  handleFinishTask: () => Promise<void>;
+  checkingUnderstanding: boolean;
+  handleCheckUnderstanding: () => Promise<void>;
   canSend: boolean;
   handleSend: () => void;
   voiceStatusText: string;
@@ -46,8 +43,6 @@ interface Props {
 }
 
 export default function ChatComposer({
-  voiceButtonDisabled,
-  voiceButtonLabel,
   workspaceSessionId,
   agentRunning,
   stopAgent,
@@ -56,10 +51,9 @@ export default function ChatComposer({
   setPendingContextLabel,
   pendingImages,
   openImagePreview,
-  openImageAnnotator,
   pendingHotkeyImagesRef,
   setPendingImages,
-  finishTaskError,
+  understandingError,
   sending,
   voiceState,
   input,
@@ -71,29 +65,19 @@ export default function ChatComposer({
   reviewing,
   handleVoiceClick,
   profile,
-  finishingTask,
-  handleFinishTask,
+  checkingUnderstanding,
+  handleCheckUnderstanding,
   canSend,
   handleSend,
   voiceStatusText,
   voiceError,
 }: Props) {
-  const editorRef = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.style.height = 'auto';
-    const height = Math.max(editor.scrollHeight, 50);
-    const limit = 120;
-    editor.style.height = `${Math.min(height, limit)}px`;
-    editor.style.overflowY = height > limit ? 'auto' : 'hidden';
-  }, [input]);
   return (
     <div style={S.composer}>
       <AgentWorkspace
         key={workspaceSessionId}
         sessionId={workspaceSessionId}
-        disabled={sending || startingNewSession || finishingTask}
+        disabled={sending || startingNewSession || checkingUnderstanding}
         running={agentRunning}
         onStop={stopAgent}
       />
@@ -131,17 +115,6 @@ export default function ChatComposer({
                 >
                   <img src={src} alt={`Attachment ${i + 1}`} style={S.thumb} />
                 </button>
-                {pendingHotkeyImagesRef.current.has(src) && (
-                  <button
-                    type="button"
-                    style={S.pendingAnnotate}
-                    aria-label={`Annotate hotkey screenshot ${i + 1}`}
-                    title="Annotate screenshot"
-                    onClick={() => openImageAnnotator(src)}
-                  >
-                    ✎ Edit
-                  </button>
-                )}
                 <button
                   type="button"
                   style={S.pendingX}
@@ -158,11 +131,10 @@ export default function ChatComposer({
             ))}
           </div>
         )}
-        {finishTaskError && (
-          <div style={S.finishTaskError}>{finishTaskError}</div>
+        {understandingError && (
+          <div style={S.understandingError}>{understandingError}</div>
         )}
         <textarea
-          ref={editorRef}
           style={S.textarea}
           rows={2}
           aria-label="Message Coco"
@@ -178,24 +150,21 @@ export default function ChatComposer({
           onKeyDown={onKeyDown}
         />
         <ChatComposerActions
-          voiceButtonLabel={voiceButtonLabel}
-          showUnderstandingCheck={false}
-          checkingUnderstanding={finishingTask}
+          sessionId={workspaceSessionId}
+          showUnderstandingCheck={profile.scenario === 'ai_upskilling'}
+          checkingUnderstanding={checkingUnderstanding}
           understandingDisabled={Boolean(
             sending ||
               startingNewSession ||
-              finishingTask ||
-              input.trim() ||
+              checkingUnderstanding ||
               voiceState !== 'idle',
           )}
-          hasDraft={Boolean(input.trim())}
-          onCheckUnderstanding={handleFinishTask}
+          onCheckUnderstanding={handleCheckUnderstanding}
           voiceActive={voiceActive}
           voiceDisabled={
-            voiceButtonDisabled ||
             sending ||
             startingNewSession ||
-            finishingTask ||
+            checkingUnderstanding ||
             Boolean(reviewing) ||
             voiceState === 'requesting'
           }

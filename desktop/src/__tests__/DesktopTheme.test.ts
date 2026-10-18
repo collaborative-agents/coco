@@ -52,8 +52,10 @@ describe('shared desktop typography', () => {
       'components/AuthView.css',
       'components/OnboardingView.css',
       'components/setup/SetupShell.css',
+      'components/TrainingView.css',
       'components/chat/DesktopWorkspace.css',
       'components/chat/MessageContent.css',
+      'components/SessionRecapView.css',
       'App.css',
     ];
     pages.forEach((file) =>

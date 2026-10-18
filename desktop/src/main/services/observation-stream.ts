@@ -19,6 +19,9 @@ export interface ObservationEvent {
   observation?: string;
   /** Coarse status label emitted by AiTutoringProcessor (e.g. 'task_suggested', 'task_complete'). */
   status?: string;
+  need_support?: 'yes' | 'no';
+  proactive_allowed?: boolean;
+  proactive_cooldown_remaining_s?: number;
   ts?: number;
   scenario?: string;
   /** Short description of the user's inferred task — present on all non-ready events. */
@@ -29,32 +32,10 @@ export interface ObservationEvent {
   image_paths?: string[];
   /** "yes"/"no" — whether the user is applying AI output (discernment opportunities). */
   applying_ai_output?: string;
-  /** Brief evidence behind the support decision. */
-  rationale?: string;
-  /** Explicit personalized support decision from the everyday observer. */
-  need_support?: 'yes' | 'no';
-  /** Sensing-owned global eligibility for presenting proactive support. */
-  proactive_allowed?: boolean;
-  /** Seconds remaining in sensing's shown-to-shown proactive cooldown. */
-  proactive_cooldown_remaining_s?: number;
-  /** Relevance-ranked memory retrieved by sensing for an instant suggestion. */
-  retrieved_context?: {
-    query: string;
-    results: Array<{
-      id: number;
-      text: string;
-      confidence?: number | null;
-      durability?: number | null;
-      score: number;
-      evidence?: {
-        id: string;
-        content: string;
-        created_at: number;
-        observation_type: string;
-        session_id?: string | null;
-      } | null;
-    }>;
-  };
+  /** Marks an interruption explicitly approved by the sensing-side Judge. */
+  intervention_source?: 'judge';
+  /** Why the Judge intervened, e.g. "framework_introduction". */
+  trigger_type?: string;
   llm_metrics?: LLMCallMetrics;
 }
 

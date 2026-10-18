@@ -2,6 +2,7 @@
   "app": {
     "name": "Coco"
   },
+  "supportedModes": ["everyday_support", "custom"],
   "services": [
     {
       "id": "tutor-server",

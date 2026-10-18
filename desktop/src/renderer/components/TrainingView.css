@@ -1,0 +1,199 @@
+@import './training/PreAssessment.css';
+@import './training/PostAssessment.css';
+@import './training/TrainingDialog.css';
+
+.training-page {
+  height: 100%;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 20px 24px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  font: var(--coco-text-body) / var(--coco-leading-body) var(--coco-font-family);
+}
+.training-home {
+  max-width: 860px;
+  margin: 0 auto;
+}
+.training-page h1 {
+  font-size: var(--coco-text-title);
+  margin: 0 0 4px;
+}
+.training-page h2 {
+  font-size: var(--coco-text-section);
+}
+.training-header p,
+.training-detail-meta {
+  color: var(--coco-color-text-muted);
+  margin: 0 0 10px;
+}
+.training-header p:not(:last-child) {
+  margin-bottom: 4px;
+}
+.training-announcement {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-primary);
+  font-size: var(--coco-text-control);
+}
+.training-announcement summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.training-announcement p {
+  margin: 8px 0 0;
+  color: var(--coco-color-text-secondary);
+}
+.training-page button,
+.training-page select,
+.training-page input {
+  font-family: var(--coco-font-family);
+  font-size: var(--coco-text-control);
+}
+.training-page button {
+  cursor: pointer;
+  padding: 8px 12px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  color: var(--coco-color-text-secondary);
+  background: var(--coco-color-surface);
+}
+.training-page button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.training-page button:not(:disabled):hover {
+  background: var(--coco-color-surface-subtle);
+}
+.training-page button.training-primary,
+.training-page button.training-proof-action {
+  background: var(--coco-color-primary);
+  color: var(--coco-color-surface);
+  border-color: var(--coco-color-primary);
+}
+.training-page select,
+.training-page input:not([type='radio']) {
+  padding: 8px 10px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  max-width: 100%;
+}
+.training-todos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.training-page .training-todo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border: none;
+  background: transparent;
+}
+.training-page .training-todo:disabled {
+  opacity: 1;
+  color: var(--coco-color-text-muted);
+}
+.training-todo-check {
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--coco-color-text-subtle);
+  border-radius: 4px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: var(--coco-text-caption);
+}
+.training-todo--complete .training-todo-check {
+  color: var(--coco-color-success);
+  border-color: var(--coco-color-success);
+}
+.training-todo--complete strong {
+  text-decoration: line-through;
+  color: var(--coco-color-text-muted);
+}
+.training-todo-copy {
+  min-width: 0;
+  flex: 1;
+}
+.training-todo-copy strong {
+  font-size: var(--coco-text-body);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.training-todo-chevron {
+  color: var(--coco-color-text-subtle);
+  font-size: 22px;
+}
+.training-todo:disabled .training-todo-chevron {
+  visibility: hidden;
+}
+.training-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.training-toolbar button[aria-pressed='true'] {
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-primary);
+}
+.training-card {
+  border: 1px solid var(--coco-color-border);
+  padding: 20px;
+  margin: 16px 0;
+  border-radius: var(--coco-radius-card);
+}
+.training-card p,
+.training-info {
+  color: var(--coco-color-text-muted);
+}
+.training-info {
+  font-size: var(--coco-text-secondary);
+}
+.training-error,
+.training-notice {
+  padding: 12px;
+  border-radius: var(--coco-radius-control);
+  overflow-wrap: anywhere;
+}
+.training-error {
+  background: var(--coco-color-danger-soft);
+  color: var(--coco-color-danger);
+}
+.training-notice {
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-primary);
+}
+.training-eyebrow {
+  font-size: var(--coco-text-caption);
+  font-weight: 600;
+  color: var(--coco-color-text-muted);
+}
+.training-page table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--coco-text-secondary);
+}
+.training-page th,
+.training-page td {
+  min-width: 100px;
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--coco-color-border);
+  vertical-align: top;
+}
+@media (max-width: 600px) {
+  .training-page {
+    padding: 20px 16px;
+  }
+  .training-page .training-todo {
+    gap: 10px;
+    padding: 9px 4px;
+  }
+}

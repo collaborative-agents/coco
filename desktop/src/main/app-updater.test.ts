@@ -5,6 +5,10 @@ import { DesktopAppUpdater, formatReleaseNotes } from './app-updater';
 class FakeUpdater extends EventEmitter {
   allowPrerelease = true;
 
+  allowDowngrade = true;
+
+  channel: string | null = null;
+
   autoDownload = true;
 
   autoInstallOnAppQuit = false;
@@ -83,6 +87,7 @@ describe('DesktopAppUpdater', () => {
     expect(updater.autoDownload).toBe(false);
     expect(updater.autoInstallOnAppQuit).toBe(true);
     expect(updater.allowPrerelease).toBe(false);
+    expect(updater.allowDowngrade).toBe(false);
     expect(updater.disableDifferentialDownload).toBe(false);
     expect(updater.disableWebInstaller).toBe(true);
 
@@ -98,6 +103,25 @@ describe('DesktopAppUpdater', () => {
       }),
     );
     expect(updater.downloadUpdate).toHaveBeenCalledTimes(1);
+    manager.stop();
+  });
+
+  it('keeps nightly updates on the nightly prerelease channel', () => {
+    jest.useFakeTimers();
+    const updater = new FakeUpdater();
+    const manager = new DesktopAppUpdater({
+      updater: updater as any,
+      logger: logger(),
+      isPackaged: true,
+      platform: 'darwin',
+      currentVersion: () => '0.1.1-nightly.20261016060000',
+      requestRestartAndInstall: jest.fn(),
+    });
+
+    manager.start();
+    expect(updater.allowPrerelease).toBe(true);
+    expect(updater.channel).toBe('nightly');
+    expect(updater.allowDowngrade).toBe(false);
     manager.stop();
   });
 

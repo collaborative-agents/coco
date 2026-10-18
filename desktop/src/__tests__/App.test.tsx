@@ -9,11 +9,33 @@ import {
 import App from '../renderer/App';
 
 describe('App', () => {
+  it('hides the avatar from the three-dot menu without sleeping or quitting', async () => {
+    const invoke = jest.fn().mockResolvedValue({ success: true });
+    const sendMessage = jest.fn();
+    (window as any).electron = { ipcRenderer: { on: jest.fn(() => jest.fn()), invoke, sendMessage } };
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Hide' }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('update-avatar-visibility', { hideAvatar: true }));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    expect(invoke.mock.calls.some(([channel]) => channel === 'set-coco-sleep-mode')).toBe(false);
+  });
+
+  it('keeps the menu open when hiding fails', async () => {
+    const invoke = jest.fn(async (channel) => channel === 'update-avatar-visibility' ? { success: false } : []);
+    (window as any).electron = { ipcRenderer: { on: jest.fn(() => jest.fn()), invoke, sendMessage: jest.fn() } };
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Hide' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not hide Coco');
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
   it('should render', () => {
     expect(render(<App />)).toBeTruthy();
   });
 
-  it('clears an observation bubble when the system suspends', () => {
+  it('clears an observation bubble when the system suspends', async () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     (window as any).electron = {
       ipcRenderer: {
@@ -27,30 +49,26 @@ describe('App', () => {
     };
 
     render(<App />);
+    await waitFor(() => {
+      expect(window.electron?.ipcRenderer.invoke).toHaveBeenCalledWith(
+        'get-coco-sleep-mode',
+      );
+    });
     act(() => {
       listeners.get('observation-update')?.({
         type: 'snapshot',
         observation: 'The user may have made an error.',
-        observation_id: 'obs-suspend',
         status: 'mistake',
         ts: Date.now() / 1000,
       });
-      listeners.get('proactive-suggestion-ready')?.({
-        title: 'Review the possible error',
-        observationId: 'obs-suspend',
-        status: 'mistake',
-        rawObservation: 'The user may have made an error.',
-      });
     });
-    expect(screen.getByText('Review the possible error')).toBeInTheDocument();
+    expect(screen.getByText('Heads up')).toBeInTheDocument();
 
     act(() => listeners.get('system-suspend')?.());
-    expect(
-      screen.queryByText('Review the possible error'),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Heads up')).not.toBeInTheDocument();
   });
 
-  it('clears an unrevealed proactive bubble when Coco chat opens', () => {
+  it('clears proactive UI when the post-assessment starts', async () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     (window as any).electron = {
       ipcRenderer: {
@@ -68,374 +86,42 @@ describe('App', () => {
       listeners.get('observation-update')?.({
         type: 'snapshot',
         observation: 'The user may have made an error.',
-        observation_id: 'obs-chat-open',
         status: 'mistake',
         ts: Date.now() / 1000,
       });
-      listeners.get('proactive-suggestion-ready')?.({
-        title: 'Review the possible error',
-        observationId: 'obs-chat-open',
-        status: 'mistake',
-        rawObservation: 'The user may have made an error.',
-      });
     });
-    expect(screen.getByText('Review the possible error')).toBeInTheDocument();
+    expect(screen.getByText('Heads up')).toBeInTheDocument();
 
-    act(() => {
-      listeners.get('suppress-unrevealed-proactive-suggestion')?.();
-    });
-    expect(
-      screen.queryByText('Review the possible error'),
-    ).not.toBeInTheDocument();
-  });
-
-  it('does not display a proactive offer before the tutor accepts it', () => {
-    const listeners = new Map<string, (...args: unknown[]) => void>();
-    const sendMessage = jest.fn();
-    (window as any).electron = {
-      ipcRenderer: {
-        on: (channel: string, callback: (...args: unknown[]) => void) => {
-          listeners.set(channel, callback);
-          return () => listeners.delete(channel);
-        },
-        sendMessage,
-        invoke: jest.fn().mockResolvedValue([]),
-      },
-    };
-
-    render(<App />);
-    act(() => {
-      listeners.get('observation-update')?.({
-        type: 'snapshot',
-        observation: 'The user may need help with a completed draft.',
-        observation_id: 'obs-abstain',
-        status: 'support_needed',
-        ts: Date.now() / 1000,
-      });
-    });
-
-    expect(screen.queryByText('Support available')).not.toBeInTheDocument();
-    expect(screen.queryByText('Help me with this')).not.toBeInTheDocument();
-    expect(sendMessage.mock.calls).not.toContainEqual([
-      'training-feedback',
-      expect.objectContaining({ kind: 'shown' }),
-    ]);
-  });
-
-  it('shows the generated offer and protects it from observation updates', () => {
-    const listeners = new Map<string, (...args: unknown[]) => void>();
-    const sendMessage = jest.fn();
-    (window as any).electron = {
-      ipcRenderer: {
-        on: (channel: string, callback: (...args: unknown[]) => void) => {
-          listeners.set(channel, callback);
-          return () => listeners.delete(channel);
-        },
-        sendMessage,
-        invoke: jest.fn().mockResolvedValue([]),
-      },
-    };
-
-    render(<App />);
-    act(() => {
-      listeners.get('observation-update')?.({
-        type: 'snapshot',
-        observation: 'The draft could be clearer.',
-        observation_id: 'obs-ready',
-        status: 'support_needed',
-        ts: Date.now() / 1000,
-      });
-      listeners.get('proactive-suggestion-ready')?.({
-        title: 'Tighten the opening paragraph',
-        observationId: 'obs-ready',
-        status: 'support_needed',
-        rawObservation: 'The draft could be clearer.',
-      });
-    });
-
-    expect(
-      screen.getByText('Tighten the opening paragraph'),
-    ).toBeInTheDocument();
-    expect(sendMessage).toHaveBeenCalledWith('training-feedback', {
-      kind: 'shown',
-      surface: 'bubble',
-      observation_id: 'obs-ready',
-      status: 'support_needed',
-      stage: 'offer',
-    });
-
-    act(() => {
-      listeners.get('observation-update')?.({
-        type: 'snapshot',
-        observation: 'The user continued editing.',
-        observation_id: 'obs-progress',
-        status: 'progress',
-        ts: Date.now() / 1000,
-      });
-    });
-
-    expect(
-      screen.getByText('Tighten the opening paragraph'),
-    ).toBeInTheDocument();
-    expect(screen.queryByText('Progress')).not.toBeInTheDocument();
-  });
-
-  it('does not replace a pinned suggestion with incoming observations', async () => {
-    const listeners = new Map<string, (...args: unknown[]) => void>();
-    const invoke = jest.fn((channel: string) => {
-      if (channel === 'get-coco-sleep-mode') {
-        return Promise.resolve({ sleeping: false });
-      }
-      if (channel === 'get-instant-suggestion') {
-        return Promise.resolve({
-          status: 'ready',
-          suggestion: {
-            kind: 'content',
-            title: 'Review the report structure',
-            body: 'Move the summary before the supporting details.',
-            copyText: 'Move the summary before the supporting details.',
-          },
-        });
-      }
-      return Promise.resolve([]);
-    });
-    (window as any).electron = {
-      ipcRenderer: {
-        on: (channel: string, callback: (...args: unknown[]) => void) => {
-          listeners.set(channel, callback);
-          return () => listeners.delete(channel);
-        },
-        sendMessage: jest.fn(),
-        invoke,
-      },
-    };
-
-    render(<App />);
-    act(() => {
-      listeners.get('observation-update')?.({
-        type: 'snapshot',
-        observation: 'The report structure may need attention.',
-        observation_id: 'obs-pinned',
-        status: 'support_needed',
-        ts: Date.now() / 1000,
-      });
-      listeners.get('proactive-suggestion-ready')?.({
-        title: 'Review the report structure',
-        observationId: 'obs-pinned',
-        status: 'support_needed',
-        rawObservation: 'The report structure may need attention.',
-      });
-    });
-    fireEvent.click(screen.getByText('Help me with this'));
-    expect(
-      await screen.findByText(
-        'Move the summary before the supporting details.',
-      ),
-    ).toBeInTheDocument();
-
-    act(() => {
-      listeners.get('observation-update')?.({
-        type: 'snapshot',
-        observation: 'The user is continuing to work.',
-        observation_id: 'obs-watching',
-        status: 'observing',
-        ts: Date.now() / 1000,
-      });
-    });
-
-    expect(screen.getByText('Review the report structure')).toBeInTheDocument();
-    expect(screen.queryByText('Watching')).not.toBeInTheDocument();
-  });
-
-  it('keeps a long rated suggestion anchored and closes it with one click', async () => {
-    const listeners = new Map<string, (...args: unknown[]) => void>();
-    const sendMessage = jest.fn();
-    const suggestionBody = 'Lead with the main result. '.repeat(80).trim();
-    const invoke = jest.fn((channel: string) => {
-      if (channel === 'get-coco-sleep-mode') {
-        return Promise.resolve({ sleeping: false });
-      }
-      if (channel === 'get-instant-suggestion') {
-        return Promise.resolve({
-          status: 'ready',
-          suggestion: {
-            kind: 'content',
-            title: 'Improve the summary',
-            body: suggestionBody,
-            copyText: suggestionBody,
-          },
-        });
-      }
-      return Promise.resolve([]);
-    });
-    (window as any).electron = {
-      ipcRenderer: {
-        on: (channel: string, callback: (...args: unknown[]) => void) => {
-          listeners.set(channel, callback);
-          return () => listeners.delete(channel);
-        },
-        sendMessage,
-        invoke,
-      },
-    };
-
-    render(<App />);
-    act(() => {
-      listeners.get('observation-update')?.({
-        type: 'snapshot',
-        observation: 'The summary buries the result.',
-        observation_id: 'obs-rated-close',
-        status: 'support_needed',
-        ts: Date.now() / 1000,
-      });
-      listeners.get('proactive-suggestion-ready')?.({
-        title: 'Improve the summary',
-        observationId: 'obs-rated-close',
-        status: 'support_needed',
-        rawObservation: 'The summary buries the result.',
-      });
-    });
-    fireEvent.click(screen.getByText('Help me with this'));
-    expect(await screen.findByText(suggestionBody)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Good suggestion' }));
-    expect(screen.getByText('Thanks for the feedback')).toBeInTheDocument();
-    expect(screen.getByText('Improve the summary')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-
-    expect(screen.queryByText('Improve the summary')).not.toBeInTheDocument();
-    expect(
-      screen.queryByText('Thanks for the feedback'),
-    ).not.toBeInTheDocument();
-    expect(sendMessage).toHaveBeenCalledWith(
-      'avatar-suggestion-revealed-state',
-      { revealed: true },
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      'avatar-suggestion-revealed-state',
-      { revealed: false },
-    );
-    expect(sendMessage.mock.calls).not.toContainEqual([
-      'training-feedback',
-      expect.objectContaining({
-        kind: 'dismiss',
-        observation_id: 'obs-rated-close',
+    act(() =>
+      listeners.get('post-assessment-proactive-suppression')?.({
+        active: true,
       }),
-    ]);
+    );
+    expect(screen.queryByText('Heads up')).not.toBeInTheDocument();
   });
 
-  it('records watching observations without showing a bubble', () => {
-    const listeners = new Map<string, (...args: unknown[]) => void>();
-    (window as any).electron = {
-      ipcRenderer: {
-        on: (channel: string, callback: (...args: unknown[]) => void) => {
-          listeners.set(channel, callback);
-          return () => listeners.delete(channel);
-        },
-        sendMessage: jest.fn(),
-        invoke: jest.fn((channel: string) =>
-          Promise.resolve(
-            channel === 'get-coco-sleep-mode' ? { sleeping: false } : [],
-          ),
-        ),
-      },
-    };
-
-    render(<App />);
-    act(() => {
-      listeners.get('observation-update')?.({
-        type: 'snapshot',
-        observation: 'The user is reading documentation.',
-        observation_id: 'obs-watching-only',
-        status: 'observing',
-        ts: Date.now() / 1000,
-      });
-    });
-
-    expect(screen.queryByText('Watching')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTitle('More actions'));
-    fireEvent.click(screen.getByText('History'));
-    expect(screen.getByText('The user is reading documentation.')).toBeInTheDocument();
-  });
-
-  it('uses the avatar as a drag surface and opens chat only from the menu', async () => {
+  it('keeps Coco asleep on avatar click and wakes it from the menu', async () => {
     const sendMessage = jest.fn();
-    const listeners = new Map<string, (...args: unknown[]) => void>();
     const invoke = jest.fn(
       (channel: string, payload?: { sleeping?: boolean }) => {
-        if (channel === 'get-coco-sleep-mode')
+        if (channel === 'get-coco-sleep-mode') {
           return Promise.resolve({ sleeping: false });
+        }
         return Promise.resolve({ success: true, sleeping: payload?.sleeping });
       },
     );
     (window as any).electron = {
       ipcRenderer: {
-        on: jest.fn(
-          (channel: string, callback: (...args: unknown[]) => void) => {
-            listeners.set(channel, callback);
-            return () => listeners.delete(channel);
-          },
-        ),
+        on: jest.fn(() => jest.fn()),
         sendMessage,
         invoke,
       },
     };
 
     render(<App />);
-    expect(screen.getByText('Right-click for menu')).toBeInTheDocument();
-    expect(screen.getByTitle('More actions')).toHaveAttribute(
-      'aria-label',
-      'More actions',
-    );
-    const avatar = screen.getByAltText('Desktop Pet');
-    const container = avatar.closest('.pet-container');
-    const originalPointerEvent = Object.getOwnPropertyDescriptor(
-      window,
-      'PointerEvent',
-    );
-    Object.defineProperty(window, 'PointerEvent', {
-      configurable: true,
-      value: window.MouseEvent,
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('get-coco-sleep-mode');
     });
-    fireEvent.pointerDown(avatar, {
-      button: 0,
-      pointerId: 1,
-      screenX: 500,
-      screenY: 400,
-    });
-    fireEvent.pointerMove(container!, {
-      pointerId: 1,
-      screenX: 525,
-      screenY: 415,
-    });
-    fireEvent.pointerUp(container!, {
-      pointerId: 1,
-      screenX: 525,
-      screenY: 415,
-    });
-    expect(sendMessage).toHaveBeenCalledWith('avatar-drag-start', {
-      screenX: 500,
-      screenY: 400,
-    });
-    expect(sendMessage).toHaveBeenCalledWith('avatar-drag-move', {
-      screenX: 525,
-      screenY: 415,
-    });
-    expect(sendMessage).toHaveBeenCalledWith('avatar-drag-end');
-    if (originalPointerEvent) {
-      Object.defineProperty(window, 'PointerEvent', originalPointerEvent);
-    } else {
-      Reflect.deleteProperty(window, 'PointerEvent');
-    }
-    expect(screen.queryByTitle('Open the chat')).not.toBeInTheDocument();
-    fireEvent.click(avatar);
-    expect(sendMessage).not.toHaveBeenCalledWith('open-main-window');
-
-    fireEvent.click(screen.getByTitle('More actions'));
-    fireEvent.click(screen.getByText('Open Chat'));
-    expect(sendMessage).toHaveBeenCalledWith('open-main-window');
-
     fireEvent.click(screen.getByTitle('More actions'));
     fireEvent.click(screen.getByText('Sleep'));
 
@@ -446,6 +132,7 @@ describe('App', () => {
     });
 
     fireEvent.click(screen.getByAltText('Desktop Pet'));
+    expect(sendMessage).not.toHaveBeenCalledWith('open-main-window');
     expect(invoke).not.toHaveBeenCalledWith('set-coco-sleep-mode', {
       sleeping: false,
     });
@@ -459,77 +146,81 @@ describe('App', () => {
     });
   });
 
-  it('provides History, Settings, updates, Hide Avatar, and Quit menu actions', async () => {
+  it('opens the action menu when the avatar is right-clicked', () => {
     const sendMessage = jest.fn();
-    const invoke = jest.fn((channel: string) =>
-      Promise.resolve(
-        channel === 'get-coco-sleep-mode' ? { sleeping: false } : { success: true },
-      ),
-    );
-    (window as any).electron = {
-      ipcRenderer: {
-        on: jest.fn(() => jest.fn()),
-        sendMessage,
-        invoke,
-      },
-    };
-
-    render(<App />);
-    fireEvent.click(screen.getByTitle('More actions'));
-    fireEvent.click(screen.getByText('History'));
-    expect(screen.getByText('Activity')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTitle('More actions'));
-    fireEvent.click(screen.getByText('Settings'));
-    expect(sendMessage).toHaveBeenCalledWith('open-chat-settings');
-
-    fireEvent.click(screen.getByTitle('More actions'));
-    fireEvent.click(screen.getByText('Check for Updates'));
-    expect(sendMessage).toHaveBeenCalledWith('check-for-updates');
-
-    fireEvent.click(screen.getByTitle('More actions'));
-    fireEvent.click(screen.getByText('Hide Avatar'));
-    expect(invoke).toHaveBeenCalledWith('update-avatar-visibility', {
-      hideAvatar: true,
-    });
-
-    fireEvent.click(screen.getByTitle('More actions'));
-    fireEvent.click(screen.getByText('Quit'));
-    expect(sendMessage).toHaveBeenCalledWith('quit-app');
-  });
-
-  it('opens the same action menu when the avatar is right-clicked', () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     (window as any).electron = {
       ipcRenderer: {
-        on: (channel: string, callback: (...args: unknown[]) => void) => {
-          listeners.set(channel, callback);
-          return () => listeners.delete(channel);
-        },
-        sendMessage: jest.fn(),
+        on: jest.fn(
+          (channel: string, callback: (...args: unknown[]) => void) => {
+            listeners.set(channel, callback);
+            return () => listeners.delete(channel);
+          },
+        ),
+        sendMessage,
         invoke: jest.fn().mockResolvedValue({ sleeping: false }),
       },
     };
 
     render(<App />);
-    fireEvent.contextMenu(screen.getByAltText('Desktop Pet'));
+    expect(screen.getByText('Right-click for menu')).toBeInTheDocument();
+    const avatarContainer = screen
+      .getByAltText('Desktop Pet')
+      .closest('.pet-container');
+    expect(avatarContainer).not.toBeNull();
 
-    expect(
-      screen.getByRole('menu', { name: 'Coco actions' }),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTitle('More actions'));
-    act(() => listeners.get('open-avatar-actions-menu')?.());
-
+    fireEvent.contextMenu(avatarContainer!);
     expect(
       screen.getByRole('menu', { name: 'Coco actions' }),
     ).toBeInTheDocument();
     expect(screen.getByText('Open Chat')).toBeInTheDocument();
-    expect(screen.getByText('Hide Avatar')).toBeInTheDocument();
-    expect(screen.getByText('Quit')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('More actions'));
+    act(() => listeners.get('open-avatar-actions-menu')?.());
+    expect(
+      screen.getByRole('menu', { name: 'Coco actions' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Open Chat'));
+    expect(sendMessage).toHaveBeenCalledWith('open-main-window');
   });
 
-  it('closes the contextual action menu when the avatar window loses focus', () => {
+  it('offers consistent navigation and Quit, without History', async () => {
+    const sendMessage = jest.fn();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage,
+        invoke: jest.fn((channel: string) =>
+          Promise.resolve(
+            channel === 'get-coco-sleep-mode' ? { sleeping: false } : [],
+          ),
+        ),
+      },
+    };
+
+    render(<App />);
+    await waitFor(() => {
+      expect(window.electron?.ipcRenderer.invoke).toHaveBeenCalledWith(
+        'get-coco-sleep-mode',
+      );
+    });
+    fireEvent.click(screen.getByTitle('More actions'));
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Open Chat', 'Settings', 'Hide', 'Sleep', 'Quit',
+    ]);
+    expect(screen.queryByRole('menuitem', { name: /History/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Personalization' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Settings'));
+    expect(sendMessage).toHaveBeenCalledWith('open-chat-settings');
+
+    fireEvent.click(screen.getByTitle('More actions'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Quit' }));
+    expect(sendMessage).toHaveBeenCalledWith('quit-from-avatar');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('closes the contextual action menu when the avatar window loses focus', async () => {
     (window as any).electron = {
       ipcRenderer: {
         on: jest.fn(() => jest.fn()),
@@ -539,77 +230,19 @@ describe('App', () => {
     };
 
     render(<App />);
-    fireEvent.click(screen.getByTitle('More actions'));
-    expect(screen.getByRole('menu', { name: 'Coco actions' })).toBeInTheDocument();
-
-    fireEvent.blur(window);
-    expect(screen.queryByRole('menu', { name: 'Coco actions' })).not.toBeInTheDocument();
-  });
-
-  it('shows and approves the previous daily memory update', async () => {
-    const sendMessage = jest.fn();
-    const invoke = jest.fn((channel: string) => {
-      if (channel === 'get-daily-memory-draft') {
-        return Promise.resolve({
-          draft: {
-            draftId: 'draft-1',
-            createdAt: 1,
-            periodEnd: 1,
-            summary: 'Daily update',
-            bullets: [
-              {
-                id: 'preference-1',
-                section: 'when_to_support',
-                content:
-                  'Offer help when repeated report formatting is visible.',
-                confidence: 0.9,
-                examples: [
-                  'The user repeatedly reformatted the same report table.',
-                ],
-              },
-            ],
-          },
-        });
-      }
-      if (channel === 'approve-daily-memory-draft') {
-        return Promise.resolve({ success: true });
-      }
-      return Promise.resolve({ sleeping: false });
-    });
-    (window as any).electron = {
-      ipcRenderer: {
-        on: jest.fn(() => jest.fn()),
-        sendMessage,
-        invoke,
-      },
-    };
-
-    render(<App />);
-    expect(
-      await screen.findByText(
-        'Offer help when repeated report formatting is visible.',
-      ),
-    ).toBeInTheDocument();
     await waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith(
-        'daily-memory-review-visibility',
-        { visible: true },
+      expect(window.electron?.ipcRenderer.invoke).toHaveBeenCalledWith(
+        'get-coco-sleep-mode',
       );
     });
-    expect(screen.getByText('When to proactively support')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('1 example'));
+    fireEvent.click(screen.getByTitle('More actions'));
     expect(
-      screen.getByText(
-        'The user repeatedly reformatted the same report table.',
-      ),
+      screen.getByRole('menu', { name: 'Coco actions' }),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Approve update'));
 
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('approve-daily-memory-draft', {
-        draftId: 'draft-1',
-      });
-      expect(screen.getByText('Updated ✓')).toBeInTheDocument();
-    });
+    fireEvent.blur(window);
+    expect(
+      screen.queryByRole('menu', { name: 'Coco actions' }),
+    ).not.toBeInTheDocument();
   });
 });

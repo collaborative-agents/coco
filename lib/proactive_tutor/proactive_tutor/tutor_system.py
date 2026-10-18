@@ -1,13 +1,16 @@
 import asyncio
 import json
 import os
+import re
 import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
 
+from external_api.llm import prompt_to_text_with_metrics
 from external_api.types import LLMCallMetrics
 from memory_mcp.client import call_get_recent_observations
 from proactive_tutor.agents.tutor import TutorAgent
@@ -20,6 +23,67 @@ from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 
 logger = init_logger(__name__)
+
+
+_RECAP_SYSTEM_PROMPT = """You are a learning coach summarizing a tutoring session.
+Given the conversation transcript, produce a JSON object with this exact shape:
+
+{
+  "summary_title": "<a concise title starting with 'You learned...' or 'You practiced...'>",
+  "bullets": [
+    "<one concrete thing the user learned or did>",
+    "<another concrete thing>",
+    "<optional third thing>"
+  ],
+  "quiz": {
+    "question": "<one multiple-choice question testing a key concept from the session>",
+    "choices": ["<answer>", "<answer>", "<answer>", "<answer>"],
+    "correct_index": 0,
+    "explanation": "<a friendly explanation of the correct answer>"
+  }
+}
+
+Rules:
+- Ground every field in the actual transcript; do not invent topics.
+- Make the quiz test a transferable concept that was genuinely covered.
+- Provide exactly four choices, shuffle the correct choice, and set correct_index accordingly.
+- If the 4D Framework was discussed, use its exact competency names when they
+  are relevant: Delegation, Description, Discernment, and Diligence.
+- Do not use the four competency names themselves as the four answer choices.
+  Do not substitute related labels such as Stage, Task, or Rules either.
+- The question must present a practical situation and ask what the user should
+  do next. Every choice must be a concrete action phrase or full sentence, not
+  a one-word concept label.
+- Bad question: "Which concept is this?" with choices "Stage", "Task", "Rules",
+  and "Discernment".
+- Good question: "Before using AI-generated payroll totals, what should you do?"
+  with four plausible actions the user could take.
+- Return only valid JSON, with no Markdown fences or extra keys.
+"""
+
+_DAILY_LEARNING_REVIEW_SYSTEM_PROMPT = """You are a learning coach creating a
+short review of everything a user learned across one activity day. You receive
+one or more grounded session recaps from that same day.
+
+Return only valid JSON with this exact shape:
+{
+  "summary_title": "<one concise title describing the day's overall learning>",
+  "takeaways": [
+    "<important transferable learning point>",
+    "<important transferable learning point>",
+    "<important transferable learning point>"
+  ]
+}
+
+Rules:
+- Produce exactly three takeaways, even when there was only one session.
+- Synthesize across all supplied sessions and remove duplicated ideas.
+- Prioritize concrete, transferable lessons the user can apply again.
+- Ground every takeaway in the supplied recaps; do not invent new topics.
+- Describe what the user learned, not activity statistics or app usage.
+- Keep each takeaway to one concise sentence.
+- Do not include a quiz, Markdown, or extra keys.
+"""
 
 
 class TutorSystem:
@@ -777,27 +841,63 @@ class TutorSystem:
             ],
         }
         messages = self._everyday_chat_messages(audio_message)
-        guidance, metrics = self.tutor_agent.chat_with_metrics(
-            messages,
-            on_event=on_event,
-        )
 
-        # Raw audio is intentionally not retained. Keep a compact turn marker so
-        # the answer remains part of the same typed/voice conversation.
-        voice_marker = "[Voice message]"
+        # Start transcription in the background while the normal audio tutor
+        # response begins immediately. This keeps time-to-first-token close to
+        # the original one-call voice flow while still retaining searchable text.
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="coco-audio-transcription"
+        ) as executor:
+            transcription_future = executor.submit(
+                self.tutor_agent.transcribe_audio_with_metrics,
+                audio_data,
+                "wav",
+            )
+
+            def publish_transcription(future: Future) -> None:
+                if on_event is None:
+                    return
+                try:
+                    text, _metrics = future.result()
+                except Exception as exc:
+                    logger.warning("[AUDIO_PROMPT] Transcription failed: %s", exc)
+                    return
+                cleaned = text.strip()
+                if cleaned and cleaned.upper() != "<NO_SPEECH>":
+                    on_event({"type": "transcription", "text": cleaned})
+
+            transcription_future.add_done_callback(publish_transcription)
+            guidance, metrics = self.tutor_agent.chat_with_metrics(
+                messages,
+                on_event=on_event,
+            )
+            try:
+                transcription, _transcription_metrics = transcription_future.result()
+                transcription = transcription.strip()
+            except Exception as exc:
+                logger.warning("[AUDIO_PROMPT] Transcription failed: %s", exc)
+                transcription = ""
+
+        if not transcription or transcription.upper() == "<NO_SPEECH>":
+            raise ValueError("No intelligible speech was detected. Please try again.")
+
+        stored_user_text = transcription
+
+        # Retain only the transcript. The raw base64 audio exists only for the
+        # provider request and is redacted by the Router before usage logging.
         self._chat_messages.extend(
             [
-                {"role": "user", "content": voice_marker},
+                {"role": "user", "content": stored_user_text},
                 {"role": "assistant", "content": guidance},
             ]
         )
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.conversation_history.extend(
-            [f"[{ts}] [User]: {voice_marker}", f"[{ts}] [Tutor]: {guidance}"]
+            [f"[{ts}] [User]: {stored_user_text}", f"[{ts}] [Tutor]: {guidance}"]
         )
         self._log_tutor_call(
             "audio_prompt",
-            voice_marker,
+            stored_user_text,
             guidance,
             None,
             llm_metrics=metrics,
@@ -972,3 +1072,186 @@ class TutorSystem:
             return val if val and val != "none" else None
         except Exception:
             return None
+
+    @staticmethod
+    def _extract_response_competency(guidance: str) -> str | None:
+        """Return the primary 4D competency declared by the tutor response."""
+        import re
+
+        match = re.search(
+            r"<four_d_dimension>\s*([^<]+?)\s*</four_d_dimension>",
+            guidance,
+            re.IGNORECASE,
+        )
+        value = match.group(1).strip().lower() if match else ""
+        return value if value in TutorSystem._4d_competencies() else None
+
+    @staticmethod
+    def _4d_competencies() -> set[str]:
+        return {"delegation", "description", "discernment", "diligence"}
+
+    def record_proactive_suggestion(
+        self, text: str, trigger_type: str | None = None
+    ) -> None:
+        """Record a proactive suggestion the user was actually shown.
+
+        It is labelled separately from tutor replies so the Judge can count it
+        as a recent nudge, and so later replies don't repeat it. A shown
+        framework-introduction suggestion marks the framework as introduced,
+        so the Judge's one-time trigger doesn't keep firing.
+        """
+        text = text.strip()
+        if not text:
+            return
+        if trigger_type == "framework_introduction":
+            self.curriculum_state["framework_introduced"] = True
+        self._chat_messages.append({"role": "assistant", "content": text})
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversation_history.append(f"[{ts}] [Coco suggestion]: {text}")
+
+    def generate_recap(
+        self, transcript: str | None = None
+    ) -> tuple[dict, LLMCallMetrics]:
+        """Generate a quiz from a snapshot without changing the active conversation."""
+        transcript = (
+            "\n".join(self.conversation_history) if transcript is None else transcript
+        ).strip()
+        if not transcript:
+            raise ValueError("Session transcript is empty — cannot generate recap")
+
+        retry_instruction = ""
+        for attempt in range(2):
+            raw, metrics = prompt_to_text_with_metrics(
+                model=self.tutor_agent.model,
+                system_prompt=_RECAP_SYSTEM_PROMPT,
+                user_prompt=(
+                    "Here is the tutoring session transcript:\n\n"
+                    f"{transcript}\n\nGenerate the recap JSON."
+                    f"{retry_instruction}"
+                ),
+                operation="session_recap",
+            )
+            recap = self._parse_recap(raw)
+            try:
+                self._validate_recap_quiz_quality(recap)
+                return recap, metrics
+            except ValueError as exc:
+                if attempt == 1:
+                    raise
+                retry_instruction = (
+                    "\n\nThe previous quiz was rejected because "
+                    f"{exc}. Generate a new practical scenario question with "
+                    "four concrete action choices, not vocabulary labels."
+                )
+
+        raise ValueError("Could not generate a valid recap quiz")
+
+    def generate_daily_learning_review(
+        self, recaps: list[dict[str, Any]]
+    ) -> tuple[dict, LLMCallMetrics]:
+        """Synthesize one activity day's session recaps into three takeaways."""
+        if not recaps:
+            raise ValueError("At least one session recap is required")
+        raw, metrics = prompt_to_text_with_metrics(
+            model=self.tutor_agent.model,
+            system_prompt=_DAILY_LEARNING_REVIEW_SYSTEM_PROMPT,
+            user_prompt=(
+                "Here are all session recaps from the user's previous activity day:\n\n"
+                f"{json.dumps(recaps, ensure_ascii=False, indent=2)}\n\n"
+                "Generate the daily learning review JSON."
+            ),
+            operation="daily_learning_review",
+        )
+        return self._parse_daily_learning_review(raw), metrics
+
+    @staticmethod
+    def _parse_daily_learning_review(raw: str) -> dict:
+        text = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text, flags=re.IGNORECASE)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        review = json.loads(match.group(0) if match else text)
+        if not isinstance(review, dict):
+            raise ValueError("Daily learning review must be a JSON object")
+        title = review.get("summary_title")
+        takeaways = review.get("takeaways")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("Daily learning review is missing summary_title")
+        if not isinstance(takeaways, list) or len(takeaways) != 3:
+            raise ValueError(
+                "Daily learning review must contain exactly three takeaways"
+            )
+        if not all(isinstance(item, str) and item.strip() for item in takeaways):
+            raise ValueError(
+                "Daily learning review takeaways must be non-empty strings"
+            )
+        return {"summary_title": title.strip(), "takeaways": takeaways}
+
+    @staticmethod
+    def _parse_recap(raw: str) -> dict:
+        """Extract and validate recap JSON returned by the model."""
+        text = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text, flags=re.IGNORECASE)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        recap = json.loads(match.group(0) if match else text)
+
+        if not isinstance(recap, dict):
+            raise ValueError("Recap must be a JSON object")
+        title = recap.get("summary_title")
+        bullets = recap.get("bullets")
+        quiz = recap.get("quiz")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("Recap is missing summary_title")
+        if not isinstance(bullets, list) or not 2 <= len(bullets) <= 3:
+            raise ValueError("Recap bullets must contain two or three items")
+        if not all(isinstance(item, str) and item.strip() for item in bullets):
+            raise ValueError("Recap bullets must be non-empty strings")
+        if not isinstance(quiz, dict):
+            raise ValueError("Recap is missing quiz")
+        if not isinstance(quiz.get("question"), str) or not quiz["question"].strip():
+            raise ValueError("Recap quiz is missing a question")
+        choices = quiz.get("choices")
+        if not isinstance(choices, list) or len(choices) != 4:
+            raise ValueError("Recap quiz must contain exactly four choices")
+        if not all(isinstance(choice, str) and choice.strip() for choice in choices):
+            raise ValueError("Recap choices must be non-empty strings")
+        correct_index = quiz.get("correct_index")
+        if not isinstance(correct_index, int) or not 0 <= correct_index < 4:
+            raise ValueError("Recap quiz has an invalid correct_index")
+        if (
+            not isinstance(quiz.get("explanation"), str)
+            or not quiz["explanation"].strip()
+        ):
+            raise ValueError("Recap quiz is missing an explanation")
+        return recap
+
+    @staticmethod
+    def _validate_recap_quiz_quality(recap: dict) -> None:
+        """Reject vocabulary-label quizzes that do not test applied judgment."""
+        choices = recap["quiz"]["choices"]
+        framework_labels = {
+            "delegation",
+            "description",
+            "discernment",
+            "diligence",
+            "stage",
+            "task",
+            "rule",
+            "rules",
+        }
+
+        label_choices = 0
+        short_choices = 0
+        for choice in choices:
+            normalized = re.sub(r"^[\s\-–—\d.)]+", "", choice.strip().lower())
+            leading_label = re.split(r"\s*[(:—–-]", normalized, maxsplit=1)[0]
+            if normalized in framework_labels or leading_label in framework_labels:
+                label_choices += 1
+            if len(re.findall(r"\b\w+\b", normalized)) < 3:
+                short_choices += 1
+
+        if label_choices >= 2:
+            raise ValueError("multiple answer choices are framework vocabulary labels")
+        if short_choices >= 3:
+            raise ValueError(
+                "most answer choices are too short to describe concrete actions"
+            )

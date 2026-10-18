@@ -26,8 +26,8 @@ def test_build_memory_engine_uses_shared_database_and_observer_model(
     assert engine.store.db_path == db_path
     assert engine.model == "provider/observer"
     assert engine.user_name == "the user"
-    assert engine.min_batch_size == 5
-    assert engine.max_batch_size == 50
+    assert engine.min_batch_size == 20
+    assert engine.max_batch_size == 20
 
 
 def test_build_memory_engine_honors_memory_settings(monkeypatch, tmp_path):

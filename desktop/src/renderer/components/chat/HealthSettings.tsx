@@ -85,8 +85,7 @@ export default function HealthSettings({
       )}
       {cocoSleeping && (
         <div role="status" style={S.healthDetail}>
-          Sleeping pauses the sensing server. Coco stays available for chat and
-          personalization runs in the background.
+          Sleeping intentionally stops the sensing server and tutor agent.
         </div>
       )}
       {!cocoSleeping && (

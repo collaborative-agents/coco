@@ -11,19 +11,26 @@ import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
 import checkNodeEnv from '../scripts/check-node-env';
 import deleteSourceMaps from '../scripts/delete-source-maps';
+import { readHarnessVersion } from '../../src/main/services/harness-version';
 
 const dotenv = require('dotenv');
 
-// Study service URLs are safe to embed; participant credentials are fetched
-// after authentication and are never included in the application bundle.
+// Packaging runs from desktop/, while the private build configuration lives in
+// the repository-level .env. Load it only while producing the main-process
+// bundle; the file itself is never copied into the application.
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 checkNodeEnv('production');
 deleteSourceMaps();
 
-const buildStudyConfig = {
-  gatewayUrl: process.env.COCO_GATEWAY_URL?.trim() || '',
-  routerUrl: process.env.LLM_ROUTER_URL?.trim() || '',
+// Capture Git provenance while the checkout is available. Packaged apps do not
+// include `.git`, so the production bundle must carry this immutable snapshot.
+// This config is evaluated anew for every production build/package invocation.
+const buildHarnessVersion = readHarnessVersion();
+const buildRouterConfig = {
+  url: process.env.LLM_ROUTER_URL?.trim() || '',
+  gatewayUrl: process.env.COCO_GATEWAY_URL?.trim() ||
+    'https://coco.upskilling.saltlab.stanford.edu',
 };
 
 const configuration: webpack.Configuration = {
@@ -77,7 +84,8 @@ const configuration: webpack.Configuration = {
 
     new webpack.DefinePlugin({
       'process.type': '"browser"',
-      __COCO_BUILD_STUDY_CONFIG__: JSON.stringify(buildStudyConfig),
+      __COCO_BUILD_HARNESS_VERSION__: JSON.stringify(buildHarnessVersion),
+      __COCO_BUILD_ROUTER_CONFIG__: JSON.stringify(buildRouterConfig),
     }),
   ],
 

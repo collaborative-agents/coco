@@ -55,6 +55,13 @@ export interface TutorMemoryResult {
   evidence?: TutorObservation[];
 }
 
+export interface AgentQuestion {
+  header: string;
+  question: string;
+  multiSelect?: boolean;
+  options: { label: string; description: string; preview?: string }[];
+}
+
 export interface TutorToolCall {
   id: string;
   name: string;
@@ -69,6 +76,10 @@ export interface TutorToolCall {
   };
   status: 'running' | 'completed' | 'error';
   result?: {
+    waitingForAnswer?: boolean;
+    questions?: AgentQuestion[];
+    cancelled?: boolean;
+    answers?: { questionIndex: number; answer: string | null; selected?: string[] }[];
     output?: string;
     count?: number;
     results?: TutorMemoryResult[];
@@ -85,6 +96,10 @@ export interface ObservationEvent {
   ts?: number;
   scenario?: string;
   applying_ai_output?: string;
+  suggestion_title?: string;
+  intervention_source?: 'judge';
+  trigger_type?: string;
+  teaching_depth?: 'introduce' | 'reinforce' | 'deepen' | 'not_applicable';
   /** Brief evidence behind need_support. */
   rationale?: string;
   /** Observer's explicit personalized intervention decision. */
@@ -116,6 +131,19 @@ export interface InstantSuggestion {
   prompt?: string;
   copyText: string;
   llm_metrics?: LLMCallMetrics;
+  fourDDimension?:
+    | 'delegation'
+    | 'description'
+    | 'discernment'
+    | 'diligence';
+  teachingDepth?: 'introduce' | 'reinforce' | 'deepen';
+  /** One-sentence explanation shown before the suggestion's action. */
+  noticed?: string;
+  aiCan?: string;
+  why?: string;
+  check?: string;
+  triggerType?: string;
+  interventionSource?: 'judge' | 'observer';
   /**
    * The user's own AI tools (from their onboarding selection), so a `delegate`
    * bubble can show one "Open" button per available tool and let the user pick
@@ -160,7 +188,7 @@ export const AI_TOOLS: Record<string, AiToolDef> = {
   grok: { id: 'grok', label: 'Grok', category: 'chatbot', open: { via: 'website', url: 'https://grok.com/' } },
   qwen: { id: 'qwen', label: 'Qwen', category: 'chatbot', open: { via: 'website', url: 'https://chat.qwen.ai/' } },
   // Agents → open a terminal (CLI) or a desktop app
-  'claude-code': { id: 'claude-code', label: 'Claude Code', category: 'agent', open: { via: 'terminal' } },
+  'claude-code': { id: 'claude-code', label: 'Claude Code', category: 'agent', open: { via: 'app', app: 'Claude' } },
   'gemini-cli': { id: 'gemini-cli', label: 'Gemini CLI', category: 'agent', open: { via: 'terminal' } },
   codex: { id: 'codex', label: 'Codex', category: 'agent', open: { via: 'terminal' } },
   opencode: { id: 'opencode', label: 'OpenCode', category: 'agent', open: { via: 'terminal' } },

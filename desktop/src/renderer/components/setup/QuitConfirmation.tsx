@@ -36,7 +36,7 @@ export default function QuitConfirmation({
       aria-describedby="auth-quit-detail"
     >
       <div className="auth-quit-dialog">
-        <h2 id="auth-quit-title">Quit Coco?</h2>
+        <h2 id="auth-quit-title">Quit Coco Learn?</h2>
         <p id="auth-quit-detail">
           Are you sure you want to quit? You will need to reopen the app to
           continue.
@@ -56,7 +56,7 @@ export default function QuitConfirmation({
               window.electron.ipcRenderer.sendMessage('quit-from-auth')
             }
           >
-            Quit Coco
+            Quit Coco Learn
           </button>
         </div>
       </div>

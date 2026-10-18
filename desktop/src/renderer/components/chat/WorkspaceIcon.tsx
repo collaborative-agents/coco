@@ -1,5 +1,6 @@
 export type WorkspaceIconName =
   | 'chat'
+  | 'todo'
   | 'personalization'
   | 'settings'
   | 'new'
@@ -14,8 +15,14 @@ export default function WorkspaceIcon({ name }: { name: WorkspaceIconName }) {
     ),
     personalization: (
       <>
-        <circle cx="10" cy="7" r="4" />
-        <path d="M3 21v-2a7 7 0 0 1 10-6.3M18 12l1.4 3.6L23 17l-3.6 1.4L18 22l-1.4-3.6L13 17l3.6-1.4Z" />
+        <circle cx="9" cy="7" r="3" />
+        <path d="M3 21v-2a6 6 0 0 1 12 0v2M18 3l1.2 3.8L23 8l-3.8 1.2L18 13l-1.2-3.8L13 8l3.8-1.2Z" />
+      </>
+    ),
+    todo: (
+      <>
+        <rect x="4" y="3" width="16" height="18" rx="3" />
+        <path d="m7 9 2 2 4-4M8 16h8" />
       </>
     ),
     settings: <path d="M4 8h16M4 16h16" />,

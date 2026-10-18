@@ -1,0 +1,34 @@
+.training-submission {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--coco-color-border);
+}
+.training-submission h3 {
+  margin: 0 0 16px;
+}
+.training-submission h4 {
+  margin: 16px 0 8px;
+}
+.training-submission-screenshot {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+}
+.training-submission dl {
+  margin: 0;
+}
+.training-submission dl > div {
+  padding: 10px 0;
+}
+.training-submission dt {
+  font-size: var(--coco-text-control);
+  color: var(--coco-color-text-muted);
+}
+.training-submission dd {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

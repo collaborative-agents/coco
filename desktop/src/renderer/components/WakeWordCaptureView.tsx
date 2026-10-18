@@ -1,3 +1,4 @@
+import subscribeCocoSleepMode from '../services/coco-sleep-mode';
 import { useEffect, useRef, useState } from 'react';
 import { WakeWordListener } from '../wake-word-listener';
 
@@ -64,26 +65,7 @@ export default function WakeWordCaptureView() {
     };
   }, []);
 
-  useEffect(() => {
-    window.electron?.ipcRenderer
-      .invoke('get-coco-sleep-mode')
-      .then((value: unknown) => {
-        const state = value as { sleeping?: unknown } | undefined;
-        setSleeping(state?.sleeping === true);
-        return undefined;
-      })
-      .catch(() => undefined);
-    const removeSleep = window.electron?.ipcRenderer.on(
-      'coco-sleep-mode-changed',
-      (value: unknown) => {
-        const state = value as { sleeping?: unknown } | undefined;
-        setSleeping(state?.sleeping === true);
-      },
-    );
-    return () => {
-      if (typeof removeSleep === 'function') removeSleep();
-    };
-  }, []);
+  useEffect(() => subscribeCocoSleepMode(setSleeping), []);
 
   useEffect(() => {
     let cancelled = false;

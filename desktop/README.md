@@ -85,6 +85,22 @@ The avatar surfaces observations from the sensing service in three tiers:
 | `npm run package` | Full production build + electron-builder (DMG / NSIS / AppImage) |
 | `npm test` | Run Jest unit tests |
 
+### Nightly builds
+
+The [Nightly Package & Release workflow](../.github/workflows/nightly.yml)
+builds the `nightly` branch every day at 06:00 UTC and can also be run manually.
+It creates a GitHub prerelease with a version such as
+`0.1.1-nightly.20261016060000`. The next nightly base version follows the
+latest stable tag automatically.
+
+Nightly installers use the name **Coco Learn Nightly**, a distinct macOS bundle
+ID and Windows installer ID, and the `coco-learn-nightly` user data directory.
+They check only the `nightly` update channel. Stable installs keep their current
+identity, data directory, and `latest` channel. To begin publishing nightlies,
+create a `nightly` branch containing these changes, then run the workflow or
+wait for its scheduled run. Keep the workflow changes on the default branch too,
+because GitHub runs scheduled workflows from there.
+
 ### Signed macOS releases
 
 macOS packaging requires a valid `Developer ID Application` identity and fails
@@ -124,40 +140,10 @@ xcrun stapler validate "release/build/mac-arm64/coco.app"
 
 The output directory can be `release/build/mac` for an x64 build.
 
-### Automatic desktop updates
-
-Packaged macOS and Windows builds check the public GitHub Releases feed shortly
-after startup and every six hours. Users choose whether to download an available
-update; after it downloads they can restart immediately or install it when Coco
-next quits. Windows uses an unsigned NSIS installer for now, so its updater does
-not provide publisher-identity verification until Windows signing is enabled.
-
-`v0.1.0` is the updater bootstrap release. Anyone who installed an earlier
-`0.1.0` package must manually install the updater-enabled `v0.1.0` once. Future
-patches use `v0.1.1`, `v0.1.2`, and so on.
-
-To prepare a patch release, update the packaged app version and its lockfile:
-
-```bash
-npm --prefix release/app version 0.1.1 --no-git-tag-version
-```
-
-Then run the **Package & Release** workflow with the same version and enter a
-required **What's new** summary. Markdown is supported; concise bullets work
-best in the native update dialog. The same text becomes the GitHub Release body
-and is displayed before users choose whether to download the update.
-
-Every stable release includes macOS and Windows so neither update feed points
-at an incomplete release. The workflow creates the `v0.1.1` stable release and
-refuses to publish unless the Apple Silicon and Intel ZIPs and the Windows NSIS
-installer all have matching differential blockmaps.
-
-Do not delete old stable ZIPs, NSIS installers, or their blockmaps: the
-differential updater uses them to calculate downloads for users upgrading from
-an earlier patch.
-
-To test the first-launch flow without changing your normal profile, point the
-development app at a fresh directory:
+Development runs store their profile and authentication state in
+`~/Library/Application Support/coco-development`; packaged builds use
+`~/Library/Application Support/coco`. To test the first-launch flow repeatedly,
+point one development run at a fresh temporary directory:
 
 ```bash
 export COCO_TEST_DATA="$(mktemp -d /tmp/coco-model-test.XXXXXX)"

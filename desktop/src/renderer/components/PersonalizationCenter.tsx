@@ -5,7 +5,6 @@ import trainingAnimation from '../../../assets/training.gif';
 import { AnimatedCocoGif } from './CocoGifControls';
 import useProvisionalDiscovery from './useProvisionalDiscovery';
 import './PersonalizationCenter.css';
-import WorkspaceIcon from './chat/WorkspaceIcon';
 
 export interface PersonalizationStatusInfo {
   available: boolean;
@@ -418,52 +417,6 @@ export function PersonalizationStatusPanel({
   );
 }
 
-export function PersonalizationSettingsCard({
-  onOpen,
-}: {
-  onOpen: () => void;
-}) {
-  const [status, setStatus] = useState<PersonalizationStatusInfo | null>(null);
-  const [readyCount, setReadyCount] = useState(0);
-  const [waitingForReview, setWaitingForReview] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(async () => {
-    try {
-      const response = (await window.electron?.ipcRenderer.invoke(
-        'get-personalization-center',
-      )) as CenterResponse | undefined;
-      setStatus(response?.status ?? null);
-      setWaitingForReview(Boolean(response?.center?.review));
-      setReadyCount(
-        response?.center?.review?.draft.bullets.filter(
-          (bullet) => !response.center?.review?.decisions[bullet.id],
-        ).length ?? 0,
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const timer = window.setInterval(() => refresh(), 2000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
-
-  return (
-    <div className="personalization-settings-entry">
-      <PersonalizationStatusPanel
-        status={status}
-        loading={loading}
-        onExpand={onOpen}
-        readyCount={readyCount}
-        waitingForReview={waitingForReview}
-      />
-    </div>
-  );
-}
-
 export default function PersonalizationCenter({
   onBack,
 }: {
@@ -730,15 +683,14 @@ export default function PersonalizationCenter({
           <h1>Personalization</h1>
           <p>See what Coco is learning and review updates</p>
         </div>
-        <button
-          type="button"
-          className="personalization-center__close"
-          aria-label="Close Personalization"
-          title="Close Personalization"
-          onClick={onBack}
-        >
-          <WorkspaceIcon name="close" />
-        </button>
+        {runStatus && (
+          <span className="personalization-center__growth-count">
+            {runStatus.successfulUpdateCount}{' '}
+            {runStatus.successfulUpdateCount === 1
+              ? 'successful update'
+              : 'successful updates'}
+          </span>
+        )}
       </header>
 
       {error && (

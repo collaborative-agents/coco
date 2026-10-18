@@ -144,7 +144,6 @@ export default function useModelSetup(routerManagedFromMain: boolean) {
             provider: item.provider,
             model: item.model,
             baseUrl: item.baseUrl,
-            supportsAudio: item.supportsAudio === true,
           })),
           defaultTutorId,
           credentials,

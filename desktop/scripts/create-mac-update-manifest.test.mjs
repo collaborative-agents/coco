@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -82,7 +83,21 @@ test('rejects a release when a differential blockmap is missing', () => {
   );
 });
 
-test('requires a stable semantic version', () => {
+test('accepts a nightly semantic version', () => {
+  const { root, armZip, x64Zip } = fixture();
+  const version = '0.1.1-nightly.20261016060000';
+  const nightlyArmZip = armZip.replace('0.1.1', version);
+  const nightlyX64Zip = x64Zip.replace('0.1.1', version);
+  renameSync(armZip, nightlyArmZip);
+  renameSync(`${armZip}.blockmap`, `${nightlyArmZip}.blockmap`);
+  renameSync(x64Zip, nightlyX64Zip);
+  renameSync(`${x64Zip}.blockmap`, `${nightlyX64Zip}.blockmap`);
+  const outputPath = join(root, 'nightly-mac.yml');
+  createMacUpdateManifest({ artifactsDir: root, outputPath, version });
+  assert.match(readFileSync(outputPath, 'utf8'), /version: "0\.1\.1-nightly\.20261016060000"/);
+});
+
+test('requires a stable or nightly semantic version', () => {
   const { root } = fixture();
   assert.throws(
     () =>
@@ -91,6 +106,6 @@ test('requires a stable semantic version', () => {
         outputPath: join(root, 'latest-mac.yml'),
         version: 'build-12',
       }),
-    /stable semver/,
+    /stable or nightly semver/,
   );
 });

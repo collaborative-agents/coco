@@ -4,6 +4,10 @@ import type { AgentActivity } from '../../../shared/agent-execution';
 
 export interface Guidance {
   text: string;
+  /** Display separately while retaining combined text for copy/export. */
+  mainText?: string;
+  coaching?: string;
+  competency?: 'delegation' | 'description' | 'discernment' | 'diligence';
   examplePrompt?: string | null;
   vizCode?: string | null;
 }
@@ -53,7 +57,6 @@ export interface SavedConversation {
 }
 
 export interface TutorModelOption {
-  supportsAudio: boolean;
   id: string;
   label: string;
   provider: string;

@@ -1,50 +1,62 @@
 import React from 'react';
 import type { TutorToolCall } from '../observation-types';
+import toolSummary from './tool-summary';
+import './ToolActivity.css';
+import QuestionCard from './QuestionCard';
 import { S } from './styles';
 
-export function ToolCallCard({ call }: { call: TutorToolCall }) {
+export function ToolCallCard({
+  call,
+  interactive = false,
+  grouped = false,
+}: {
+  call: TutorToolCall;
+  interactive?: boolean;
+  grouped?: boolean;
+}) {
+  if (call.name === 'ask_user_question')
+    return <QuestionCard call={call} interactive={interactive} />;
+  const rawDetails = (
+    <div className="tool-activity-details">
+      <div className="tool-activity-caption">Full tool call · JSON</div>
+      <pre className="agent-tool-output">{JSON.stringify(call, null, 2)}</pre>
+    </div>
+  );
+  const status = (
+    <span className={`tool-activity-status ${call.status}`}>
+      {call.status === 'running'
+        ? 'Working…'
+        : call.status === 'error'
+          ? 'Failed'
+          : 'Done'}
+    </span>
+  );
+  if (grouped) {
+    return (
+      <details className="tool-activity-call">
+        <summary>
+          <span className="tool-activity-description">{call.name}</span>
+          {status}
+          <span className="tool-activity-detail-label">Details</span>
+        </summary>
+        {rawDetails}
+      </details>
+    );
+  }
   if (
     !['observe_screen', 'get_user_context', 'get_recent_observations'].includes(
       call.name,
     )
   ) {
-    const summary =
-      call.arguments.command ?? call.arguments.path ?? call.arguments.pattern;
     return (
-      <div style={S.toolCard}>
-        <div style={S.toolHeader}>
-          <span style={S.toolIcon}>›</span>
-          <span>{call.name}</span>
-          <span
-            style={{
-              ...S.toolStatus,
-              ...(call.status === 'error' ? S.toolStatusError : {}),
-            }}
-          >
-            {call.status === 'running'
-              ? 'Running…'
-              : call.status === 'error'
-                ? 'Failed'
-                : 'Done'}
-          </span>
-        </div>
-        {summary != null && (
-          <div style={{ ...S.toolArgs, overflowWrap: 'anywhere' }}>
-            {String(summary)}
-          </div>
-        )}
-        <details style={S.toolDetails}>
-          <summary>
-            {call.status === 'running' ? 'Live output' : 'View details'}
-          </summary>
-          <pre className="agent-tool-output">
-            {JSON.stringify(call.arguments, null, 2)}
-          </pre>
-          <pre className="agent-tool-output">
-            {call.result?.output || call.result?.error || 'Waiting for output…'}
-          </pre>
-        </details>
-      </div>
+      <details className="tool-activity-call">
+        <summary>
+          <span className="tool-activity-description">{toolSummary(call)}</span>
+          {status}
+          <span className="tool-activity-detail-label">Details</span>
+        </summary>
+        {rawDetails}
+      </details>
     );
   }
   if (call.name === 'observe_screen') {
@@ -154,3 +166,5 @@ export function ToolCallCard({ call }: { call: TutorToolCall }) {
     </div>
   );
 }
+
+ToolCallCard.defaultProps = { interactive: false, grouped: false };

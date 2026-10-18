@@ -26,44 +26,114 @@ const markdownComponents: React.ComponentProps<typeof Markdown>['components'] =
 // ── Message model ──────────────────────────────────────────────────────────────
 export function TutorMessage({ text }: { text: string }) {
   const g = parseGuidance(text);
+  const [copiedPrompt, setCopiedPrompt] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState('');
+  const copyPrompt = async () => {
+    if (!g.examplePrompt) return;
+    try {
+      await navigator.clipboard.writeText(g.examplePrompt);
+      setCopiedPrompt(g.examplePrompt);
+      setCopyError('');
+    } catch {
+      setCopyError(
+        'Could not copy. Select the prompt text to copy it manually.',
+      );
+    }
+  };
+  const competency = g.competency
+    ? g.competency.charAt(0).toUpperCase() + g.competency.slice(1)
+    : null;
   return (
-    <div>
-      <div className="chat-markdown">
-        <Markdown
-          remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
-          components={markdownComponents}
-        >
-          {g.text}
-        </Markdown>
-      </div>
-      {g.vizCode && (
-        // eslint-disable-next-line react/no-danger-with-children
-        <iframe
-          title="visualization"
-          style={S.viz}
-          sandbox="allow-scripts"
-          srcDoc={g.vizCode}
-        />
+    <div className="tutor-response">
+      {(g.mainText ?? g.text) && (
+        <div className="chat-markdown tutor-main-answer">
+          <Markdown
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeKatex]}
+            components={markdownComponents}
+          >
+            {g.mainText ?? g.text}
+          </Markdown>
+        </div>
       )}
       {g.examplePrompt && (
-        <div style={S.example}>
-          <div style={{ fontWeight: 600, marginBottom: 2, color: '#3355cc' }}>
-            Try this prompt
-          </div>
-          {g.examplePrompt}
-          <div>
+        <section className="tutor-prompt-card" aria-label="Suggested prompt">
+          <div className="tutor-prompt-header">
+            <span className="tutor-section-label">Try this prompt</span>
             <button
               type="button"
-              style={S.exampleBtn}
-              onClick={() =>
-                navigator.clipboard.writeText(g.examplePrompt || '')
-              }
+              className="tutor-copy-prompt"
+              onClick={copyPrompt}
             >
-              Copy prompt
+              {copiedPrompt === g.examplePrompt ? 'Copied ✓' : 'Copy prompt'}
             </button>
           </div>
-        </div>
+          <div className="tutor-prompt-text">{g.examplePrompt}</div>
+          <span className="tutor-copy-status" role="status">
+            {copiedPrompt === g.examplePrompt
+              ? 'Prompt copied to clipboard.'
+              : ''}
+          </span>
+          {copyError && (
+            <p className="tutor-copy-error" role="alert">
+              {copyError}
+            </p>
+          )}
+        </section>
+      )}
+      {g.vizCode && (
+        <figure className="tutor-visualization">
+          <figcaption className="tutor-section-label">Visualization</figcaption>
+          <iframe
+            title="Coco visualization"
+            sandbox="allow-scripts"
+            srcDoc={g.vizCode}
+          />
+        </figure>
+      )}
+      {g.coaching && (
+        <aside
+          className="tutor-literacy-card"
+          aria-label="Suggestion"
+        >
+          <div className="tutor-literacy-header">
+            <span className="tutor-literacy-title">
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 20 20"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path
+                  d="M7 14h6M8 17h4M7 12c0-2-3-2.5-3-6a6 6 0 0 1 12 0c0 3.5-3 4-3 6"
+                  transform="translate(0 1) scale(1 .9)"
+                  strokeLinecap="round"
+                />
+              </svg>
+              Suggestion
+            </span>
+            {competency && (
+              <span
+                className="tutor-literacy-skill"
+                aria-label={`AI skill: ${competency}`}
+              >
+                {competency}
+              </span>
+            )}
+          </div>
+          <div className="chat-markdown">
+            <Markdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
+              components={markdownComponents}
+            >
+              {g.coaching}
+            </Markdown>
+          </div>
+        </aside>
       )}
     </div>
   );

@@ -15,6 +15,7 @@ from pathlib import Path
 from memory.models import ObservationInput, PropositionDraft
 from memory.store import MemoryStore
 from memory_mcp.client import (
+    _exception_group_message,
     _memory_server_parameters,
     call_get_recent_observations,
     call_get_user_context,
@@ -24,6 +25,15 @@ from memory_mcp.server import (
     query_recent_observations,
     query_user_context,
 )
+
+
+def test_exception_group_message_surfaces_transport_root_cause() -> None:
+    error = ExceptionGroup(
+        "unhandled errors in a TaskGroup",
+        [ExceptionGroup("nested", [ConnectionError("Connection closed")])],
+    )
+
+    assert _exception_group_message(error) == "Connection closed"
 
 
 def test_ago_timestamp_parses_relative_window() -> None:

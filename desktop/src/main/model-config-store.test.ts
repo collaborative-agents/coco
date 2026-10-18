@@ -1,18 +1,11 @@
-import fs from 'fs';
 import {
   buildRoleModelEnvironments,
   credentialId,
-  prepareModelConnectionTest,
-  readModelConfiguration,
-  MANAGED_DEFAULT_MODEL_CONFIGURATION,
-  resolveTutorRuntimeConnection,
-  routeModelConfigurationThroughLlmRouter,
+  isLlmRouterConfigured,
+  normalizeRouterManagedModelConfiguration,
+  ROUTER_MANAGED_MODEL_CONFIGURATION,
   validateModelConfiguration,
 } from './model-config-store';
-
-jest.mock('electron', () => ({
-  app: { getPath: () => '/virtual-coco-user-data' },
-}));
 
 describe('model configuration', () => {
   const sensing = {
@@ -27,14 +20,12 @@ describe('model configuration', () => {
       label: 'Fast tutor',
       provider: 'gemini' as const,
       model: 'gemini/gemini-flash',
-      supportsAudio: true,
     },
     {
       id: 'deep',
       label: 'Deep tutor',
       provider: 'anthropic' as const,
       model: 'anthropic/claude-sonnet',
-      supportsAudio: false,
     },
   ];
 
@@ -48,31 +39,6 @@ describe('model configuration', () => {
     ).toEqual({ version: 1, sensing, tutors, defaultTutorId: 'fast' });
   });
 
-  it('provides the managed study models with Claude as the text-only default', () => {
-    const config = validateModelConfiguration(
-      MANAGED_DEFAULT_MODEL_CONFIGURATION,
-    );
-
-    expect(config.sensing.model).toBe('hosted_vllm/qwen3.5-9b');
-    expect(config.defaultTutorId).toBe('claude-sonnet-4-6');
-    expect(config.tutors).toEqual([
-      expect.objectContaining({
-        provider: 'nv_inference',
-        model: 'nv_inference/aws/anthropic/bedrock-claude-sonnet-4-6',
-        supportsAudio: false,
-      }),
-      expect.objectContaining({
-        provider: 'nv_inference',
-        model: 'nv_inference/openai/openai/gpt-5.5',
-        supportsAudio: false,
-      }),
-      expect.objectContaining({
-        model: 'tinker/thinkingmachines/Inkling',
-        supportsAudio: true,
-      }),
-    ]);
-  });
-
   it('rejects a missing default tutor', () => {
     expect(() =>
       validateModelConfiguration({
@@ -83,35 +49,51 @@ describe('model configuration', () => {
     ).toThrow('Choose a default tutor model.');
   });
 
-  it('requires an explicit audio capability for every tutor', () => {
-    const unspecifiedTutor = {
-      id: 'unspecified',
-      label: 'Unspecified tutor',
-      provider: 'gemini' as const,
-      model: 'gemini/gemini-flash',
-    };
-    expect(() =>
-      validateModelConfiguration({
-        sensing,
-        tutors: [unspecifiedTutor] as any,
-        defaultTutorId: unspecifiedTutor.id,
-      }),
-    ).toThrow('Specify whether every tutor model supports audio input.');
-
-    const migrated = validateModelConfiguration(
-      {
-        sensing,
-        tutors: [unspecifiedTutor] as any,
-        defaultTutorId: unspecifiedTutor.id,
-      },
-      { allowMissingAudioCapability: true },
-    );
-    expect(migrated.tutors[0].supportsAudio).toBe(false);
-  });
-
   it('uses role-scoped credential IDs', () => {
     expect(credentialId('sensing', 'gemini')).toBe('sensing:gemini');
     expect(credentialId('tutor', 'gemini')).toBe('tutor:gemini');
+  });
+
+  it('recognizes a fully configured hosted router', () => {
+    expect(
+      isLlmRouterConfigured({
+        LLM_ROUTER_URL: 'https://router.example.test',
+        LLM_ROUTER_API_KEY: 'project-key',
+      }),
+    ).toBe(true);
+    expect(
+      isLlmRouterConfigured({ LLM_ROUTER_URL: 'https://router.example.test' }),
+    ).toBe(false);
+  });
+
+  it('uses the pilot models when configuration is managed by the router', () => {
+    expect(ROUTER_MANAGED_MODEL_CONFIGURATION.sensing.model).toBe(
+      'gemini/gemini-2.5-pro',
+    );
+    expect(ROUTER_MANAGED_MODEL_CONFIGURATION.tutors[0].model).toBe(
+      'gemini/gemini-3-flash-preview',
+    );
+  });
+
+  it('replaces unsupported Router tutors while preserving Gemini choices', () => {
+    const anthropicOnly = validateModelConfiguration({
+      sensing,
+      tutors: [tutors[1]],
+      defaultTutorId: 'deep',
+    });
+    expect(
+      normalizeRouterManagedModelConfiguration(anthropicOnly).tutors,
+    ).toEqual(ROUTER_MANAGED_MODEL_CONFIGURATION.tutors);
+
+    const mixed = validateModelConfiguration({
+      sensing,
+      tutors,
+      defaultTutorId: 'fast',
+    });
+    expect(normalizeRouterManagedModelConfiguration(mixed)).toMatchObject({
+      tutors: [tutors[0]],
+      defaultTutorId: 'fast',
+    });
   });
 
   it('does not expose sensing credentials to tutors or tutor credentials to sensing', () => {
@@ -157,163 +139,6 @@ describe('model configuration', () => {
     });
   });
 
-  it('maps the authenticated Router onto LiteLLM hosted-vLLM variables', () => {
-    const config = validateModelConfiguration({
-      sensing,
-      tutors,
-      defaultTutorId: 'fast',
-    });
-    const routerEnvironment = {
-      LLM_ROUTER_URL: 'https://router.example.test/',
-      LLM_ROUTER_API_KEY: 'participant-router-key',
-    };
-    const { sensingEnv, tutorEnv } = buildRoleModelEnvironments(
-      config,
-      {},
-      routerEnvironment,
-    );
-
-    expect(sensingEnv).toMatchObject({
-      HOSTED_VLLM_API_BASE: 'https://router.example.test/v1',
-      HOSTED_VLLM_API_KEY: 'participant-router-key',
-    });
-    expect(tutorEnv).toMatchObject({
-      HOSTED_VLLM_API_BASE: 'https://router.example.test/v1',
-      HOSTED_VLLM_API_KEY: 'participant-router-key',
-    });
-    expect(sensingEnv).not.toHaveProperty('LLM_ROUTER_API_KEY');
-    expect(tutorEnv).not.toHaveProperty('LLM_ROUTER_API_KEY');
-  });
-
-  it('routes every selected model through the hosted-vLLM LiteLLM provider', () => {
-    const config = routeModelConfigurationThroughLlmRouter(
-      validateModelConfiguration({
-        sensing,
-        tutors,
-        defaultTutorId: 'fast',
-      }),
-    );
-
-    expect(config.sensing.model).toBe('hosted_vllm/hosted_vllm/Qwen/VL');
-    expect(config.tutors[0]).toMatchObject({
-      provider: 'hosted_vllm',
-      model: 'hosted_vllm/gemini/gemini-flash',
-    });
-    expect(config.tutors[1]).toMatchObject({
-      provider: 'hosted_vllm',
-      model: 'hosted_vllm/anthropic/claude-sonnet',
-    });
-  });
-
-  it('preserves Router-facing provider IDs behind the desktop transport prefix', () => {
-    const config = routeModelConfigurationThroughLlmRouter(
-      validateModelConfiguration(MANAGED_DEFAULT_MODEL_CONFIGURATION),
-    );
-
-    expect(config.sensing.model).toBe('hosted_vllm/hosted_vllm/qwen3.5-9b');
-    expect(config.tutors.map((item) => item.model)).toEqual([
-      'hosted_vllm/nv_inference/aws/anthropic/bedrock-claude-sonnet-4-6',
-      'hosted_vllm/nv_inference/openai/openai/gpt-5.5',
-      'hosted_vllm/tinker/thinkingmachines/Inkling',
-    ]);
-  });
-
-  it('keeps session-time tutor selection on the same managed Router route', () => {
-    const persistedConfig = validateModelConfiguration(
-      MANAGED_DEFAULT_MODEL_CONFIGURATION,
-    );
-    const originalRouterUrl = process.env.LLM_ROUTER_URL;
-    const originalRouterKey = process.env.LLM_ROUTER_API_KEY;
-    const readFile = jest
-      .spyOn(fs, 'readFileSync')
-      .mockImplementation((filePath) => {
-        if (String(filePath).endsWith('coco-model-config.json')) {
-          return JSON.stringify(persistedConfig);
-        }
-        throw new Error(`No test file at ${String(filePath)}`);
-      });
-    process.env.LLM_ROUTER_URL = 'https://router.example.test';
-    process.env.LLM_ROUTER_API_KEY = 'participant-router-key';
-
-    try {
-      expect(resolveTutorRuntimeConnection('gpt-5-5')).toMatchObject({
-        id: 'gpt-5-5',
-        provider: 'hosted_vllm',
-        model: 'hosted_vllm/nv_inference/openai/openai/gpt-5.5',
-      });
-    } finally {
-      readFile.mockRestore();
-      if (originalRouterUrl === undefined) delete process.env.LLM_ROUTER_URL;
-      else process.env.LLM_ROUTER_URL = originalRouterUrl;
-      if (originalRouterKey === undefined)
-        delete process.env.LLM_ROUTER_API_KEY;
-      else process.env.LLM_ROUTER_API_KEY = originalRouterKey;
-    }
-  });
-
-  it('migrates the obsolete hosted-vLLM wrapper on saved NVIDIA models', () => {
-    const config = routeModelConfigurationThroughLlmRouter(
-      validateModelConfiguration({
-        sensing,
-        tutors: [
-          {
-            id: 'legacy-nv',
-            label: 'Legacy NVIDIA model',
-            provider: 'hosted_vllm',
-            model: 'hosted_vllm/nv_inference/openai/openai/gpt-5.5',
-            supportsAudio: false,
-          },
-        ],
-        defaultTutorId: 'legacy-nv',
-      }),
-    );
-
-    expect(config.tutors[0].model).toBe(
-      'hosted_vllm/nv_inference/openai/openai/gpt-5.5',
-    );
-  });
-
-  it('restores the missing NVIDIA provider segment in legacy managed models', () => {
-    const config = routeModelConfigurationThroughLlmRouter(
-      validateModelConfiguration({
-        sensing,
-        tutors: [
-          {
-            id: 'legacy-claude',
-            label: 'Legacy Claude',
-            provider: 'hosted_vllm',
-            model: 'hosted_vllm/aws/anthropic/bedrock-claude-sonnet-4-6',
-            baseUrl: 'https://inference-api.nvidia.com/v1',
-            supportsAudio: false,
-          },
-          {
-            id: 'legacy-gpt',
-            label: 'Legacy GPT',
-            provider: 'hosted_vllm',
-            model: 'hosted_vllm/openai/openai/gpt-5.5',
-            baseUrl: 'https://inference-api.nvidia.com/v1',
-            supportsAudio: false,
-          },
-        ],
-        defaultTutorId: 'legacy-claude',
-      }),
-    );
-
-    expect(config.tutors).toEqual([
-      expect.objectContaining({
-        provider: 'hosted_vllm',
-        model:
-          'hosted_vllm/nv_inference/aws/anthropic/bedrock-claude-sonnet-4-6',
-      }),
-      expect.objectContaining({
-        provider: 'hosted_vllm',
-        model: 'hosted_vllm/nv_inference/openai/openai/gpt-5.5',
-      }),
-    ]);
-    expect(config.tutors[0]).not.toHaveProperty('baseUrl');
-    expect(config.tutors[1]).not.toHaveProperty('baseUrl');
-  });
-
   it('adds the internal routing prefix to raw endpoint model IDs', () => {
     const config = validateModelConfiguration({
       sensing: {
@@ -324,7 +149,9 @@ describe('model configuration', () => {
       defaultTutorId: 'fast',
     });
 
-    expect(config.sensing.model).toBe('hosted_vllm/thinkingmachines/inkling');
+    expect(config.sensing.model).toBe(
+      'hosted_vllm/thinkingmachines/inkling',
+    );
   });
 
   it('routes an Inkling tutor through Tinker with a tutor-scoped key', () => {
@@ -336,7 +163,6 @@ describe('model configuration', () => {
           label: 'Voice tutor',
           provider: 'tinker',
           model: 'thinkingmachines/Inkling-Small:peft:262144',
-          supportsAudio: true,
         },
       ],
       defaultTutorId: 'voice',
@@ -353,73 +179,16 @@ describe('model configuration', () => {
   });
 });
 
-describe('direct Settings connections', () => {
-  const connection = {
-    id: 'sensing',
-    label: 'NVIDIA',
-    provider: 'hosted_vllm' as const,
-    model: 'hosted_vllm/aws/anthropic/bedrock-claude-sonnet-4-6',
-    baseUrl: 'https://inference-api.nvidia.com/v1',
-  };
-  const config = {
-    version: 1 as const,
-    routing: 'direct' as const,
-    sensing: connection,
-    tutors: [{ ...connection, id: 'tutor', supportsAudio: false }],
-    defaultTutorId: 'tutor',
-  };
 
-  it('preserves direct NVIDIA endpoint settings instead of migrating them to the router', () => {
-    const read = jest
-      .spyOn(fs, 'readFileSync')
-      .mockReturnValue(JSON.stringify(config));
-    try {
-      expect(readModelConfiguration()).toEqual(config);
-    } finally {
-      read.mockRestore();
-    }
+it('migrates the legacy Router tutor ID while keeping its selection and label', () => {
+  const current = validateModelConfiguration({
+    ...ROUTER_MANAGED_MODEL_CONFIGURATION,
+    tutors: [{ id: 'my-tutor', label: 'My tutor', provider: 'gemini', model: 'gemini/gemini-3-flash' }],
+    defaultTutorId: 'my-tutor',
   });
-
-  it('uses the configured endpoint and provider keys even with a router token present', () => {
-    const env = buildRoleModelEnvironments(
-      config,
-      {
-        'sensing:hosted_vllm': 'sensing-key',
-        'tutor:hosted_vllm': 'tutor-key',
-      },
-      {
-        LLM_ROUTER_URL: 'https://router.example.test',
-        LLM_ROUTER_API_KEY: 'router-key',
-      },
-    );
-    expect(env.sensingEnv.HOSTED_VLLM_API_BASE).toBe(connection.baseUrl);
-    expect(env.sensingEnv.HOSTED_VLLM_API_KEY).toBe('sensing-key');
-    expect(env.tutorEnv.HOSTED_VLLM_API_KEY).toBe('tutor-key');
+  expect(normalizeRouterManagedModelConfiguration(current)).toMatchObject({
+    tutors: [{ id: 'my-tutor', label: 'My tutor', model: 'gemini/gemini-3-flash-preview' }],
+    defaultTutorId: 'my-tutor',
   });
-
-  it('tests the direct endpoint with the key entered in Settings', () => {
-    const previous = { ...process.env };
-    process.env.LLM_ROUTER_URL = 'https://router.example.test';
-    process.env.LLM_ROUTER_API_KEY = 'router-key';
-    const read = jest.spyOn(fs, 'readFileSync').mockReturnValue('{}');
-    try {
-      expect(
-        prepareModelConnectionTest(
-          connection,
-          'sensing',
-          'entered-key',
-          'direct',
-        ),
-      ).toEqual({
-        connection,
-        env: {
-          HOSTED_VLLM_API_BASE: connection.baseUrl,
-          HOSTED_VLLM_API_KEY: 'entered-key',
-        },
-      });
-    } finally {
-      read.mockRestore();
-      process.env = previous;
-    }
-  });
+  expect(current.tutors[0].model).toBe('gemini/gemini-3-flash');
 });

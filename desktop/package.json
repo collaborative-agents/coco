@@ -24,7 +24,8 @@
   },
   "main": "./.erb/dll/main.bundle.dev.js",
   "scripts": {
-    "build": "concurrently \"npm run build:main\" \"npm run build:renderer\"",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && concurrently \"npm run build:main\" \"npm run build:renderer\"",
     "build:dll": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.renderer.dev.dll.ts",
     "build:main": "cross-env NODE_ENV=production TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.main.prod.ts",
     "build:renderer": "cross-env NODE_ENV=production TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.renderer.prod.ts",
@@ -41,7 +42,7 @@
     "start:preload": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.preload.dev.ts",
     "start:renderer": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack serve --config ./.erb/configs/webpack.config.renderer.dev.ts",
     "test": "jest",
-    "test:pi": "node --test tests/pi-runtime.test.mjs"
+    "test:agent": "node --test tests/pi-runtime.test.mjs tests/question-channel.test.mjs"
   },
   "browserslist": [
     "chrome >= 134"
@@ -89,7 +90,15 @@
       ".erb/dll"
     ],
     "transform": {
-      "\\.(ts|tsx)$": "ts-jest",
+      "\\.(ts|tsx)$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "module": "commonjs",
+            "moduleResolution": "node"
+          }
+        }
+      ],
       "\\.(js|jsx)$": [
         "babel-jest",
         {
@@ -117,14 +126,17 @@
     "electron-debug": "^4.1.0",
     "electron-log": "^5.3.2",
     "electron-updater": "^6.3.9",
+    "jszip": "3.10.1",
     "katex": "^0.16.45",
+    "pdfjs-dist": "6.4.299",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.3.0",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "yauzl": "3.2.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",
@@ -139,6 +151,7 @@
     "@types/react-dom": "^19.0.4",
     "@types/react-test-renderer": "^19.0.0",
     "@types/webpack-bundle-analyzer": "^4.7.0",
+    "@types/yauzl": "2.10.3",
     "@typescript-eslint/eslint-plugin": "^8.26.1",
     "@typescript-eslint/parser": "^8.26.1",
     "browserslist-config-erb": "^0.0.3",
@@ -199,17 +212,15 @@
     "asarUnpack": "**\\*.{node,dll}",
     "files": [
       "dist",
+      "agent/**",
       "package.json",
       "!**/*.map",
       "!**/test/**",
-      "!**/*.md",
-      "agent/**"
+      "!**/*.md"
     ],
     "mac": {
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Coco uses the microphone for voice messages and, when you enable voice activation, to detect Coco wake phrases locally on this Mac.",
-        "NSCalendarsUsageDescription": "Coco reads your calendars only when you ask about your schedule or availability.",
-        "NSCalendarsFullAccessUsageDescription": "Coco reads your calendars only when you ask about your schedule or availability. Calendar changes are not enabled."
+        "NSMicrophoneUsageDescription": "Coco uses the microphone for voice messages and, when you enable voice activation, to detect Coco wake phrases locally on this Mac."
       },
       "icon": "assets/pet1.png",
       "forceCodeSigning": true,
@@ -225,7 +236,8 @@
         "owner": "collaborative-agents",
         "repo": "coco",
         "channel": "latest"
-      }
+      },
+      "artifactName": "coco-${version}-${arch}-mac.${ext}"
     },
     "dmg": {
       "contents": [
@@ -243,7 +255,6 @@
     },
     "win": {
       "icon": "assets/pet1.png",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "target": [
         "nsis"
       ],
@@ -252,7 +263,8 @@
         "owner": "collaborative-agents",
         "repo": "coco",
         "channel": "latest"
-      }
+      },
+      "artifactName": "coco-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

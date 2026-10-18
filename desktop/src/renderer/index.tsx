@@ -7,8 +7,9 @@ import ImagePreviewView from './components/ImagePreviewView';
 import OnboardingView from './components/OnboardingView';
 import SessionSetupView from './components/SessionSetupView';
 import SessionChatView from './components/SessionChatView';
-import WakeWordCaptureView from './components/WakeWordCaptureView';
+import SessionRecapView from './components/SessionRecapView';
 import AuthView from './components/AuthView';
+import WakeWordCaptureView from './components/WakeWordCaptureView';
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
@@ -23,8 +24,11 @@ if (view === 'auth') {
   rendered = <NotificationView />;
 } else if (view === 'session-setup') {
   rendered = <SessionSetupView />;
+
 } else if (view === 'session') {
   rendered = <SessionChatView />;
+} else if (view === 'session-recap') {
+  rendered = <SessionRecapView />;
 } else if (view === 'image-preview') {
   rendered = <ImagePreviewView />;
 } else if (view === 'wake-word-capture') {

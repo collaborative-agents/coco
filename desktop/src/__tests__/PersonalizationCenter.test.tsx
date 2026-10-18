@@ -8,7 +8,6 @@ import {
 } from '@testing-library/react';
 
 import PersonalizationCenter, {
-  PersonalizationSettingsCard,
   PersonalizationStatusPanel,
 } from '../renderer/components/PersonalizationCenter';
 
@@ -68,7 +67,7 @@ const center = {
 };
 
 describe('PersonalizationCenter', () => {
-  it('closes the page from its header', () => {
+  it('uses the workspace window controls instead of a close-to-chat button', () => {
     (window as any).electron = {
       ipcRenderer: {
         invoke: jest.fn().mockResolvedValue({ status, center }),
@@ -78,10 +77,8 @@ describe('PersonalizationCenter', () => {
     };
     const onBack = jest.fn();
     render(<PersonalizationCenter onBack={onBack} />);
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Close Personalization' }),
-    );
-    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Close Personalization' })).toBeNull();
+    expect(onBack).not.toHaveBeenCalled();
   });
 
   it('uses sleeping, training, and waiting Coco art for the run state', () => {
@@ -119,35 +116,20 @@ describe('PersonalizationCenter', () => {
     expect(screen.getByAltText('Waiting Coco')).toBeInTheDocument();
   });
 
-  it('opens from a compact Settings card', async () => {
-    const onOpen = jest.fn();
+  it.each([1, 2])('shows %i successful updates in the personalization panel', async (count) => {
     (window as any).electron = {
       ipcRenderer: {
-        invoke: jest.fn().mockResolvedValue({ status, center }),
+        invoke: jest.fn().mockResolvedValue({
+          status: { ...status, successfulUpdateCount: count }, center,
+        }),
         on: jest.fn(),
         sendMessage: jest.fn(),
       },
     };
-
-    render(<PersonalizationSettingsCard onOpen={onOpen} />);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText('Self-evolving prompt is running'),
-      ).toBeInTheDocument();
-    });
-    expect(
-      screen.getByText('Self-evolving prompt is running'),
-    ).toBeInTheDocument();
-    const expand = screen.getByRole('button', {
-      name: 'Expand Personalization',
-    });
-    expect(expand).toHaveAttribute(
-      'title',
-      'Expand Personalization · 1 ready to review',
-    );
-    fireEvent.click(expand);
-    expect(onOpen).toHaveBeenCalledTimes(1);
+    render(<PersonalizationCenter onBack={jest.fn()} />);
+    expect(await screen.findByText(
+      `${count} successful ${count === 1 ? 'update' : 'updates'}`,
+    )).toBeVisible();
   });
 
   it('clears discoveries when the run enters the summary stage', async () => {

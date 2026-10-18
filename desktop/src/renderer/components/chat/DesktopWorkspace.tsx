@@ -32,8 +32,11 @@ export default function DesktopWorkspace({
   const chatButtonRef = useRef<HTMLButtonElement>(null);
   return (
     <div
-      className={`desktop-workspace ${expanded ? 'is-expanded' : 'is-collapsed'}`}
+      className={`desktop-workspace ${expanded ? 'is-expanded' : 'is-collapsed'}${window.electron?.platform === 'darwin' ? ' has-native-titlebar' : ''}`}
     >
+      {window.electron?.platform === 'darwin' && (
+        <div className="workspace-native-titlebar" aria-hidden="true" />
+      )}
       <div
         className="workspace-navigation"
         role="presentation"

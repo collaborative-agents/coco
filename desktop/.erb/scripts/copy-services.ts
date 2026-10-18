@@ -30,6 +30,7 @@ interface DevServiceConfig {
 }
 
 interface DevConfig {
+  supportedModes?: string[];
   services: DevServiceConfig[];
 }
 
@@ -51,6 +52,7 @@ interface ProdServiceConfig {
 }
 
 interface ProdConfig {
+  supportedModes?: string[];
   services: ProdServiceConfig[];
 }
 
@@ -173,6 +175,7 @@ function transformConfigToProduction(devConfigContent: string): string {
   const devConfig: DevConfig = JSON.parse(devConfigContent);
 
   const prodConfig: ProdConfig = {
+    supportedModes: devConfig.supportedModes,
     services: devConfig.services.map(transformServiceToProduction),
   };
 

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { app } from 'electron';
+import type { AgentContextSnapshot } from '../../shared/agent-context';
 import PiEventTranslator from './pi-events';
 import type { TutorStreamEvent } from './tutor-stream';
 
@@ -13,9 +14,11 @@ interface AgentContext {
   tools: unknown[];
 }
 interface Runtime {
+  getContextSnapshot(): AgentContextSnapshot | null;
   subscribe(listener: (event: unknown) => void): () => void;
   prompt(text: string, images: string[], context: AgentContext): Promise<void>;
   setHistoryLength(length: number): void;
+  answerQuestion(toolCallId: string, response: unknown): void;
   abort(): Promise<void>;
   dispose(): void;
 }
@@ -31,8 +34,20 @@ export default class PiHarness {
     controller: AbortController;
   };
 
+  getContextSnapshot(sessionId: string) {
+    if (!this.runtime || !this.key || JSON.parse(this.key)[0] !== sessionId)
+      return null;
+    return this.runtime.getContextSnapshot();
+  }
+
   get busy() {
     return Boolean(this.active);
+  }
+
+  answerQuestion(toolCallId: string, response: unknown) {
+    if (!this.active || this.active.stopped)
+      throw new Error('This run is no longer active.');
+    this.runtime?.answerQuestion(toolCallId, response);
   }
 
   async abort(requestId?: string) {

@@ -1,3 +1,9 @@
+.workspace-personalization {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .personalization-center,
 .personalization-settings-entry,
 .personalization-status-card {
@@ -171,9 +177,10 @@
 }
 
 .personalization-center {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
   display: flex;
   min-height: 0;
   flex-direction: column;
@@ -184,6 +191,8 @@
 }
 
 .personalization-center__header {
+  flex-wrap: wrap;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -191,6 +200,16 @@
   padding: 16px 20px;
   border-bottom: 1px solid var(--pc-border);
   background: #fff;
+}
+
+.personalization-center__growth-count {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface-subtle);
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-secondary);
+  font-weight: 600;
 }
 
 .personalization-center__header h1,
@@ -211,29 +230,6 @@
   margin-top: 2px;
   color: var(--coco-color-text-muted);
   font-size: var(--coco-text-secondary);
-}
-
-.personalization-center__close {
-  display: grid;
-  width: var(--coco-control-height);
-  height: var(--coco-control-height);
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--coco-color-border);
-  border-radius: var(--coco-radius-control);
-  background: var(--coco-color-surface);
-  color: var(--coco-color-text-secondary);
-  cursor: pointer;
-}
-
-.personalization-center__close:hover,
-.personalization-center__close:focus-visible {
-  background: var(--coco-color-surface-muted);
-}
-
-.personalization-center__close:focus-visible {
-  outline: 2px solid var(--pc-accent);
-  outline-offset: 2px;
 }
 
 .personalization-error {

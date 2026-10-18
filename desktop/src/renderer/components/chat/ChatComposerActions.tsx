@@ -1,11 +1,11 @@
 import { S } from './styles';
+import ContextViewer from './ContextViewer';
 
 interface Props {
-  voiceButtonLabel?: string;
+  sessionId: string | null;
   showUnderstandingCheck: boolean;
   checkingUnderstanding: boolean;
   understandingDisabled: boolean;
-  hasDraft: boolean;
   onCheckUnderstanding: () => Promise<void>;
   voiceActive: boolean;
   voiceDisabled: boolean;
@@ -15,11 +15,10 @@ interface Props {
 }
 
 export default function ChatComposerActions({
-  voiceButtonLabel,
+  sessionId,
   showUnderstandingCheck,
   checkingUnderstanding,
   understandingDisabled,
-  hasDraft,
   onCheckUnderstanding,
   voiceActive,
   voiceDisabled,
@@ -29,45 +28,50 @@ export default function ChatComposerActions({
 }: Props) {
   return (
     <div style={S.composerActions}>
-      {showUnderstandingCheck && (
-        <button
-          type="button"
-          style={{
-            ...S.finishTaskBtn,
-            ...(understandingDisabled ? S.sendBtnDisabled : {}),
-          }}
-          disabled={understandingDisabled}
-          onClick={onCheckUnderstanding}
-          title={
-            hasDraft
-              ? 'Send or clear your message before checking your understanding'
-              : 'Review what you learned with Coco and take a short quiz. Completing or skipping the recap ends this session.'
-          }
-        >
-          <svg
-            aria-hidden="true"
-            focusable="false"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ flexShrink: 0 }}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 8,
+        }}
+      >
+        {showUnderstandingCheck && (
+          <button
+            type="button"
+            style={{
+              ...S.finishTaskBtn,
+              ...(understandingDisabled ? S.sendBtnDisabled : {}),
+            }}
+            disabled={understandingDisabled}
+            onClick={onCheckUnderstanding}
+            title="Check what you learned with a short quiz. Your conversation stays open."
           >
-            <path d="M9 18h6M10 21h4M9 15v-1a6 6 0 1 1 6 0v1H9Z" />
-          </svg>
-          {checkingUnderstanding ? 'Opening…' : 'Check my understanding'}
-        </button>
-      )}
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ flexShrink: 0 }}
+            >
+              <path d="M9 18h6M10 21h4M9 15v-1a6 6 0 1 1 6 0v1H9Z" />
+            </svg>
+            {checkingUnderstanding ? 'Opening…' : 'Check my understanding'}
+          </button>
+        )}
+        <ContextViewer key={sessionId} sessionId={sessionId} />
+      </div>
       <div style={S.composerSendActions}>
         <button
           type="button"
           aria-label={
-            voiceButtonLabel ||
-            (voiceActive ? 'Stop voice recording' : 'Start voice recording')
+            voiceActive ? 'Stop voice recording' : 'Start voice recording'
           }
           aria-pressed={voiceActive}
           title={voiceActive ? 'Stop and send voice message' : 'Talk to Coco'}

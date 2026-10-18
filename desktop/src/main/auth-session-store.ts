@@ -8,7 +8,7 @@ export interface StoredAuthSession {
 }
 
 const authSessionPath = (userDataPath: string): string =>
-  path.join(userDataPath, 'coco-study-auth-session.json');
+  path.join(userDataPath, 'coco-auth-session.json');
 
 export const readAuthSession = (
   userDataPath: string,

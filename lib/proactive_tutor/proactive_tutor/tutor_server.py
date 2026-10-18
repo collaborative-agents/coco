@@ -449,6 +449,46 @@ def _process_guidance(raw_guidance: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+class RecapQuizResponse(BaseModel):
+    question: str
+    choices: list[str]
+    correct_index: int
+    explanation: str
+
+
+class RecapResponse(BaseModel):
+    summary_title: str
+    bullets: list[str]
+    quiz: RecapQuizResponse
+
+
+class LearningRecapInput(BaseModel):
+    summary_title: str
+    bullets: list[str]
+
+
+class DailyLearningReviewRequest(BaseModel):
+    recaps: list[LearningRecapInput]
+
+
+class DailyLearningReviewResponse(BaseModel):
+    summary_title: str
+    takeaways: list[str]
+
+
+class CompetencyCoachedRequest(BaseModel):
+    four_d_dimension: str
+
+
+class RecapRequest(BaseModel):
+    messages: list[ConversationMessage] | None = None
+
+
+class ShownSuggestionRequest(BaseModel):
+    text: str
+    trigger_type: str | None = None
+
+
 @app.get("/health", response_model=StatusResponse)
 async def health():
     if tutor is None:
@@ -946,6 +986,76 @@ def main(port: int = 8081, model_name: str = ""):
     if not (model_name or "").strip():
         raise ValueError("--model_name is required")
     asyncio.run(main_async(port=port, model_name=model_name))
+
+
+def _guidance_metadata(guidance: str) -> dict:
+    """Read optional 4D metadata without breaking legacy/plain responses."""
+    try:
+        parsed = json.loads(guidance)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+@app.post("/context/competency/coached")
+async def record_competency_coached(req: CompetencyCoachedRequest):
+    """Record a proactive 4D suggestion after the user reveals it."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    dimension = req.four_d_dimension.strip().lower()
+    if dimension not in TutorSystem._4d_competencies():
+        raise HTTPException(status_code=422, detail="Invalid 4D dimension")
+    tutor._update_curriculum_state("teaching_moment", dimension)
+    return {"status": "ok"}
+
+
+@app.post("/recap", response_model=RecapResponse)
+async def generate_recap(req: RecapRequest | None = None):
+    """Check a supplied conversation without resuming or ending any session."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    try:
+        transcript = (
+            "\n".join(f"[{message.role}]: {message.text}" for message in req.messages)
+            if req is not None and req.messages is not None
+            else None
+        )
+        recap, _metrics = await asyncio.to_thread(tutor.generate_recap, transcript)
+        return RecapResponse(**recap)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Recap generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/daily-learning-review", response_model=DailyLearningReviewResponse)
+async def generate_daily_learning_review(req: DailyLearningReviewRequest):
+    """Synthesize all session recaps from one activity day into three lessons."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    if not req.recaps:
+        raise HTTPException(status_code=422, detail="At least one recap is required")
+    try:
+        review, _metrics = await asyncio.to_thread(
+            tutor.generate_daily_learning_review,
+            [recap.model_dump() for recap in req.recaps],
+        )
+        return DailyLearningReviewResponse(**review)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Daily learning review generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/context/suggestion", response_model=StatusResponse)
+async def record_shown_suggestion(req: ShownSuggestionRequest):
+    """Add a proactive suggestion the user saw to the conversation history."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    tutor.record_proactive_suggestion(req.text, req.trigger_type)
+    return StatusResponse(status="ok")
 
 
 if __name__ == "__main__":

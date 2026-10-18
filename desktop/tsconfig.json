@@ -3,10 +3,7 @@
     "incremental": true,
     "target": "es2022",
     "module": "esnext",
-    "lib": [
-      "dom",
-      "es2022"
-    ],
+    "lib": ["dom", "es2022"],
     "jsx": "react-jsx",
     "strict": true,
     "sourceMap": true,
@@ -17,14 +14,7 @@
     "allowJs": true,
     "outDir": ".erb/dll"
   },
-  "exclude": [
-    "test",
-    "release/build",
-    "release/app/dist",
-    ".erb/dll",
-    "release/app/agent",
-    "tests"
-  ],
+  "exclude": ["release/app/agent", "tests", "test", "release/build", "release/app/dist", ".erb/dll"],
   "ts-node": {
     "compilerOptions": {
       "module": "node16",

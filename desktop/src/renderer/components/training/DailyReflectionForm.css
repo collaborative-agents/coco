@@ -1,0 +1,87 @@
+.training-reflection {
+  display: grid;
+  width: 100%;
+  max-height: none;
+  box-sizing: border-box;
+  gap: 18px;
+  padding: 0;
+  overflow: auto;
+  border: none;
+  background: var(--coco-color-surface);
+  box-shadow: none;
+}
+
+.training-reflection-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.training-reflection-header p {
+  margin: 0;
+  font-size: var(--coco-text-body);
+}
+
+.training-reflection-writing {
+  display: grid;
+  gap: 13px;
+}
+
+.training-reflection-writing label {
+  display: grid;
+  gap: 7px;
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-caption);
+  line-height: var(--coco-leading-body);
+}
+
+.training-reflection-writing textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  font: inherit;
+  line-height: var(--coco-leading-body);
+}
+
+.training-reflection-writing textarea:focus {
+  outline: none;
+  border-color: var(--coco-color-primary);
+  box-shadow: var(--coco-focus-ring);
+}
+
+.training-reflection-submit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--coco-color-accent-border);
+}
+
+.training-reflection-submit > div {
+  display: grid;
+  gap: 2px;
+}
+
+.training-reflection-submit strong {
+  color: var(--coco-color-text);
+  font-size: var(--coco-text-control);
+}
+
+.training-reflection-submit span {
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-control);
+}
+
+@media (max-width: 500px) {
+  .training-reflection-submit {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

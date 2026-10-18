@@ -1,3 +1,8 @@
+import { randomUUID } from 'crypto';
+import { readHarnessVersion } from './harness-version';
+import type { HarnessVersion } from './harness-version';
+import type { SessionStartTrigger } from '../../shared/session-start';
+
 interface GatewayLogger {
   info(message: string): void;
   warn(message: string): void;
@@ -7,6 +12,58 @@ interface CocoGatewayClientOptions {
   gatewayUrl: string;
   fetchImpl?: typeof fetch;
   logger?: GatewayLogger;
+  harnessVersionProvider?: () => HarnessVersion;
+}
+
+export interface GatewaySessionCompletion {
+  endedAt: Date;
+  recapCompletedAt: Date;
+  quizSkipped: boolean;
+  quizAnswered: boolean;
+  quizCorrect?: boolean;
+  selectedIndex?: number;
+}
+
+export interface GatewayAssistantTurnTiming {
+  requestStartedAt: Date;
+  firstTokenAt?: Date;
+  responseCompletedAt: Date;
+  model?: string;
+}
+
+export type FourDDimension =
+  | 'delegation'
+  | 'description'
+  | 'discernment'
+  | 'diligence';
+
+export interface GatewayTutorMessageMetadata {
+  messageKind:
+    | 'voice_input'
+    | 'user_response'
+    | 'voice_response'
+    | 'practice_suggestion'
+    | 'proactive_intervention';
+  fourDDimension?: FourDDimension;
+  triggerType?: string;
+  teachingDepth?: 'introduce' | 'reinforce' | 'deepen' | 'not_applicable';
+  interventionSource?: 'user' | 'judge' | 'observer';
+  observationId?: string;
+}
+
+export interface GatewayNotification {
+  id: string;
+  category: string;
+  notificationType: string;
+  message: string;
+  shownAt: Date;
+  sessionId?: string;
+  observationId?: string;
+  actionLabel?: string;
+  cancelLabel?: string;
+  status?: string;
+  fourDDimension?: FourDDimension;
+  triggerType?: string;
 }
 
 export interface GatewayAuthCredentials {
@@ -27,27 +84,15 @@ export interface GatewayRouterCredential {
   expiresAt: string;
 }
 
-export type GatewayOperationType =
-  | 'session_start'
-  | 'session_end'
-  | 'message'
-  | 'interaction_batch'
-  | 'fatal_error'
-  | 'personalization_run';
-
-export interface GatewayQueuedOperation {
-  id: string;
-  type: GatewayOperationType;
-  createdAt: string;
-  payload: Record<string, unknown>;
-}
-
 const silentLogger: GatewayLogger = {
   info: () => {},
   warn: () => {},
 };
 
-/** Authenticated HTTP client for the shared Coco Gateway. */
+/**
+ * HTTP client matching the monorepo GatewayClient pattern: send validated
+ * storage objects to the backend and let the backend persist them to MongoDB.
+ */
 export class CocoGatewayClient {
   private readonly gatewayUrl: string;
 
@@ -55,15 +100,19 @@ export class CocoGatewayClient {
 
   private readonly logger: GatewayLogger;
 
-  private authToken: string | null = null;
+  private readonly harnessVersionProvider: () => HarnessVersion;
 
-  private readonly unsupportedOptionalOperations =
-    new Set<GatewayOperationType>();
+  private userId: string | null;
+
+  private authToken: string | null = null;
 
   constructor(options: CocoGatewayClientOptions) {
     this.gatewayUrl = options.gatewayUrl.replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.logger = options.logger ?? silentLogger;
+    this.harnessVersionProvider =
+      options.harnessVersionProvider ?? readHarnessVersion;
+    this.userId = process.env.COCO_GATEWAY_USER_ID?.trim() || null;
   }
 
   static fromEnvironment(
@@ -81,44 +130,50 @@ export class CocoGatewayClient {
     return new CocoGatewayClient({ gatewayUrl, logger });
   }
 
-  setAuthSession(token: string): void {
+  setUserId(userId: string | null): void {
+    this.userId = userId?.trim() || null;
+  }
+
+  setAuthSession(token: string, participantId: string): void {
     this.authToken = token;
+    this.setUserId(participantId);
   }
 
   clearAuthSession(): void {
     this.authToken = null;
-  }
-
-  /** Prevent pending records from one study server reaching another one. */
-  storageNamespace(): string {
-    try {
-      const url = new URL(this.gatewayUrl);
-      return `${url.hostname}${url.pathname}`
-        .toLowerCase()
-        .replace(/[^a-z0-9._-]/g, '_');
-    } catch {
-      return 'gateway';
-    }
+    this.userId = null;
   }
 
   async signUp(
     credentials: GatewayAuthCredentials,
   ): Promise<GatewayAuthSession> {
-    return this.authenticate('/api/auth/signup', credentials);
+    const session = await this.authRequest('/api/auth/signup', 'POST', {
+      participant_id: credentials.participantId,
+      email: credentials.email,
+      password: credentials.password,
+      keep_signed_in: credentials.keepSignedIn,
+    });
+    return this.parseAuthSession(session);
   }
 
   async signIn(
     credentials: GatewayAuthCredentials,
   ): Promise<GatewayAuthSession> {
-    return this.authenticate('/api/auth/signin', credentials);
+    const session = await this.authRequest('/api/auth/signin', 'POST', {
+      participant_id: credentials.participantId,
+      password: credentials.password,
+      keep_signed_in: credentials.keepSignedIn,
+    });
+    return this.parseAuthSession(session);
   }
 
   async restoreAuthSession(token: string): Promise<{ participantId: string }> {
     this.authToken = token;
     try {
-      const result = await this.request('/api/auth/me', 'GET');
+      const result = await this.authRequest('/api/auth/me', 'GET');
       const participantId = String(result.participant_id ?? '');
       if (!participantId) throw new Error('Invalid account response.');
+      this.setUserId(participantId);
       return { participantId };
     } catch (error) {
       this.clearAuthSession();
@@ -126,16 +181,14 @@ export class CocoGatewayClient {
     }
   }
 
-  async signOut(): Promise<void> {
-    try {
-      await this.request('/api/auth/logout', 'POST');
-    } finally {
-      this.clearAuthSession();
-    }
-  }
-
   async issueRouterCredential(): Promise<GatewayRouterCredential> {
-    const result = await this.request('/api/auth/router-credential', 'POST');
+    if (!this.authToken) {
+      throw new Error('Sign in before requesting model access.');
+    }
+    const result = await this.authRequest(
+      '/api/auth/router-credential',
+      'POST',
+    );
     const credential = {
       token: String(result.token ?? ''),
       expiresAt: String(result.expires_at ?? ''),
@@ -146,110 +199,9 @@ export class CocoGatewayClient {
     return credential;
   }
 
-  /** Authenticated request surface for feature-specific Gateway clients. */
-  async requestJson(
-    path: string,
-    method: 'GET' | 'POST' | 'PATCH',
-    body?: object,
-  ): Promise<Record<string, unknown>> {
-    return this.request(path, method, body);
-  }
-
-  async deliver(operation: GatewayQueuedOperation): Promise<void> {
-    switch (operation.type) {
-      case 'session_start':
-        await this.request('/api/storage/sessions', 'POST', {
-          ...operation.payload,
-          // A manual start has no equivalent in the shared Gateway schema.
-          ...(operation.payload.start_trigger === 'manual'
-            ? { start_trigger: null }
-            : {}),
-        });
-        return;
-      case 'session_end': {
-        const { session_id: sessionId, ...body } = operation.payload;
-        if (typeof sessionId !== 'string' || !sessionId) {
-          throw new Error('Queued session end is missing session_id.');
-        }
-        await this.request(
-          `/api/storage/sessions/${encodeURIComponent(sessionId)}/end`,
-          'PATCH',
-          {
-            ...body,
-            // The shared Gateway requires recap/quiz fields even when Coco
-            // ends a conversation without a separate recap or quiz flow.
-            recap_completed_at: body.recap_completed_at ?? body.ended_at,
-            quiz_skipped: body.quiz_skipped ?? true,
-            quiz_answered: body.quiz_answered ?? false,
-          },
-        );
-        return;
-      }
-      case 'message':
-        await this.request('/api/storage/messages', 'POST', operation.payload);
-        return;
-      case 'interaction_batch':
-        await this.deliverOptional(
-          operation.type,
-          '/api/storage/interaction-events/batch',
-          operation.payload,
-        );
-        return;
-      case 'fatal_error':
-        await this.deliverOptional(
-          operation.type,
-          '/api/storage/fatal-errors',
-          operation.payload,
-        );
-        return;
-      case 'personalization_run':
-        await this.deliverOptional(
-          operation.type,
-          '/api/storage/personalization-run-events',
-          operation.payload,
-        );
-        return;
-      default:
-        throw new Error(
-          `Unsupported Gateway operation: ${String(operation.type)}`,
-        );
-    }
-  }
-
-  private async deliverOptional(
-    type: GatewayOperationType,
-    path: string,
-    payload: Record<string, unknown>,
-  ): Promise<void> {
-    if (this.unsupportedOptionalOperations.has(type)) return;
-    try {
-      await this.request(path, 'POST', payload);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        'status' in error &&
-        (error.status === 404 || error.status === 405)
-      ) {
-        this.unsupportedOptionalOperations.add(type);
-        this.logger.info(
-          `[Gateway] ${path} is unavailable; skipping optional events`,
-        );
-        return;
-      }
-      throw error;
-    }
-  }
-
-  private async authenticate(
-    path: string,
-    credentials: GatewayAuthCredentials,
-  ): Promise<GatewayAuthSession> {
-    const result = await this.request(path, 'POST', {
-      participant_id: credentials.participantId,
-      ...(credentials.email ? { email: credentials.email } : {}),
-      password: credentials.password,
-      keep_signed_in: credentials.keepSignedIn,
-    });
+  private parseAuthSession(
+    result: Record<string, unknown>,
+  ): GatewayAuthSession {
     const session = {
       participantId: String(result.participant_id ?? ''),
       token: String(result.token ?? ''),
@@ -258,20 +210,198 @@ export class CocoGatewayClient {
     if (!session.participantId || !session.token || !session.expiresAt) {
       throw new Error('Invalid authentication response from Coco Gateway.');
     }
-    this.setAuthSession(session.token);
+    this.setAuthSession(session.token, session.participantId);
     return session;
+  }
+
+  async startSession(
+    sessionId: string,
+    startTrigger: SessionStartTrigger,
+    startedAt = new Date(),
+    startMessage?: string,
+  ): Promise<void> {
+    const tutorModel = process.env.TUTOR_MODEL?.trim();
+    const observerModel = process.env.OBSERVER_MODEL?.trim();
+    const harness = this.harnessVersionProvider();
+    await this.post('/api/storage/sessions', {
+      _id: sessionId,
+      user_id: this.userId,
+      started_at: startedAt.toISOString(),
+      start_trigger: startTrigger,
+      ...(startMessage?.trim()
+        ? { start_message: startMessage.trim() }
+        : {}),
+      ...(tutorModel ? { tutor_model: tutorModel } : {}),
+      ...(observerModel ? { observer_model: observerModel } : {}),
+      ...(harness.gitCommitSha ? { git_commit_sha: harness.gitCommitSha } : {}),
+      ...(harness.gitBranch ? { git_branch: harness.gitBranch } : {}),
+      ...(harness.repository ? { repository: harness.repository } : {}),
+      ...(harness.gitDirty !== undefined
+        ? { git_dirty: harness.gitDirty }
+        : {}),
+    });
+  }
+
+  async endSession(
+    sessionId: string,
+    completion: GatewaySessionCompletion,
+  ): Promise<void> {
+    await this.patch(`/api/storage/sessions/${sessionId}/end`, {
+      ended_at: completion.endedAt.toISOString(),
+      recap_completed_at: completion.recapCompletedAt.toISOString(),
+      quiz_skipped: completion.quizSkipped,
+      quiz_answered: completion.quizAnswered,
+      ...(typeof completion.quizCorrect === 'boolean'
+        ? { quiz_correct: completion.quizCorrect }
+        : {}),
+      ...(typeof completion.selectedIndex === 'number'
+        ? { selected_index: completion.selectedIndex }
+        : {}),
+    });
+  }
+
+  async addMessage(
+    sessionId: string,
+    role: 'user' | 'coco',
+    content: string,
+    turnTiming?: GatewayAssistantTurnTiming,
+    metadata?: GatewayTutorMessageMetadata,
+  ): Promise<void> {
+    const messageTimestamp =
+      role === 'coco' && turnTiming
+        ? turnTiming.responseCompletedAt
+        : new Date();
+    await this.post('/api/storage/messages', {
+      _id: randomUUID(),
+      sid: sessionId,
+      a: {
+        type: role === 'user' ? 'user' : 'AITutor',
+        id: role === 'user' ? this.userId || 'local-user' : 'AITutor',
+      },
+      content,
+      ts: messageTimestamp.toISOString(),
+      ...(role === 'coco' && turnTiming
+        ? {
+            request_started_at: turnTiming.requestStartedAt.toISOString(),
+            ...(turnTiming.firstTokenAt
+              ? { first_token_at: turnTiming.firstTokenAt.toISOString() }
+              : {}),
+            response_completed_at: turnTiming.responseCompletedAt.toISOString(),
+            ...(turnTiming.model ? { model: turnTiming.model } : {}),
+          }
+        : {}),
+      ...(metadata
+        ? {
+            message_kind: metadata.messageKind,
+            ...(role === 'coco' && metadata.fourDDimension
+              ? { four_d_dimension: metadata.fourDDimension }
+              : {}),
+            ...(role === 'coco' && metadata.triggerType
+              ? { trigger_type: metadata.triggerType }
+              : {}),
+            ...(role === 'coco' && metadata.teachingDepth
+              ? { teaching_depth: metadata.teachingDepth }
+              : {}),
+            ...(role === 'coco' && metadata.interventionSource
+              ? { intervention_source: metadata.interventionSource }
+              : {}),
+            ...(role === 'coco' && metadata.observationId
+              ? { observation_id: metadata.observationId }
+              : {}),
+          }
+        : {}),
+    });
+  }
+
+  async addNotification(notification: GatewayNotification): Promise<void> {
+    await this.post('/api/storage/notifications', {
+      _id: notification.id,
+      category: notification.category,
+      notification_type: notification.notificationType,
+      message: notification.message,
+      shown_at: notification.shownAt.toISOString(),
+      outcome: 'pending',
+      ...(notification.sessionId ? { sid: notification.sessionId } : {}),
+      ...(notification.observationId
+        ? { observation_id: notification.observationId }
+        : {}),
+      ...(notification.actionLabel
+        ? { action_label: notification.actionLabel }
+        : {}),
+      ...(notification.cancelLabel
+        ? { cancel_label: notification.cancelLabel }
+        : {}),
+      ...(notification.status ? { status: notification.status } : {}),
+      ...(notification.fourDDimension
+        ? { four_d_dimension: notification.fourDDimension }
+        : {}),
+      ...(notification.triggerType
+        ? { trigger_type: notification.triggerType }
+        : {}),
+    });
+  }
+
+  async resolveNotification(
+    notificationId: string,
+    outcome: 'accepted' | 'dismissed' | 'ignored',
+    respondedAt = new Date(),
+  ): Promise<void> {
+    await this.patch(`/api/storage/notifications/${notificationId}/response`, {
+      outcome,
+      responded_at: respondedAt.toISOString(),
+    });
+  }
+
+  private async post(path: string, body: object): Promise<void> {
+    await this.request(path, 'POST', body);
+  }
+
+  private async patch(path: string, body: object): Promise<void> {
+    await this.request(path, 'PATCH', body);
   }
 
   private async request(
     path: string,
+    method: 'POST' | 'PATCH',
+    body: object,
+  ): Promise<void> {
+    try {
+      const response = await this.fetchImpl(`${this.gatewayUrl}${path}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.authToken
+            ? { Authorization: `Bearer ${this.authToken}` }
+            : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      this.logger.warn(`[Gateway] ${method} ${path} failed: ${String(error)}`);
+    }
+  }
+
+  async requestJson(
+    path: string,
     method: 'GET' | 'POST' | 'PATCH',
     body?: object,
+    timeoutMs = 15000,
   ): Promise<Record<string, unknown>> {
-    let response: Response;
+    if (!this.authToken) throw new Error('Please sign in to continue.');
+    return this.authRequest(path, method, body, timeoutMs);
+  }
+
+  private async authRequest(
+    path: string,
+    method: 'GET' | 'POST' | 'PATCH',
+    body?: object,
+    timeoutMs = 15000,
+  ): Promise<Record<string, unknown>> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      response = await this.fetchImpl(`${this.gatewayUrl}${path}`, {
+      const response = await this.fetchImpl(`${this.gatewayUrl}${path}`, {
         method,
         signal: controller.signal,
         headers: {
@@ -282,36 +412,16 @@ export class CocoGatewayClient {
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
-    } catch (error) {
-      this.logger.warn(`[Gateway] ${method} ${path} failed: ${String(error)}`);
-      throw new Error(
-        `Could not connect to the Coco study server. ${String(error)}`,
-      );
+      let result: Record<string, unknown> = {};
+      try {
+        result = (await response.json()) as Record<string, unknown>;
+      } catch {
+        if (response.ok) throw new Error('The Coco backend returned an invalid response.');
+      }
+      if (!response.ok) throw new Error(String(result.detail ?? `HTTP ${response.status}`));
+      return result;
     } finally {
       clearTimeout(timeout);
     }
-
-    let result: Record<string, unknown> = {};
-    try {
-      result = (await response.json()) as Record<string, unknown>;
-    } catch {
-      // Non-JSON responses use the HTTP status fallback below.
-    }
-    if (!response.ok) {
-      throw Object.assign(
-        new Error(
-          Array.isArray(result.detail)
-            ? result.detail
-                .map(
-                  (issue: { loc?: unknown[]; msg?: string }) =>
-                    `${issue.loc?.filter((part) => part !== 'body').join('.') || 'Request'}: ${issue.msg || 'Invalid value'}`,
-                )
-                .join('; ')
-            : String(result.detail ?? `HTTP ${response.status}`),
-        ),
-        { status: response.status },
-      );
-    }
-    return result;
   }
 }

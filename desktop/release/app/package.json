@@ -1,6 +1,6 @@
 {
   "name": "coco",
-  "version": "0.1.6",
+  "version": "0.1.0",
   "description": "Coco, your proactive co-assistant",
   "license": "Apache-2.0",
   "author": {
@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.0",
-    "@earendil-works/pi-server": "0.85.0"
+    "@earendil-works/pi-server": "0.85.0",
+    "@juicesharp/rpiv-ask-user-question": "2.13.8",
+    "pi-context-view": "0.5.0"
   }
 }

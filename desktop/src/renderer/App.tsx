@@ -1,11 +1,5 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type MouseEvent,
-  type PointerEvent as ReactPointerEvent,
-  type SyntheticEvent,
-} from 'react';
+import subscribeCocoSleepMode from './services/coco-sleep-mode';
+import { type SyntheticEvent, useEffect, useRef, useState } from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import './App.css';
 import ObservationBubble, {
@@ -33,6 +27,9 @@ import {
   dayStartOf,
   summarizeDay,
 } from './components/activity-rollup';
+import RatingButtons from './components/RatingButtons';
+import PetMenuIcon from './components/PetMenuIcon';
+import { COCO_NAVIGATION } from '../shared/coco-navigation';
 
 // How long the bubble (and the active pet mood) stay up after the latest event.
 const HOLD_MS = 20_000;
@@ -55,123 +52,22 @@ const WIN_BUBBLE_H = 320;   // bubble (label + wrapped text + action button)
 const WIN_SUGGESTION_H = 520;
 const WIN_HISTORY_W = 440;  // activity panel ~260 + 168 offset + slack
 const WIN_HISTORY_H = 540;  // strip + summary + timeline + counts + feed
-const WIN_DAILY_REVIEW_W = 470;
-const WIN_DAILY_REVIEW_H = 560;
 const WIN_ACTION_MENU_W = 200;
-const WIN_ACTION_MENU_H = 450;
+const WIN_ACTION_MENU_H = 440;
 
-interface DailyMemoryDraft {
-  draftId: string;
-  createdAt: number;
-  periodStart?: number;
-  periodEnd: number;
-  summary: string;
-  bullets: Array<{
-    id: string;
-    section: string;
-    content: string;
-    confidence: number;
-    examples: string[];
-  }>;
-}
-
-const MEMORY_SECTION_TITLES: Record<string, string> = {
-  when_to_support: 'When to proactively support',
-  when_to_stay_silent: 'When to stay silent',
-  how_to_support: 'How to support',
-  tool_preferences: 'Tool preferences',
-  recurring_tasks: 'Recurring tasks',
-  general: 'General notes about this user',
-};
-
-function PetMenuIcon({
-  name,
-}: {
-  name:
-    | 'chat'
-    | 'sleep'
-    | 'wake'
-    | 'history'
-    | 'hide'
-    | 'settings'
-    | 'update'
-    | 'quit';
-}) {
-  if (name === 'chat') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path d="M4 5.5h16v11H9l-5 4v-15Z" />
-      </svg>
-    );
-  }
-  if (name === 'sleep') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path d="M20 15.2A8.6 8.6 0 0 1 8.8 4a8.7 8.7 0 1 0 11.2 11.2Z" />
-      </svg>
-    );
-  }
-  if (name === 'wake') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <circle cx="12" cy="12" r="4" />
-        <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" />
-      </svg>
-    );
-  }
-  if (name === 'history') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path d="M4.5 8.5H1.8V5.8" />
-        <path d="M3 8a9 9 0 1 1-.2 7.5" />
-        <path d="M12 7.2V12l3.2 2" />
-      </svg>
-    );
-  }
-  if (name === 'hide') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path d="M3 3l18 18" />
-        <path d="M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 4.4A10.8 10.8 0 0 1 12 4.2c5.2 0 8.5 4.8 9.3 7.2a10 10 0 0 1-2.2 3.6M6.2 6.2a12 12 0 0 0-3.5 5.2c.8 2.4 4.1 7.2 9.3 7.2 1 0 1.9-.2 2.7-.5" />
-      </svg>
-    );
-  }
-  if (name === 'quit') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path d="M10 4H5v16h5M14 8l4 4-4 4M18 12H9" />
-      </svg>
-    );
-  }
-  if (name === 'update') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path d="M20 7v5h-5M4 17v-5h5" />
-        <path d="M18.5 9A7.5 7.5 0 0 0 5.8 6.5L4 9M5.5 15A7.5 7.5 0 0 0 18.2 17.5L20 15" />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden>
-      <path d="M9.6 3.2h4.8l.6 2.2 1.5.9 2.2-.6 2.4 4.1-1.6 1.6v1.7l1.6 1.6-2.4 4.1-2.2-.6-1.5.9-.6 2.2H9.6L9 19.1l-1.5-.9-2.2.6-2.4-4.1 1.6-1.6v-1.7L2.9 9.8l2.4-4.1 2.2.6L9 5.4l.6-2.2Z" />
-      <circle cx="12" cy="12.2" r="3" />
-    </svg>
-  );
-}
 
 /**
  * Statuses that represent mid-friction observations (Tier 2).
- * These are displayed only after the tutor has produced a useful suggestion.
- * Positive progress statuses are Tier 1 — no button. Observing updates are
- * recorded in Activity history without displaying a bubble.
+ * These show a delayed "Help me with this" button.
+ * Positive statuses (progress, observing) are Tier 1 — no button.
  * Tutor guidance arrives via the tutor-notification IPC channel (Tier 3).
  */
 const TIER2_STATUSES = new Set<ObservationStatus>([
+  'support_needed',
   'stuck',
   'mistake',
   'inefficient',
   'ai_struggle',
-  'support_needed',
   'discernment_opportunity',
 ]);
 
@@ -203,16 +99,6 @@ function formatMetricLatency(ms?: number): string {
   return `${Math.round(ms)}ms`;
 }
 
-function historyStatusLabel(record: ActivityRecord): string {
-  const hasProactiveSupport =
-    record.proactive_support?.suggestion != null ||
-    record.proactive_support?.available === true;
-  if (record.status === 'support_needed' && !hasProactiveSupport) {
-    return 'Potential support';
-  }
-  return STATUS_LABEL[record.status] ?? STATUS_LABEL.observing;
-}
-
 function LlmMetricChips({ record }: { record: ActivityRecord }) {
   const m = record.llm_metrics;
   if (!m) return null;
@@ -239,10 +125,7 @@ function SupportControls({
   const support = record.proactive_support;
   if (!support) return null;
   const canView = support.suggestion != null || support.available === true;
-  const ratingLabels = {
-    up: 'Good suggestion',
-    down: 'Not helpful',
-  } as const;
+  const ratingLabels = { up: 'Good suggestion', down: 'Not helpful' };
   return (
     <div className="obs-support-controls">
       {canView && (
@@ -255,25 +138,12 @@ function SupportControls({
           {isOpen ? 'Hide' : 'View support'}
         </button>
       )}
-      {(['up', 'down'] as const).map((rating) => (
-        <button
-          key={rating}
-          type="button"
-          className={`obs-support-rating${
-            support.rating === rating ? ' is-rated' : ''
-          }`}
-          aria-label={ratingLabels[rating]}
-          title={
-            support.rating && support.rating !== rating
-              ? `Change rating to ${ratingLabels[rating].toLowerCase()}`
-              : ratingLabels[rating]
-          }
-          disabled={support.rating === rating}
-          onClick={() => onRate(rating)}
-        >
-          {rating === 'up' ? '👍' : '👎'}
-        </button>
-      ))}
+      <RatingButtons
+        value={support.rating}
+        onRate={onRate}
+        labels={ratingLabels}
+        className="coco-rating--compact"
+      />
     </div>
   );
 }
@@ -473,8 +343,11 @@ function ActivityPanel({
 
       <div className="obs-summary-counts">
         <span className="obs-count">
-          <i className="obs-dot obs-lane--focus" /> {summary.suggestionCount}{' '}
-          AI suggest
+          <i className="obs-dot obs-lane--focus" /> {summary.focusCount} focus
+        </span>
+        <span className="obs-count">
+          <i className="obs-dot obs-lane--assist" /> {summary.assistCount} AI
+          assist
         </span>
       </div>
 
@@ -485,8 +358,8 @@ function ActivityPanel({
         <ul className="obs-history-list">
           {dayRecords.map((e, i) => {
             const isOpen = expanded.has(i);
-            const lane = laneOf(e.status, e.need_support);
-            const label = historyStatusLabel(e);
+            const lane = laneOf(e.status);
+            const label = STATUS_LABEL[e.status] ?? STATUS_LABEL.observing;
             const supportOpen = openSupport.has(i);
             const supportKey = e.observation_id ?? `${e.ts}-${i}`;
             return (
@@ -554,8 +427,9 @@ function ActivityPanel({
 // ── Pet View ──────────────────────────────────────────────────────────────────
 
 function PetView() {
-  // Start in a quiet, non-sleeping state until the first observation arrives.
-  // The sleeping animation is reserved exclusively for explicit sleep mode.
+  // Start in `dormant` (static sleep1.png, no animation) until the first
+  // observation event arrives. After that the state machine takes over and
+  // dormant is never re-entered for the lifetime of the window.
   const [mood, setMood] = useState<PetMood>('dormant');
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [pulse, setPulse] = useState<{
@@ -568,14 +442,10 @@ function PetView() {
   const [records, setRecords] = useState<ActivityRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [cocoSleeping, setCocoSleeping] = useState(false);
-  const [dailyMemoryDraft, setDailyMemoryDraft] =
-    useState<DailyMemoryDraft | null>(null);
-  const [dailyMemoryStatus, setDailyMemoryStatus] = useState<
-    'idle' | 'applying' | 'applied' | 'error'
-  >('idle');
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const [hideError, setHideError] = useState('');
+  const [hidingAvatar, setHidingAvatar] = useState(false);
   const petActionsRef = useRef<HTMLDivElement | null>(null);
-  const avatarDragPointerRef = useRef<number | null>(null);
 
   // Use refs so listener captures the latest cleanup targets without
   // re-subscribing every render.
@@ -583,7 +453,6 @@ function PetView() {
   const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseKeyRef = useRef(0);
-  const bubbleRef = useRef<BubbleState | null>(null);
   // Hover-to-keep: while the pointer is over the bubble, the auto-hide is
   // paused so the user can read / copy the suggested prompt. holdMsRef carries
   // the duration to restart with once the pointer leaves.
@@ -592,10 +461,6 @@ function PetView() {
   // Once the user reveals a suggestion ("Help me with this"), the bubble is
   // pinned: it never auto-hides and can only be closed with the × button.
   const bubblePinnedRef = useRef(false);
-
-  useEffect(() => {
-    bubbleRef.current = bubble;
-  }, [bubble]);
 
   // Arm the bubble's auto-hide after `holdMs`. Skipped while the pointer is
   // over the bubble (handleBubbleLeave re-arms it on exit) so a suggestion the
@@ -608,15 +473,6 @@ function PetView() {
     if (bubblePinnedRef.current) return; // pinned suggestion — stays until ×
     if (bubbleHoverRef.current) return; // paused — re-armed on mouse leave
     hideTimer.current = setTimeout(() => {
-      const current = bubbleRef.current;
-      if (current?.showHelpButton) {
-        window.electron?.ipcRenderer.sendMessage('training-feedback', {
-          kind: 'auto_hidden',
-          surface: 'bubble',
-          observation_id: current.observationId ?? null,
-          status: current.status,
-        });
-      }
       setBubble((b) => (b ? { ...b, fadingOut: true } : null));
       fadeTimer.current = setTimeout(() => {
         setBubble(null);
@@ -653,6 +509,7 @@ function PetView() {
       'open-avatar-actions-menu',
       () => {
         setShowHistory(false);
+        setHideError('');
         setActionsMenuOpen(true);
       },
     );
@@ -664,122 +521,7 @@ function PetView() {
     };
   }, []);
 
-  const beginAvatarDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const target = event.target as Element;
-    if (event.button !== 0 || target.closest('button, [role="menu"]')) {
-      return;
-    }
-    avatarDragPointerRef.current = event.pointerId;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    window.electron?.ipcRenderer.sendMessage('avatar-drag-start', {
-      screenX: event.screenX,
-      screenY: event.screenY,
-    });
-  };
-
-  const moveAvatarDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (avatarDragPointerRef.current !== event.pointerId) return;
-    window.electron?.ipcRenderer.sendMessage('avatar-drag-move', {
-      screenX: event.screenX,
-      screenY: event.screenY,
-    });
-  };
-
-  const endAvatarDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (avatarDragPointerRef.current !== event.pointerId) return;
-    avatarDragPointerRef.current = null;
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
-    }
-    window.electron?.ipcRenderer.sendMessage('avatar-drag-end');
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    let midnightTimer: ReturnType<typeof setTimeout> | null = null;
-    const loadDraft = () => {
-      window.electron?.ipcRenderer
-        .invoke('get-daily-memory-draft')
-        .then((result) => {
-          if (cancelled) return;
-          const response = result as { draft?: DailyMemoryDraft | null } | undefined;
-          if (response?.draft) {
-            setDailyMemoryDraft(response.draft);
-            setDailyMemoryStatus('idle');
-            setShowHistory(false);
-          }
-          return undefined;
-        })
-        .catch(() => undefined);
-    };
-    const scheduleMidnightCheck = () => {
-      const now = new Date();
-      const next = new Date(now);
-      next.setHours(24, 0, 1, 0);
-      midnightTimer = setTimeout(() => {
-        loadDraft();
-        scheduleMidnightCheck();
-      }, next.getTime() - now.getTime());
-    };
-    loadDraft();
-    scheduleMidnightCheck();
-    const cleanup = window.electron?.ipcRenderer.on(
-      'daily-memory-draft-refresh',
-      loadDraft,
-    );
-    const cleanupApplied = window.electron?.ipcRenderer.on(
-      'daily-memory-draft-applied',
-      (result) => {
-        const applied = result as { draftId?: string } | undefined;
-        setDailyMemoryDraft((current) =>
-          current?.draftId === applied?.draftId ? null : current,
-        );
-      },
-    );
-    return () => {
-      cancelled = true;
-      if (midnightTimer) clearTimeout(midnightTimer);
-      if (typeof cleanup === 'function') cleanup();
-      if (typeof cleanupApplied === 'function') cleanupApplied();
-    };
-  }, []);
-
-  const approveDailyMemory = async (event: MouseEvent) => {
-    event.stopPropagation();
-    if (!dailyMemoryDraft || dailyMemoryStatus === 'applying') return;
-    setDailyMemoryStatus('applying');
-    const result = (await window.electron?.ipcRenderer.invoke(
-      'approve-daily-memory-draft',
-      { draftId: dailyMemoryDraft.draftId },
-    )) as { success?: boolean } | undefined;
-    if (result?.success) {
-      setDailyMemoryStatus('applied');
-      setTimeout(() => setDailyMemoryDraft(null), 1500);
-    } else {
-      setDailyMemoryStatus('error');
-    }
-  };
-
-  useEffect(() => {
-    window.electron?.ipcRenderer
-      .invoke('get-coco-sleep-mode')
-      .then((result) => {
-        const state = result as { sleeping?: boolean } | undefined;
-        setCocoSleeping(state?.sleeping === true);
-        return undefined;
-      })
-      .catch(() => undefined);
-    const cleanup = window.electron?.ipcRenderer.on(
-      'coco-sleep-mode-changed',
-      (result) => {
-        const state = result as { sleeping?: boolean } | undefined;
-        setCocoSleeping(state?.sleeping === true);
-      },
-    );
-    return () => {
-      if (typeof cleanup === 'function') cleanup();
-    };
-  }, []);
+  useEffect(() => subscribeCocoSleepMode(setCocoSleeping), []);
 
   const setCocoSleepMode = async (sleeping: boolean) => {
     const result = (await window.electron?.ipcRenderer.invoke(
@@ -788,12 +530,8 @@ function PetView() {
     )) as { success?: boolean; sleeping?: boolean } | undefined;
     if (result?.success) {
       setCocoSleeping(result.sleeping === true);
-      if (result.sleeping) {
-        setBubble(null);
-        setMood('sleep');
-      } else {
-        setMood('idle');
-      }
+      setBubble(null);
+      setMood(result.sleeping ? 'sleep' : 'idle');
     }
   };
 
@@ -844,6 +582,21 @@ function PetView() {
   }, [showHistory]);
 
   useEffect(() => {
+    const cleanupPostAssessmentSuppression = window.electron?.ipcRenderer.on(
+      'post-assessment-proactive-suppression',
+      (value) => {
+        const state = value as { active?: boolean } | undefined;
+        if (state?.active !== true) return;
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        if (fadeTimer.current) clearTimeout(fadeTimer.current);
+        if (pulseTimer.current) clearTimeout(pulseTimer.current);
+        bubbleHoverRef.current = false;
+        bubblePinnedRef.current = false;
+        setBubble(null);
+        setPulse(null);
+        setMood('idle');
+      },
+    );
     const cleanupSuspend = window.electron?.ipcRenderer.on(
       'system-suspend',
       () => {
@@ -855,44 +608,6 @@ function PetView() {
         setBubble(null);
         setPulse(null);
         setMood('dormant');
-      },
-    );
-
-    const cleanupChatSuppression = window.electron?.ipcRenderer.on(
-      'suppress-unrevealed-proactive-suggestion',
-      (rawData: unknown) => {
-        const data = rawData as { observationId?: string } | undefined;
-        const activeBubble = bubbleRef.current;
-        if (!activeBubble?.showHelpButton || activeBubble.suggestion) return;
-        if (
-          data?.observationId &&
-          activeBubble.observationId !== data.observationId
-        ) {
-          return;
-        }
-        if (hideTimer.current) clearTimeout(hideTimer.current);
-        if (fadeTimer.current) clearTimeout(fadeTimer.current);
-        if (pulseTimer.current) clearTimeout(pulseTimer.current);
-        bubbleHoverRef.current = false;
-        bubblePinnedRef.current = false;
-        bubbleRef.current = null;
-        setBubble(null);
-        setPulse(null);
-        setMood('idle');
-        if (data?.observationId) {
-          setRecords((prev) =>
-            prev.map((record) =>
-              record.observation_id === data.observationId
-                ? {
-                    ...record,
-                    proactive_support: record.proactive_support
-                      ? { ...record.proactive_support, available: false }
-                      : undefined,
-                  }
-                : record,
-            ),
-          );
-        }
       },
     );
 
@@ -911,53 +626,13 @@ function PetView() {
         // notification flow — they are not avatar states. Skip them here so
         // PetSprite never receives an unknown mood.
         if (!(incomingStatus in STATUS_TO_MOOD)) return;
-
-        // Always mirror the observation into Activity history, even when a
-        // revealed suggestion currently owns the visible bubble.
-        const rawObservation = cleanObservation(event.observation);
-        const showHelpButton = TIER2_STATUSES.has(incomingStatus);
-        const record: ActivityRecord = {
-          status: incomingStatus,
-          need_support: event.need_support,
-          observation: rawObservation,
-          ts: event.ts ?? Math.floor(Date.now() / 1000),
-          observation_id: event.observation_id,
-          proactive_support: showHelpButton ? { engaged: false } : undefined,
-          llm_metrics: event.llm_metrics,
-        };
-        setRecords((prev) => {
-          if (
-            prev.length > 0 &&
-            prev[0].observation === record.observation &&
-            prev[0].status === record.status &&
-            prev[0].need_support === record.need_support
-          ) {
-            return prev;
-          }
-          return [record, ...prev];
-        });
-
-        // A revealed suggestion is explicitly pinned by the user. Incoming
-        // observations remain available in Activity history, but must not
-        // replace its bubble, mood, pulse, or lifetime.
+        // A revealed suggestion is pinned until the user closes it. Continue
+        // recording new observations in main, but do not replace the accepted
+        // suggestion on the avatar surface.
         if (bubblePinnedRef.current) return;
-
-        // A Tier-2 observer result is only a candidate for proactive support.
-        // Wait for the tutor's second-stage check before displaying anything.
-        if (showHelpButton) return;
-
-        // Like a hidden-avatar notification, an active proactive offer owns its
-        // surface until it is dismissed, hidden, or replaced by another ready
-        // offer. Ordinary observation/mood updates must not replace it.
-        if (bubbleRef.current?.showHelpButton) return;
-
-        // "Watching" is ambient state rather than actionable information.
-        // Keep it in Activity history, but do not create or replace a bubble.
-        if (incomingStatus === 'observing') return;
-
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
-        const phrase = pickPhrase(incomingStatus, seed);
+        const phrase = event.suggestion_title || pickPhrase(incomingStatus, seed);
 
         // Clear any in-flight timers — we're starting a fresh visible window.
         if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -969,9 +644,28 @@ function PetView() {
         bubbleHoverRef.current = false;
         bubblePinnedRef.current = false;
 
+        // Clean raw observation text for storage in bubble state.
+        // This is forwarded to the webapp when the user taps "Help me with this"
+        // so the chat thread shows what exactly the system noticed.
+        const rawObservation = cleanObservation(event.observation);
+
+        // Tier 2 statuses show the "Help me with this" button immediately.
+        const showHelpButton = TIER2_STATUSES.has(incomingStatus);
+
         // Show the bubble + matching pet animation.
         setBubble({ status: incomingStatus, phrase, fadingOut: false, showHelpButton, rawObservation, observationId: event.observation_id });
         setMood(STATUS_TO_MOOD[incomingStatus]);
+
+        // Log that an actionable suggestion was actually shown, so the training
+        // stage can derive "ignore" (shown with no engage/dismiss) precisely.
+        if (showHelpButton) {
+          window.electron?.ipcRenderer.sendMessage('training-feedback', {
+            kind: 'shown',
+            surface: 'bubble',
+            observation_id: event.observation_id ?? null,
+            status: incomingStatus,
+          });
+        }
 
         // Pulse ring around the pet — incrementing the key restarts the CSS
         // animation even if it's the same status as before.
@@ -982,91 +676,44 @@ function PetView() {
         // After HOLD_MS: fade the bubble out and drop the pet back to idle.
         // (Paused while the pointer is over the bubble.)
         scheduleBubbleHide(HOLD_MS);
-      },
-    );
 
-    const cleanupReadySuggestion = window.electron?.ipcRenderer.on(
-      'proactive-suggestion-ready',
-      (rawData: unknown) => {
-        const data = rawData as {
-          title?: unknown;
-          observationId?: unknown;
-          status?: unknown;
-          rawObservation?: unknown;
-        };
-        const title = typeof data?.title === 'string' ? data.title.trim() : '';
-        const incomingStatus = data?.status as ObservationStatus;
-        if (
-          !title ||
-          !TIER2_STATUSES.has(incomingStatus) ||
-          bubblePinnedRef.current
-        ) {
-          return;
-        }
-
-        // Hidden notifications reject replacement while hovered. Apply the
-        // same rule to the shared avatar-bubble surface.
-        if (bubbleHoverRef.current && bubbleRef.current) return;
-
-        if (hideTimer.current) clearTimeout(hideTimer.current);
-        if (fadeTimer.current) clearTimeout(fadeTimer.current);
-        if (pulseTimer.current) clearTimeout(pulseTimer.current);
-        bubbleHoverRef.current = false;
-        bubblePinnedRef.current = false;
-
-        const nextBubble: BubbleState = {
+        // ── Accumulate activity history ────────────────────────────────────
+        // Main has already persisted this event to disk; we mirror it into
+        // local state so the open panel updates live without a re-fetch.
+        const record: ActivityRecord = {
           status: incomingStatus,
-          phrase: title,
-          fadingOut: false,
-          showHelpButton: true,
-          rawObservation:
-            typeof data.rawObservation === 'string'
-              ? data.rawObservation
-              : undefined,
-          observationId:
-            typeof data.observationId === 'string'
-              ? data.observationId
-              : undefined,
+          need_support: event.need_support,
+          proactive_allowed: event.proactive_allowed,
+          observation: cleanObservation(event.observation),
+          ts: event.ts ?? Math.floor(Date.now() / 1000),
+          observation_id: event.observation_id,
+          proactive_support: showHelpButton
+            ? { engaged: false, available: true }
+            : undefined,
+          llm_metrics: event.llm_metrics,
         };
-        bubbleRef.current = nextBubble;
-        setBubble(nextBubble);
-        setMood(STATUS_TO_MOOD[incomingStatus]);
-        setRecords((prev) =>
-          prev.map((record) =>
-            record.observation_id === nextBubble.observationId
-              ? {
-                  ...record,
-                  proactive_support: {
-                    ...(record.proactive_support ?? { engaged: false }),
-                    available: true,
-                  },
-                }
-              : record,
-          ),
-        );
-
-        window.electron?.ipcRenderer.sendMessage('training-feedback', {
-          kind: 'shown',
-          surface: 'bubble',
-          observation_id: nextBubble.observationId ?? null,
-          status: incomingStatus,
-          stage: 'offer',
+        // Prepend so the list is newest-first.
+        // Deduplicate: if the most recent record has the same text and
+        // status, skip it (handles SSE reconnect replays and server
+        // double-emits from the progress detector).
+        setRecords((prev) => {
+          if (
+            prev.length > 0 &&
+            prev[0].observation === record.observation &&
+            prev[0].status === record.status
+          ) {
+            return prev;
+          }
+          return [record, ...prev];
         });
-
-        pulseKeyRef.current += 1;
-        setPulse({ status: incomingStatus, key: pulseKeyRef.current });
-        pulseTimer.current = setTimeout(() => setPulse(null), PULSE_MS);
-        scheduleBubbleHide(HOLD_MS);
       },
     );
 
     return () => {
+      if (typeof cleanupPostAssessmentSuppression === 'function')
+        cleanupPostAssessmentSuppression();
       if (typeof cleanupSuspend === 'function') cleanupSuspend();
-      if (typeof cleanupChatSuppression === 'function')
-        cleanupChatSuppression();
       if (typeof cleanup === 'function') cleanup();
-      if (typeof cleanupReadySuggestion === 'function')
-        cleanupReadySuggestion();
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
       if (pulseTimer.current) clearTimeout(pulseTimer.current);
@@ -1080,7 +727,7 @@ function PetView() {
       (data: any) => {
         const message = String((data as { message?: unknown })?.message ?? '');
         if (!message) return;
-
+        if (bubblePinnedRef.current) return;
 
         // Tier 3 replaces any in-flight observation, including Tier 2.
         if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -1161,32 +808,8 @@ function PetView() {
       });
     };
 
-    // Try to reveal the instant suggestion that was precomputed when the bubble
-    // appeared. If it's ready, show it in place (no waiting, no chat round-trip).
-    const res = await window.electron?.ipcRenderer.invoke(
-      'get-instant-suggestion',
-      {
-        observationId: current.observationId ?? null,
-      },
-    );
-
-    // An abstention is an intentional no-op, not a generation failure. The
-    // main process has already attached its negative label to the observer
-    // call, so close the stale offer without opening fallback chat or recording
-    // a contradictory engagement.
-    if (res?.status === 'abstained') {
-      if (hideTimer.current) clearTimeout(hideTimer.current);
-      if (fadeTimer.current) clearTimeout(fadeTimer.current);
-      setBubble((b) => (b ? { ...b, fadingOut: true } : null));
-      fadeTimer.current = setTimeout(() => {
-        setBubble(null);
-        setMood('idle');
-      }, FADE_MS);
-      return;
-    }
-
-    // Reflect the click after the tutor's second-stage check. If content is
-    // available, the same record is enriched below so History can reopen it.
+    // Reflect the click immediately. If the precomputed content is available,
+    // the same record is enriched below so History can reopen it verbatim.
     recordEngagement(undefined, 'conversation');
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: 'engage',
@@ -1196,26 +819,29 @@ function PetView() {
       text: current.rawObservation ?? null,
     });
 
+    // Try to reveal the instant suggestion that was precomputed when the bubble
+    // appeared. If it's ready, show it in place (no waiting, no chat round-trip).
+    const res = await window.electron?.ipcRenderer.invoke('get-instant-suggestion', {
+      observationId: current.observationId ?? null,
+    });
+
     if (res?.status === 'ready' && res.suggestion) {
       recordEngagement(res.suggestion, 'inline');
-      window.electron?.ipcRenderer.sendMessage('training-feedback', {
-        kind: 'revealed',
-        surface: 'bubble',
-        observation_id: current.observationId ?? null,
-        status: current.status,
-        stage: 'revealed',
-        destination: 'inline',
-      });
       // Pin the bubble: once the suggestion is revealed it stays until the user
       // closes it with ×. Cancel any pending auto-hide from the Tier-2 phase.
       bubblePinnedRef.current = true;
-      window.electron?.ipcRenderer.sendMessage(
-        'avatar-suggestion-revealed-state',
-        { revealed: true },
-      );
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
-      setBubble((b) => (b ? { ...b, suggestion: res.suggestion, fadingOut: false } : null));
+      setBubble((b) =>
+        b
+          ? {
+              ...b,
+              suggestion: res.suggestion,
+              scenario: res.scenario,
+              fadingOut: false,
+            }
+          : null,
+      );
       return;
     }
 
@@ -1235,39 +861,20 @@ function PetView() {
     }, FADE_MS);
   };
 
-  // An unrevealed offer dismisses with negative implicit feedback. Closing an
-  // expanded suggestion is just lifecycle cleanup and happens immediately.
+  // User explicitly dismissed the suggestion — a negative implicit-feedback
+  // label (perceived as intrusive / not useful). Fade out without engaging.
   const handleDismiss = () => {
     if (!bubble) return;
-    const revealedSuggestion = bubble.suggestion != null;
     bubblePinnedRef.current = false;
-    if (revealedSuggestion) {
-      window.electron?.ipcRenderer.sendMessage(
-        'avatar-suggestion-revealed-state',
-        { revealed: false },
-      );
-    }
-    // Closing an expanded suggestion is not a rejection of the original offer;
-    // engagement and any explicit rating have already been recorded.
-    if (!revealedSuggestion) {
-      window.electron?.ipcRenderer.sendMessage('training-feedback', {
-        kind: 'dismiss',
-        surface: 'bubble',
-        observation_id: bubble.observationId ?? null,
-        status: bubble.status,
-        text: bubble.rawObservation ?? null,
-      });
-    }
+    window.electron?.ipcRenderer.sendMessage('training-feedback', {
+      kind: 'dismiss',
+      surface: 'bubble',
+      observation_id: bubble.observationId ?? null,
+      status: bubble.status,
+      text: bubble.rawObservation ?? null,
+    });
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
-    if (revealedSuggestion) {
-      // An explicit × must close the whole expanded card in one click,
-      // including any local copy/rating confirmation rendered inside it.
-      bubbleRef.current = null;
-      setBubble(null);
-      setMood('idle');
-      return;
-    }
     setBubble((b) => (b ? { ...b, fadingOut: true } : null));
     fadeTimer.current = setTimeout(() => {
       setBubble(null);
@@ -1289,41 +896,13 @@ function PetView() {
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
     bubblePinnedRef.current = false;
-    window.electron?.ipcRenderer.sendMessage(
-      'avatar-suggestion-revealed-state',
-      { revealed: false },
-    );
-    setBubble(null);
-    setMood('idle');
-  };
-
-  const handleOpenCocoChat = () => {
-    if (!bubble?.suggestion) return;
-    const current = bubble;
-    window.electron?.ipcRenderer.sendMessage('chat-about-suggestion', {
-      observationId: current.observationId,
-      status: current.status,
-      rawObservation: current.rawObservation ?? '',
-      suggestion: current.suggestion,
-      surface: 'bubble',
-      copyPromptToInput: true,
-    });
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    if (fadeTimer.current) clearTimeout(fadeTimer.current);
-    bubblePinnedRef.current = false;
-    window.electron?.ipcRenderer.sendMessage(
-      'avatar-suggestion-revealed-state',
-      { revealed: false },
-    );
     setBubble(null);
     setMood('idle');
   };
 
   // Tier 3: user wants to read the full tutor guidance — open main window.
   const handleViewConversation = () => {
-    window.electron?.ipcRenderer.sendMessage('open-main-window', {
-      reopenCurrent: true,
-    });
+    window.electron?.ipcRenderer.sendMessage('open-main-window');
   };
 
   const loadHistoricalSuggestion = async (
@@ -1401,7 +980,6 @@ function PetView() {
   const bubbleVisible = bubble != null;
   const suggestionVisible = bubble?.suggestion != null;
   const historyVisible = showHistory;
-  const dailyReviewVisible = dailyMemoryDraft != null;
   const actionsMenuVisible = actionsMenuOpen;
 
   // Resize the avatar window to fit whatever is currently on stage. Runs on
@@ -1418,10 +996,6 @@ function PetView() {
       width = Math.max(width, WIN_HISTORY_W);
       height = Math.max(height, WIN_HISTORY_H);
     }
-    if (dailyReviewVisible) {
-      width = Math.max(width, WIN_DAILY_REVIEW_W);
-      height = Math.max(height, WIN_DAILY_REVIEW_H);
-    }
     if (actionsMenuVisible) {
       width = Math.max(width, WIN_ACTION_MENU_W);
       height = Math.max(height, WIN_ACTION_MENU_H);
@@ -1430,19 +1004,7 @@ function PetView() {
       width,
       height,
     });
-  }, [
-    bubbleVisible,
-    suggestionVisible,
-    historyVisible,
-    dailyReviewVisible,
-    actionsMenuVisible,
-  ]);
-
-  useEffect(() => {
-    window.electron?.ipcRenderer.sendMessage('daily-memory-review-visibility', {
-      visible: dailyReviewVisible,
-    });
-  }, [dailyReviewVisible]);
+  }, [bubbleVisible, suggestionVisible, historyVisible, actionsMenuVisible]);
 
   return (
     <div className="pet-stage">
@@ -1457,89 +1019,6 @@ function PetView() {
         />
       )}
 
-      {dailyMemoryDraft && (
-        <section
-          className="daily-memory-review"
-          aria-label="Daily Coco update"
-        >
-          <header className="daily-memory-review-header">
-            <div>
-              <span className="daily-memory-review-kicker">Daily update</span>
-              <h2>What Coco learned</h2>
-            </div>
-            <button
-              type="button"
-              className="daily-memory-review-close"
-              onClick={() => setDailyMemoryDraft(null)}
-              title="Not now"
-            >
-              ×
-            </button>
-          </header>
-          <p className="daily-memory-review-copy">
-            Review the preferences Coco learned from your previous activity.
-            Approving replaces only Coco’s learned section; your written memory
-            stays unchanged.
-          </p>
-          <div className="daily-memory-review-list">
-            {[...new Set(dailyMemoryDraft.bullets.map((bullet) => bullet.section))]
-              .map((section) => (
-                <section className="daily-memory-review-section" key={section}>
-                  <h3>
-                    {MEMORY_SECTION_TITLES[section] ??
-                      section.replaceAll('_', ' ')}
-                  </h3>
-                  {dailyMemoryDraft.bullets
-                    .filter((bullet) => bullet.section === section)
-                    .map((bullet) => (
-                      <article className="daily-memory-review-insight" key={bullet.id}>
-                        <p>{bullet.content}</p>
-                        {bullet.examples.length > 0 && (
-                          <details>
-                            <summary>
-                              {bullet.examples.length}{' '}
-                              {bullet.examples.length === 1 ? 'example' : 'examples'}
-                            </summary>
-                            <ul>
-                              {bullet.examples.map((example) => (
-                                <li key={example}>{example}</li>
-                              ))}
-                            </ul>
-                          </details>
-                        )}
-                      </article>
-                    ))}
-                </section>
-              ))}
-          </div>
-          {dailyMemoryStatus === 'error' && (
-            <p className="daily-memory-review-error">
-              Coco couldn’t apply this update. You can try again.
-            </p>
-          )}
-          <footer className="daily-memory-review-actions">
-            <button
-              type="button"
-              className="daily-memory-review-later"
-              onClick={() => setDailyMemoryDraft(null)}
-            >
-              Not now
-            </button>
-            <button
-              type="button"
-              className="daily-memory-review-approve"
-              onClick={approveDailyMemory}
-              disabled={dailyMemoryStatus === 'applying'}
-            >
-              {dailyMemoryStatus === 'applying' && 'Updating…'}
-              {dailyMemoryStatus === 'applied' && 'Updated ✓'}
-              {(dailyMemoryStatus === 'idle' || dailyMemoryStatus === 'error') &&
-                'Approve update'}
-            </button>
-          </footer>
-        </section>
-      )}
-
       <ObservationBubble
         bubble={bubble}
         onHelpMe={handleHelpMe}
@@ -1547,7 +1026,6 @@ function PetView() {
         onViewConversation={handleViewConversation}
         onChatAboutSuggestion={() => handleChatAboutSuggestion()}
         onRunSuggestion={() => handleChatAboutSuggestion(true)}
-        onOpenCocoChat={handleOpenCocoChat}
         onMouseEnter={handleBubbleEnter}
         onMouseLeave={handleBubbleLeave}
       />
@@ -1560,14 +1038,11 @@ function PetView() {
       )}
       <div
         ref={petActionsRef}
-        className={`pet-container${cocoSleeping ? ' is-coco-sleeping' : ''}${actionsMenuOpen ? ' has-open-actions' : ''}`}
-        onPointerDown={beginAvatarDrag}
-        onPointerMove={moveAvatarDrag}
-        onPointerUp={endAvatarDrag}
-        onPointerCancel={endAvatarDrag}
+        className={`pet-container${actionsMenuOpen ? ' has-open-actions' : ''}`}
         onContextMenu={(event) => {
           event.preventDefault();
           setShowHistory(false);
+          setHideError('');
           setActionsMenuOpen(true);
         }}
       >
@@ -1582,6 +1057,7 @@ function PetView() {
           onClick={(e) => {
             e.stopPropagation();
             setShowHistory(false);
+            setHideError('');
             setActionsMenuOpen((open) => !open);
           }}
           title="More actions"
@@ -1593,19 +1069,65 @@ function PetView() {
         </button>
 
         {actionsMenuVisible && (
-          <div className="pet-actions-menu" role="menu" aria-label="Coco actions">
+          <div
+            className="pet-actions-menu"
+            role="menu"
+            aria-label="Coco actions"
+          >
+            {COCO_NAVIGATION.map(({ label, channel, icon }) => (
+              <button
+                type="button"
+                role="menuitem"
+                key={channel}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setActionsMenuOpen(false);
+                  if (channel === 'open-main-window') handleOpenChat(event);
+                  else window.electron?.ipcRenderer.sendMessage(channel);
+                }}
+              >
+                <PetMenuIcon name={icon} />
+                <span>{label}</span>
+              </button>
+            ))}
+            <div className="pet-actions-divider" role="separator" />
             <button
               type="button"
               role="menuitem"
-              onClick={(event) => {
-                setActionsMenuOpen(false);
-                handleOpenChat(event);
+              disabled={hidingAvatar}
+              onClick={async (event) => {
+                event.stopPropagation();
+                setHideError('');
+                setHidingAvatar(true);
+                try {
+                  const result = (await window.electron?.ipcRenderer.invoke(
+                    'update-avatar-visibility',
+                    { hideAvatar: true },
+                  )) as { success?: boolean } | undefined;
+                  if (!result?.success)
+                    throw new Error('Could not hide Coco. Please try again.');
+                  setActionsMenuOpen(false);
+                } catch {
+                  setHideError('Could not hide Coco. Please try again.');
+                } finally {
+                  setHidingAvatar(false);
+                }
               }}
             >
-              <PetMenuIcon name="chat" />
-              <span>Open Chat</span>
+              <PetMenuIcon name="hide" />
+              <span>{hidingAvatar ? 'Hiding…' : 'Hide'}</span>
             </button>
-            <div className="pet-actions-divider" role="separator" />
+            {hideError && (
+              <div
+                role="alert"
+                style={{
+                  padding: '4px 10px',
+                  fontSize: 'var(--coco-text-secondary)',
+                }}
+              >
+                {hideError}
+              </div>
+            )}
             <button
               type="button"
               role="menuitem"
@@ -1618,32 +1140,6 @@ function PetView() {
               <PetMenuIcon name={cocoSleeping ? 'wake' : 'sleep'} />
               <span>{cocoSleeping ? 'Wake Coco' : 'Sleep'}</span>
             </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={(event) => {
-                event.stopPropagation();
-                setActionsMenuOpen(false);
-                setShowHistory(true);
-              }}
-            >
-              <PetMenuIcon name="history" />
-              <span>History</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={(event) => {
-                event.stopPropagation();
-                setActionsMenuOpen(false);
-                window.electron?.ipcRenderer
-                  .invoke('update-avatar-visibility', { hideAvatar: true })
-                  .catch(() => undefined);
-              }}
-            >
-              <PetMenuIcon name="hide" />
-              <span>Hide Avatar</span>
-            </button>
             <div className="pet-actions-divider" role="separator" />
             <button
               type="button"
@@ -1651,31 +1147,7 @@ function PetView() {
               onClick={(event) => {
                 event.stopPropagation();
                 setActionsMenuOpen(false);
-                window.electron?.ipcRenderer.sendMessage('open-chat-settings');
-              }}
-            >
-              <PetMenuIcon name="settings" />
-              <span>Settings</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={(event) => {
-                event.stopPropagation();
-                setActionsMenuOpen(false);
-                window.electron?.ipcRenderer.sendMessage('check-for-updates');
-              }}
-            >
-              <PetMenuIcon name="update" />
-              <span>Check for Updates</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={(event) => {
-                event.stopPropagation();
-                setActionsMenuOpen(false);
-                window.electron?.ipcRenderer.sendMessage('quit-app');
+                window.electron?.ipcRenderer.sendMessage('quit-from-avatar');
               }}
             >
               <PetMenuIcon name="quit" />

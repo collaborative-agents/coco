@@ -15,6 +15,8 @@ export default function configureFullscreenCompanionWindow(
 ): void {
   window.setAlwaysOnTop(true, 'floating');
   if (platform === 'darwin') {
-    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    window.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+    });
   }
 }

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import SetupShell from './setup/SetupShell';
 import WelcomeStep from './onboarding/WelcomeStep';
 import NameStep from './onboarding/NameStep';
-import WorkflowStep from './onboarding/WorkflowStep';
 import PermissionsStep from './onboarding/PermissionsStep';
 import VoiceStep from './onboarding/VoiceStep';
 import AvatarStep from './onboarding/AvatarStep';
@@ -26,11 +25,6 @@ const PAGES = {
     title: 'What should Coco call you?',
     description:
       'Start with a name. Make your conversations with Coco a little more personal.',
-  },
-  workflow: {
-    title: 'How should Coco help?',
-    description:
-      'Choose your workflow and the AI tools you use. You can change these in Settings.',
   },
   permissions: {
     title: 'Permissions & privacy',
@@ -59,9 +53,6 @@ export default function OnboardingView() {
   );
   const [userName, setUserName] = useState('');
   const [nameError, setNameError] = useState('');
-  const [scenario, setScenario] = useState('everyday_support');
-  const [aiTools, setAiTools] = useState<string[]>([]);
-  const [customSystemPrompt, setCustomSystemPrompt] = useState('');
   const [permissionsReady, setPermissionsReady] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [hideAvatar, setHideAvatar] = useState(false);
@@ -69,14 +60,7 @@ export default function OnboardingView() {
   useEffect(() => {
     window.electron?.ipcRenderer
       .invoke('get-profile')
-      .then((profile: any) => {
-        setUserName(String(profile?.userName ?? ''));
-        if (typeof profile?.tutorScenario === 'string')
-          setScenario(profile.tutorScenario);
-        if (Array.isArray(profile?.aiTools)) setAiTools(profile.aiTools);
-        setCustomSystemPrompt(String(profile?.customSystemPrompt ?? ''));
-        setHideAvatar(profile?.hideAvatar === true);
-      })
+      .then((profile: any) => setUserName(String(profile?.userName ?? '')))
       .catch(() => {});
   }, []);
 
@@ -90,7 +74,6 @@ export default function OnboardingView() {
     : [
         'welcome',
         'name',
-        'workflow',
         'permissions',
         'voice',
         ...(models.routerManaged ? [] : ['models' as const]),
@@ -106,9 +89,9 @@ export default function OnboardingView() {
       onboardingComplete: true,
       userName: userName.trim(),
       hideAvatar,
-      tutorScenario: scenario,
-      aiTools,
-      customSystemPrompt,
+      tutorScenario: 'ai_upskilling',
+      aiTools: [],
+      customSystemPrompt: '',
       completedAt: new Date().toISOString(),
     });
     window.close();
@@ -199,18 +182,6 @@ export default function OnboardingView() {
           }}
           error={nameError}
           onNext={handleNext}
-        />
-      )}
-      {currentKey === 'workflow' && (
-        <WorkflowStep
-          {...{
-            scenario,
-            setScenario,
-            aiTools,
-            setAiTools,
-            customSystemPrompt,
-            setCustomSystemPrompt,
-          }}
         />
       )}
       {currentKey === 'permissions' && (

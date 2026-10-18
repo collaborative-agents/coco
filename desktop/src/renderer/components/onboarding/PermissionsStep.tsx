@@ -131,11 +131,9 @@ export default function PermissionsStep({
         <summary>Privacy &amp; your data</summary>
         <p>
           {routerManaged
-            ? 'Screen images and context are sent through your configured model router to provide assistance.'
+            ? 'Screen images and context are sent to a secured Stanford server and deleted immediately after processing.'
             : 'Screen images and context are sent to your configured AI models to provide assistance.'}{' '}
-          Local screenshot retention depends on your configuration. Developer
-          mode retains observation screenshots for personalization; review the
-          retention notice in Settings.
+          Rolling screenshots are deleted locally after processing.
         </p>
         <p>
           Raw keyboard and mouse activity is processed locally and is not sent
@@ -148,8 +146,8 @@ export default function PermissionsStep({
         </p>
         {routerManaged && (
           <p>
-            When a gateway is configured, chat and session records are synced to
-            your account. Conversation history is also stored on this device.
+            Your chat and session records are stored on an encrypted server so
+            you can revisit your own history.
           </p>
         )}
       </details>

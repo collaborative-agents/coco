@@ -1,0 +1,65 @@
+.likert-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0 0 10px;
+  font-size: var(--coco-text-caption);
+  color: var(--coco-color-text-muted);
+}
+.likert-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--coco-color-border);
+}
+.likert-question {
+  font-size: var(--coco-text-control);
+  line-height: 1.4;
+}
+.likert-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+.likert-options label {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--coco-text-caption);
+}
+.likert-options label:has(input:checked) {
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-primary);
+}
+.likert-options input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--coco-color-primary);
+}
+.likert-pages {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+.likert-pages > span {
+  font-size: var(--coco-text-caption);
+  white-space: nowrap;
+}
+.training-page .likert-pages button {
+  font-size: var(--coco-text-secondary);
+  padding: 6px 8px;
+}
+@media (max-width: 600px) {
+  .likert-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}

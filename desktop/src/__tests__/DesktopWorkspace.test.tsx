@@ -13,6 +13,7 @@ jest.mock('../renderer/components/PersonalizationCenter', () => ({
   default: () => <div>Personalization content</div>,
   PersonalizationSettingsCard: () => <div>Personalization settings</div>,
 }));
+
 const listeners = new Map<string, (payload?: unknown) => void>();
 let invoke: jest.Mock;
 let sendMessage: jest.Mock;
@@ -34,6 +35,16 @@ beforeEach(() => {
   };
 });
 
+it('provides chat and personalization without a personalization prerequisite', async () => {
+  render(<SessionChatView />);
+  expect(screen.getByPlaceholderText(/Ask Coco/)).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Training tasks' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Start a new session' })).toBeEnabled();
+  await act(async () => listeners.get('open-personalization-panel')?.());
+  expect(screen.getByText('Personalization content')).toBeVisible();
+  expect(invoke).not.toHaveBeenCalledWith('study-access');
+});
+
 it('shows only the selected tab and preserves the chat draft across navigation', async () => {
   render(<SessionChatView />);
   const draft = screen.getByPlaceholderText(/Ask Coco/);
@@ -42,14 +53,14 @@ it('shows only the selected tab and preserves the chat draft across navigation',
   fireEvent.click(screen.getByRole('button', { name: 'Collapse' }));
   expect(screen.queryByText('Personalization content')).not.toBeInTheDocument();
   expect(draft).toBeVisible();
-  expect(sendMessage).toHaveBeenLastCalledWith('set-chat-window-expanded', {
+  expect(sendMessage).toHaveBeenLastCalledWith('toggle-float-window', {
     expanded: false,
   });
   fireEvent.click(screen.getByRole('button', { name: 'Personalization' }));
   expect(screen.getByText('Personalization content')).toBeVisible();
   expect(draft).not.toBeVisible();
   expect(draft).toHaveValue('Keep my thought here');
-  expect(sendMessage).toHaveBeenLastCalledWith('set-chat-window-expanded', {
+  expect(sendMessage).toHaveBeenLastCalledWith('toggle-float-window', {
     expanded: true,
   });
   fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
@@ -59,11 +70,13 @@ it('shows only the selected tab and preserves the chat draft across navigation',
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('get-profile'));
 });
 
-it('opens settings and training as separate pages without the chat pane', async () => {
+it('opens settings and personalization as separate pages without the chat pane', async () => {
   render(<SessionChatView />);
   fireEvent.click(screen.getByRole('button', { name: 'Collapse' }));
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   expect(screen.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  expect(screen.queryByText('Personalization settings')).not.toBeInTheDocument();
+  expect(invoke).not.toHaveBeenCalledWith('get-personalization-center');
   expect(screen.queryByText('Personalization content')).not.toBeInTheDocument();
   expect(screen.getByPlaceholderText(/Ask Coco/)).not.toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Personalization' }));
@@ -125,7 +138,25 @@ it('shows a retryable history error and loads saved sessions on retry', async ()
   ).toBeNull();
 });
 
-it('switches from training to chat when opening a saved conversation', async () => {
+it('synchronizes native resizing and external personalization navigation', async () => {
+  render(<SessionChatView />);
+  await act(async () =>
+    listeners.get('float-window-state')?.({ isFloat: true }),
+  );
+  expect(screen.queryByText('Personalization content')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Expand' })).toBeVisible();
+  await act(async () => listeners.get('open-personalization-panel')?.());
+  expect(screen.getByText('Personalization content')).toBeVisible();
+  expect(
+    screen.getByRole('button', { name: 'Personalization' }),
+  ).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByPlaceholderText(/Ask Coco/)).not.toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse' }));
+  expect(screen.getByText('Personalization content')).toBeVisible();
+  expect(screen.getByPlaceholderText(/Ask Coco/)).not.toBeVisible();
+});
+
+it('switches from personalization to chat when opening a saved conversation', async () => {
   invoke.mockImplementation(async (channel) =>
     channel === 'get-chat-conversations'
       ? [
@@ -158,4 +189,17 @@ it('reveals chat when a practice task starts a chat session', async () => {
   );
   expect(screen.getByPlaceholderText(/Ask Coco/)).toBeVisible();
   expect(screen.queryByText('Personalization content')).not.toBeInTheDocument();
+});
+
+
+it('keeps navigation visible and closes the window without navigating to chat', async () => {
+  render(<SessionChatView />);
+  fireEvent.click(screen.getByRole('button', { name: 'Personalization' }));
+  expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Personalization' }).querySelector('svg'))
+    .toHaveAttribute('data-header-icon', 'personalization');
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect(sendMessage).toHaveBeenLastCalledWith('close-chat-window');
+  expect(screen.getByText('Personalization content')).toBeVisible();
+  await act(async () => {});
 });

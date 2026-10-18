@@ -74,6 +74,8 @@ interface UpdateLogger {
 type Updater = Pick<
   ElectronAppUpdater,
   | 'allowPrerelease'
+  | 'allowDowngrade'
+  | 'channel'
   | 'autoDownload'
   | 'autoInstallOnAppQuit'
   | 'checkForUpdates'
@@ -166,7 +168,10 @@ export class DesktopAppUpdater {
     this.updater.logger = this.logger;
     this.updater.autoDownload = false;
     this.updater.autoInstallOnAppQuit = true;
-    this.updater.allowPrerelease = false;
+    const nightly = /-nightly\.\d{14}$/.test(this.currentVersion());
+    this.updater.allowPrerelease = nightly;
+    if (nightly) this.updater.channel = 'nightly';
+    this.updater.allowDowngrade = false;
     this.updater.disableDifferentialDownload = false;
     this.updater.disableWebInstaller = true;
 

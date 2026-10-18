@@ -2,7 +2,7 @@ import type React from 'react';
 import { S } from './styles';
 import type { SavedConversation, ChatMessage } from './types';
 import { TutorMessage, SuggestionMessage } from './MessageContent';
-import { ToolCallCard } from './ToolCallCard';
+import AgentActivityList from './AgentActivityList';
 import ChatMetrics from './ChatMetrics';
 import RatingButtons from '../RatingButtons';
 import { messageCopyKey } from './message-format';
@@ -142,27 +142,23 @@ export default function ChatTranscript({
           ) : (
             <>
               <div style={S.tutorAvatar}>C</div>
-              <div>
-                {m.activity && m.activity.length > 0 && (
-                  <div style={S.toolStack}>
-                    {m.activity.map((item, index) =>
-                      item.kind === 'tool' ? (
-                        <ToolCallCard key={item.call.id} call={item.call} />
-                      ) : (
-                        <div key={`progress-${index}`} style={S.tutorBubble}>
-                          <TutorMessage text={item.text} />
-                        </div>
-                      ),
-                    )}
-                  </div>
-                )}
-                {!m.activity && m.toolCalls && m.toolCalls.length > 0 && (
-                  <div style={S.toolStack}>
-                    {m.toolCalls.map((call) => (
-                      <ToolCallCard key={call.id} call={call} />
-                    ))}
-                  </div>
-                )}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                {(m.activity && m.activity.length > 0) ||
+                (!m.activity && m.toolCalls?.length) ? (
+                  <AgentActivityList
+                    activity={
+                      m.activity ??
+                      m.toolCalls?.map((call) => ({
+                        kind: 'tool' as const,
+                        call,
+                      })) ??
+                      []
+                    }
+                    interactive={
+                      !reviewing && sending && i === visibleMessages.length - 1
+                    }
+                  />
+                ) : null}
                 {m.suggestion && (
                   <SuggestionMessage
                     suggestion={m.suggestion}

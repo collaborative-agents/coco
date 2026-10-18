@@ -1,0 +1,167 @@
+.training-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.28);
+}
+.training-dialog-backdrop[hidden] {
+  display: none;
+}
+.training-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(780px, 100%);
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+  background: var(--coco-color-surface);
+  border-radius: 24px;
+  box-shadow: 0 16px 60px rgba(15, 23, 42, 0.22);
+  outline: none;
+}
+.training-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 12px;
+}
+.training-dialog-header h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.training-page .training-dialog-header button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  flex: none;
+  border-radius: 50%;
+  font-size: 22px;
+}
+.training-dialog-content {
+  overflow: auto;
+  min-height: 0;
+  padding: 0 24px 24px;
+}
+.training-dialog .training-card {
+  border: none;
+  box-shadow: none;
+  margin: 0;
+}
+.training-dialog .pre-assessment-intro,
+.training-dialog .post-assessment-intro {
+  background: transparent;
+  padding: 12px 0 20px;
+}
+.training-dialog .pre-assessment-intro p,
+.training-dialog .post-assessment-intro p {
+  font-size: var(--coco-text-control);
+}
+.training-dialog .pre-assessment-progress {
+  display: none;
+}
+.training-dialog .pre-assessment-challenge,
+.training-dialog .post-assessment-section {
+  padding: 16px 0;
+}
+.training-dialog .pre-assessment-tabs {
+  padding: 12px 0 0;
+  flex-wrap: wrap;
+}
+.training-detail-meta {
+  font-size: var(--coco-text-secondary);
+}
+.training-document-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.training-document-markdown {
+  overflow-wrap: anywhere;
+}
+.training-document-markdown pre {
+  overflow: auto;
+  padding: 12px;
+  background: var(--coco-color-surface-subtle);
+  border-radius: 8px;
+}
+.training-document-markdown table {
+  display: block;
+  overflow: auto;
+}
+.training-page .training-document-markdown h1 {
+  font-size: var(--coco-text-section);
+}
+.training-page .training-document-markdown h2,
+.training-page .training-document-markdown h3 {
+  font-size: var(--coco-text-lead);
+}
+.training-document-markdown p {
+  margin: 12px 0;
+}
+.training-document-markdown ul,
+.training-document-markdown ol {
+  padding-left: 24px;
+  margin: 12px 0;
+}
+.training-document-markdown li + li {
+  margin-top: 6px;
+}
+.training-reference-files {
+  margin-top: 24px;
+  border-top: 1px solid var(--coco-color-border);
+  padding-top: 12px;
+}
+.training-reference-files h3 {
+  font-size: var(--coco-text-control);
+  margin: 0 0 8px;
+}
+.training-detail-footer {
+  border-top: 1px solid var(--coco-color-border);
+  margin-top: 24px;
+  padding-top: 16px;
+}
+.training-detail-footer p {
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-control);
+}
+@media (max-height: 700px) {
+  /* The dialog and section already name the assessment; prioritize its questions. */
+  .training-dialog
+    .post-assessment:has(.likert-questions)
+    .post-assessment-intro {
+    display: none;
+  }
+  .training-dialog
+    .post-assessment:has(.likert-questions)
+    .post-assessment-section {
+    padding: 8px 0;
+  }
+  .training-dialog .post-assessment-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .training-dialog .post-assessment-tabs button {
+    justify-content: center;
+    padding: 8px;
+  }
+  .training-dialog .post-assessment-tabs button > span {
+    display: none;
+  }
+}
+@media (max-width: 600px) {
+  .training-dialog-backdrop {
+    padding: 12px;
+  }
+  .training-dialog {
+    max-height: calc(100dvh - 24px);
+    border-radius: 18px;
+  }
+  .training-dialog-header {
+    padding: 16px;
+  }
+  .training-dialog-content {
+    padding: 0 16px 16px;
+  }
+}

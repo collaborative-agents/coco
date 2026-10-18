@@ -880,6 +880,7 @@ async def main_async(
     mse_threshold: float = DEFAULT_MSE_THRESHOLD,
     enable_judge: bool = False,
     observer_interval_seconds: float = 3600.0,
+    scenario: str = "everyday_support",
 ):
     """Start GUM, Streamer, and FastAPI server concurrently."""
     global streamer
@@ -943,6 +944,7 @@ async def main_async(
             tutor_url=tutor_url,
             ai_tutor_output_log=ai_tutor_output_log,
             observer_model=observer_model,
+            scenario=scenario,
             memory_engine=memory_engine,
             # The streamer already emits at most one action batch per check
             # cycle. A zero action cooldown makes actions dominant over the
@@ -1065,6 +1067,7 @@ def main(
     mse_threshold: float = DEFAULT_MSE_THRESHOLD,
     enable_judge: bool = False,
     observer_interval_seconds: float = 3600.0,
+    scenario: str = "everyday_support",
 ):
     # The observer model must be supplied explicitly; there is no built-in
     # default so the caller (CLI or desktop app) always chooses it consciously.
@@ -1081,6 +1084,7 @@ def main(
             ai_tutoring=ai_tutoring,
             tutor_url=tutor_url,
             observer_model=observer_model,
+            scenario=scenario,
             mse_threshold=mse_threshold,
             enable_judge=enable_judge,
             observer_interval_seconds=observer_interval_seconds,
