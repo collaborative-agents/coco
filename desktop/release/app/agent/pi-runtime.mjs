@@ -1,6 +1,7 @@
 // Kept as native ESM: the pi SDK and its resource discovery must not be webpacked.
 import fs from 'node:fs';
 import { createModelRuntime } from './pi-auth.mjs';
+import { chatThinkingLevel } from './pi-thinking.mjs';
 import { fileURLToPath } from 'node:url';
 import { ANSWER_CHANNEL, CANCEL_CHANNEL } from './question-channel.mjs';
 import path from 'node:path';
@@ -142,7 +143,7 @@ export async function createRuntime({
     settingsManager,
     sessionManager,
     model,
-    thinkingLevel: 'off',
+    thinkingLevel: chatThinkingLevel(model),
     customTools,
     tools: [
       'read',

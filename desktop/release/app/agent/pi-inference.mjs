@@ -155,7 +155,34 @@ export async function completeInference(runtime, request, signal) {
     !['none', 'default'].includes(request.reasoning_effort)
   )
     options.reasoning = request.reasoning_effort;
-  const reply = await runtime.completeSimple(model, context, options);
+  // Pi's thinking-off mapping uses MINIMAL for Gemini Flash, including aliases
+  // that can now resolve to models supporting LOW but not MINIMAL.
+  const unsupportedMinimal = (message) =>
+    ['google-generative-ai', 'google-vertex'].includes(model.api) &&
+    /thinking level ["']?minimal["']? is not supported/i.test(message || '');
+  let reply;
+  let retriedThinking = false;
+  try {
+    reply = await runtime.completeSimple(model, context, options);
+  } catch (error) {
+    if (!unsupportedMinimal(error.message) || signal?.aborted) throw error;
+    retriedThinking = true;
+    reply = await runtime.completeSimple(model, context, {
+      ...options,
+      reasoning: 'low',
+    });
+  }
+  if (
+    reply.stopReason === 'error' &&
+    !retriedThinking &&
+    unsupportedMinimal(reply.errorMessage) &&
+    !signal?.aborted
+  ) {
+    reply = await runtime.completeSimple(model, context, {
+      ...options,
+      reasoning: 'low',
+    });
+  }
   if (['error', 'aborted', 'deferred', 'pending'].includes(reply.stopReason))
     throw new Error(reply.errorMessage || `Pi inference ${reply.stopReason}.`);
   return {

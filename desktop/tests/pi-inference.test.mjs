@@ -169,3 +169,67 @@ test('HTTP bridge authenticates before accessing runtime and keeps parallel requ
     bridge.close();
   }
 });
+
+for (const throws of [false, true]) {
+  test(`Gemini retries unsupported MINIMAL with LOW (${throws ? 'thrown' : 'returned'} error)`, async () => {
+    const gemini = {
+      ...model,
+      id: 'gemini-flash-latest',
+      provider: 'google',
+      api: 'google-generative-ai',
+    };
+    const calls = [];
+    const rt = {
+      getModel: () => gemini,
+      hasConfiguredAuth: () => true,
+      completeSimple: async (_model, _context, options) => {
+        calls.push(options);
+        if (calls.length === 1) {
+          const errorMessage =
+            'Thinking level MINIMAL is not supported for this model';
+          if (throws) throw new Error(errorMessage);
+          return { ...reply, stopReason: 'error', errorMessage };
+        }
+        return reply;
+      },
+    };
+    await completeInference(rt, {
+      ...request,
+      model: 'pi/google/gemini-flash-latest',
+      reasoning_effort: 'none',
+      max_tokens: 128,
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].reasoning, undefined);
+    assert.equal(calls[1].reasoning, 'low');
+    assert.equal(calls[1].maxTokens, 128);
+  });
+}
+
+test('thinking fallback does not retry other providers or unrelated errors and retries only once', async () => {
+  for (const [api, message, expectedCalls] of [
+    [
+      'openai-completions',
+      'Thinking level MINIMAL is not supported for this model',
+      1,
+    ],
+    ['google-generative-ai', 'Invalid API key', 1],
+    [
+      'google-generative-ai',
+      'Thinking level MINIMAL is not supported for this model',
+      2,
+    ],
+  ]) {
+    let calls = 0;
+    const rt = {
+      getModel: () => ({ ...model, api }),
+      hasConfiguredAuth: () => true,
+      completeSimple: async () => {
+        calls++;
+        return { ...reply, stopReason: 'error', errorMessage: message };
+      },
+    };
+    await assert.rejects(completeInference(rt, request), { message });
+    assert.equal(calls, expectedCalls);
+  }
+});

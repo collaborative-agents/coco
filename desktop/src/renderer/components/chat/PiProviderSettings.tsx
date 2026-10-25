@@ -126,41 +126,43 @@ export default function PiProviderSettings({
       </div>
       {status.flow && <p role="status">{status.flow.message}</p>}
       {prompt && (
-        <div>
-          <label className="coco-field">
-            {prompt.message}
-            {prompt.type === 'select' ? (
-              <span className="coco-select-wrap">
-                <select
-                  className="coco-select"
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                >
-                  <option value="">Choose…</option>
-                  {prompt.options.map((o: any) => (
-                    <option key={o.id} value={o.id}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            ) : (
-              <input
-                className="ob-custom-input"
-                type={
-                  prompt.type === 'secret' || prompt.type === 'manual_code'
-                    ? 'password'
-                    : 'text'
-                }
-                autoComplete="off"
+        <label className="coco-field">
+          {prompt.message}
+          {prompt.type === 'select' ? (
+            <span className="coco-select-wrap">
+              <select
+                className="coco-select"
                 value={answer}
-                placeholder={prompt.placeholder}
                 onChange={(e) => setAnswer(e.target.value)}
-              />
-            )}
-          </label>
+              >
+                <option value="">Choose…</option>
+                {prompt.options.map((o: any) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </span>
+          ) : (
+            <input
+              className="ob-custom-input"
+              type={
+                prompt.type === 'secret' || prompt.type === 'manual_code'
+                  ? 'password'
+                  : 'text'
+              }
+              autoComplete="off"
+              value={answer}
+              placeholder={prompt.placeholder}
+              onChange={(e) => setAnswer(e.target.value)}
+            />
+          )}
+        </label>
+      )}
+      <div className="coco-actions pi-provider-footer">
+        {prompt && (
           <button
-            className="coco-button"
+            className="coco-button coco-button--primary"
             type="button"
             disabled={pending || !answer}
             onClick={() => {
@@ -170,25 +172,25 @@ export default function PiProviderSettings({
           >
             Continue login
           </button>
-        </div>
-      )}
-      {status.flow?.busy && (
+        )}
+        {status.flow?.busy && (
+          <button
+            className="coco-button"
+            type="button"
+            onClick={() => act('cancel')}
+          >
+            Cancel login
+          </button>
+        )}
         <button
-          className="coco-button"
+          className="coco-button pi-provider-refresh"
           type="button"
-          onClick={() => act('cancel')}
+          disabled={busy}
+          onClick={() => act('refresh', { provider })}
         >
-          Cancel login
+          Refresh models
         </button>
-      )}
-      <button
-        className="coco-button"
-        type="button"
-        disabled={busy}
-        onClick={() => act('refresh', { provider })}
-      >
-        Refresh models
-      </button>
+      </div>
       {error && <p role="alert">{error}</p>}
     </section>
   );

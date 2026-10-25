@@ -107,5 +107,16 @@
   background: var(--coco-color-surface-subtle);
 }
 .pi-provider-settings h4 { font-size: var(--coco-text-body); }
-.pi-provider-settings > .coco-button { align-self: flex-start; }
+.pi-provider-settings .coco-actions .coco-button {
+  flex: 0 0 auto;
+  padding: var(--coco-space-2) var(--coco-space-3);
+  font-size: var(--coco-text-secondary);
+}
+.pi-provider-footer {
+  padding-top: var(--coco-space-3);
+  border-top: 1px solid var(--coco-color-border);
+}
+.pi-provider-refresh {
+  margin-left: auto;
+}
 .pi-provider-settings [role='alert'] { color: var(--coco-color-danger); }
