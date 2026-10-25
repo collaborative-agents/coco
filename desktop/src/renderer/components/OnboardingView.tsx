@@ -90,7 +90,6 @@ export default function OnboardingView() {
       userName: userName.trim(),
       hideAvatar,
       tutorScenario: 'everyday_support',
-      aiTools: [],
       customSystemPrompt: '',
       completedAt: new Date().toISOString(),
     });

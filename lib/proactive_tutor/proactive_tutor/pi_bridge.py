@@ -36,6 +36,16 @@ class TurnRequest(BaseModel):
     metrics: dict | None = None
 
 
+class SessionRequest(BaseModel):
+    model: str
+    scenario: str = "everyday_support"
+    problem: str = ""
+    user_name: str = ""
+    ai_tools: list[str] = Field(default_factory=list)
+    memory: str = ""
+    messages: list[dict[str, str]] = Field(default_factory=list)
+
+
 class TranscriptionRequest(BaseModel):
     audio_data: str = Field(min_length=1, max_length=16_000_000)
 
@@ -48,15 +58,21 @@ def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
 
     router = APIRouter(prefix="/agent", dependencies=[Depends(authorize)])
 
-    def system() -> TutorSystem:
+    sessions: dict[str, TutorSystem] = {}
+    active_session: str | None = None
+
+    def system(x_coco_session: str | None = Header(default=None)) -> TutorSystem:
+        if x_coco_session:
+            if x_coco_session not in sessions:
+                raise HTTPException(404, "Agent conversation not initialized")
+            return sessions[x_coco_session]
         tutor = get_tutor()
         if tutor is None:
             raise HTTPException(503, "TutorSystem not initialized")
         return tutor
 
     @router.get("/context")
-    async def context():
-        tutor = system()
+    async def context(tutor: TutorSystem = Depends(system)):
         return {
             "model": tutor.tutor_agent.model,
             "instructions": tutor.tutor_agent.prompt,
@@ -73,24 +89,52 @@ def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
             "tools": tutor.tutor_agent._tool_definitions(),
         }
 
+    @router.post("/active/{session_id}")
+    async def activate_session(session_id: str):
+        nonlocal active_session
+        active_session = session_id
+        return {"success": True}
+
+    @router.post("/sessions/{session_id}")
+    async def prepare_session(session_id: str, req: SessionRequest):
+        # Execution never borrows the foreground tutor's mutable conversation or model.
+        tutor = TutorSystem(req.model, req.scenario)
+        tutor.problem_statement = req.problem
+        tutor.user_name = req.user_name
+        tutor.memory = req.memory
+        tutor.set_ai_tools(req.ai_tools)
+        tutor.restore_conversation(req.messages)
+        sessions[session_id] = tutor
+        return await context(tutor)
+
+    @router.delete("/sessions/{session_id}")
+    async def release_session(session_id: str):
+        sessions.pop(session_id, None)
+        return {"success": True}
+
     @router.post("/tools/execute")
-    async def execute(req: ToolRequest):
-        agent = system().tutor_agent
+    async def execute(req: ToolRequest, tutor: TutorSystem = Depends(system)):
+        agent = tutor.tutor_agent
         return await asyncio.to_thread(agent._execute_tool_call, req.model_dump())
 
     @router.post("/transcribe")
-    async def transcribe(req: TranscriptionRequest):
+    async def transcribe(
+        req: TranscriptionRequest, tutor: TutorSystem = Depends(system)
+    ):
         validate_wav_base64(req.audio_data)
         text, _ = await asyncio.to_thread(
-            system().tutor_agent.transcribe_audio_with_metrics, req.audio_data, "wav"
+            tutor.tutor_agent.transcribe_audio_with_metrics, req.audio_data, "wav"
         )
         if not text.strip() or text.strip().upper() == "<NO_SPEECH>":
             raise HTTPException(422, "No clear speech was detected. Please try again.")
         return {"text": text.strip()}
 
     @router.post("/turn")
-    async def record_turn(req: TurnRequest):
-        tutor = system()
+    async def record_turn(
+        req: TurnRequest,
+        tutor: TutorSystem = Depends(system),
+        x_coco_session: str | None = Header(default=None),
+    ):
         tutor._chat_messages.extend(
             [
                 {"role": "user", "content": req.user_text},
@@ -104,15 +148,27 @@ def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
                 f"[{ts}] [Tutor]: {req.text}",
             ]
         )
+        # Keep coaching aware of foreground replies, without importing a
+        # background conversation into the currently selected task.
+        if x_coco_session and x_coco_session == active_session:
+            foreground = get_tutor()
+            if foreground is not None and foreground is not tutor:
+                foreground._chat_messages.extend(tutor._chat_messages[-2:])
+                foreground.conversation_history.extend(tutor.conversation_history[-2:])
         if req.metrics is not None:
             tutor._log_tutor_call(
-                "pi_agent", req.user_text, req.text, None, llm_metrics=req.metrics
+                "pi_agent",
+                req.user_text,
+                req.text,
+                None,
+                llm_metrics=req.metrics,
+                session_id=x_coco_session,
             )
         return {"history_length": len(tutor.conversation_history)}
 
     @router.post("/v1/chat/completions")
-    async def completion(req: CompletionRequest):
-        model = system().tutor_agent.model
+    async def completion(req: CompletionRequest, tutor: TutorSystem = Depends(system)):
+        model = tutor.tutor_agent.model
         if not req.stream:
             raise HTTPException(400, "The agent bridge requires streaming")
 

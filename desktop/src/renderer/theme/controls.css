@@ -1,0 +1,113 @@
+/* Shared opt-in controls for standalone settings and composer surfaces. */
+.coco-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--coco-space-2);
+  min-height: var(--coco-control-height);
+  padding: var(--coco-space-2) var(--coco-space-4);
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text-secondary);
+  font-family: var(--coco-font-family);
+  font-size: var(--coco-text-control);
+  font-weight: 700;
+  line-height: var(--coco-leading-control);
+  text-align: center;
+  cursor: pointer;
+  transition: background-color 120ms, border-color 120ms;
+}
+.coco-button:hover:not(:disabled) {
+  background: var(--coco-color-surface-muted);
+  border-color: var(--coco-color-accent-border);
+}
+.coco-button--primary {
+  background: var(--coco-color-primary);
+  border-color: var(--coco-color-primary);
+  color: var(--coco-color-surface);
+}
+.coco-button--primary:hover:not(:disabled) {
+  background: var(--coco-color-primary-hover);
+  border-color: var(--coco-color-primary-hover);
+}
+.coco-button:disabled,
+.coco-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.coco-field {
+  display: grid;
+  gap: var(--coco-space-2);
+  min-width: 0;
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-control);
+}
+.coco-select {
+  appearance: none;
+  min-width: 0;
+  width: 100%;
+  min-height: var(--coco-control-height);
+  padding: var(--coco-space-2) var(--coco-space-8) var(--coco-space-2) var(--coco-space-3);
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  color: var(--coco-color-text-secondary);
+  background-color: var(--coco-color-surface);
+  /* Chevron inherits the select's foreground through the wrapper. */
+  font-family: var(--coco-font-family);
+  font-size: var(--coco-text-control);
+  line-height: var(--coco-leading-control);
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.coco-select-wrap {
+  display: grid;
+  position: relative;
+  min-width: 0;
+  color: var(--coco-color-text-muted);
+}
+.coco-select-wrap::after {
+  content: '';
+  position: absolute;
+  right: var(--coco-space-3);
+  top: calc(50% - 4px);
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.coco-select:hover:not(:disabled) { border-color: var(--coco-color-accent-border); }
+.coco-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--coco-space-2);
+}
+.coco-checkbox {
+  appearance: none;
+  display: grid;
+  place-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin: 0;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-space-1);
+  background: var(--coco-color-surface);
+  cursor: pointer;
+}
+.coco-checkbox:checked {
+  background: var(--coco-color-primary);
+  border-color: var(--coco-color-primary);
+}
+.coco-checkbox:checked::after {
+  content: '';
+  width: 8px;
+  height: 4px;
+  border-left: 2px solid var(--coco-color-surface);
+  border-bottom: 2px solid var(--coco-color-surface);
+  transform: translateY(-1px) rotate(-45deg);
+}

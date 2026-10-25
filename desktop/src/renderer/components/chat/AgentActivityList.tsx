@@ -60,9 +60,11 @@ function ToolGroup({ calls }: { calls: TutorToolCall[] }) {
 }
 
 export default function AgentActivityList({
+  requestId,
   activity,
   interactive,
 }: {
+  requestId?: string;
   activity: AgentActivity[];
   interactive: boolean;
 }) {
@@ -77,6 +79,7 @@ export default function AgentActivityList({
               key={item.key}
               call={item.call}
               interactive={interactive}
+              requestId={requestId}
             />
           );
         return (

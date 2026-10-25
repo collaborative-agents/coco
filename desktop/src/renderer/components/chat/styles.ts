@@ -165,4 +165,8 @@ export const S: Record<string, React.CSSProperties> = {
   saveRow: { display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 },
   saveBtn: { border: 'none', background: ACCENT, color: 'var(--coco-color-surface)', borderRadius: 999, padding: '7px 18px', fontSize: 'var(--coco-text-control)', fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
   saved: { fontSize: 'var(--coco-text-secondary)', color: 'var(--coco-color-success)', fontWeight: 700 },
+  followUpRow: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+
+  followUpBtn: { border: `1px solid ${ACCENT_BORDER}`, background: 'var(--coco-color-surface)', color: ACCENT, borderRadius: 'var(--coco-radius-pill)', padding: '5px 11px', fontSize: 'var(--coco-text-control)', lineHeight: 1.3, cursor: 'pointer', fontFamily: FONT },
+
 };

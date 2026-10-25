@@ -15,10 +15,28 @@ bridge; that service uses the configured model providers and Coco tools. There i
 no hosted Coco login, gateway, training panel, or automatic personalization worker.
 The editable memory in Settings remains user-authored and local.
 
-Each conversation retains its folder and pi session history. This port follows
-`dev/nv`'s single-active-run behavior: stop a running turn before changing models,
-folders, or conversations. Concurrent background conversations from `coco-learn`
-are a separate follow-up.
+Each conversation retains its folder and pi session history and owns an independent
+runtime. Multiple conversations can run concurrently; only a second run in the same
+conversation is blocked. Stop and question answers target a specific request.
+Main persists live replies so switching conversations or closing the chat window
+does not discard work. History marks active conversations as “Working…”.
+
+The local bridge isolates each conversation's model, history, and tools using an
+`X-Coco-Session` header. Native Pi login remains an alternative direct-provider
+path, including when the Python service is unavailable. Changing global provider
+credentials or restarting services requires waiting for active runs; selecting a
+model or folder for an idle conversation does not stop other conversations.
+
+Sleep pauses screen sensing and wake-word capture while manual chat and background
+agent runs continue. Waking restarts sensing without resetting tutor context.
+The avatar shows brief progress/completion reminders when chat is out of view.
+Its bubble, menu, and Activity panel use separate windows so opening them does not
+resize or move the pet. Chat uses normal window stacking with an optional pin.
+
+The composer accepts local file references through Attach files or drag-and-drop.
+Screen observations are separately inspectable/removable context, and suggestions
+can be continued in chat or executed with Run with Coco. Screenshot annotation
+and the standalone model/profile settings remain available.
 
 The native ESM runtime and SDK dependencies live under `release/app/agent` and
 `release/app/node_modules`; packaging must include `agent/**`. After changing

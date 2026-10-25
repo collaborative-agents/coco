@@ -1,0 +1,30 @@
+/* Coco's observation bubble, in its own transparent window beside the avatar
+   (see createAvatarBubbleWindow in main.ts). The padding leaves room for the
+   drop shadow and matches AVATAR_BUBBLE_PADDING there. The view is laid out at
+   its natural size, independent of the window's current size, so the card it
+   reports is the card main makes room for. */
+.avatar-bubble-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  padding: 24px;
+}
+
+.avatar-bubble-view .observation-bubble {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: max-content;
+}
+
+.avatar-bubble-view .observation-bubble.has-suggestion {
+  max-height: var(--bubble-max-height, 520px);
+}
+
+/* On Coco's right, the tail points left. */
+.avatar-bubble-view.is-right .observation-bubble-tail {
+  right: auto;
+  left: -6px;
+  transform: rotate(-135deg);
+}

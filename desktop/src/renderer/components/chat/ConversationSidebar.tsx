@@ -63,6 +63,9 @@ export default function ConversationSidebar({
                   conversation.problem ||
                   'General help session'}
               </strong>
+              {conversation.messages.some((message) => message.isStreaming) && (
+                <span>Working…</span>
+              )}
               <span>
                 {conversation.messages.find((message) => message.text.trim())
                   ?.text || 'No messages'}

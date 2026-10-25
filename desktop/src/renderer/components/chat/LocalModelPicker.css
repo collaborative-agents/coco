@@ -1,0 +1,46 @@
+.tutor-model-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-caption);
+}
+
+.tutor-model-picker select {
+  max-width: 240px;
+  padding: 6px 10px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  font: inherit;
+}
+
+.tutor-model-picker select:focus {
+  outline: none;
+}
+
+.tutor-model-picker select:focus-visible {
+  outline: none;
+  border-color: var(--coco-color-text-secondary);
+}
+
+.tutor-model-picker [role='alert'] {
+  color: var(--coco-color-danger);
+}
+
+/* Native Pi uses the same compact treatment for its active model label. */
+.tutor-model-picker .local-model-picker__native {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 6px 10px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  font: inherit;
+}

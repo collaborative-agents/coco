@@ -6,6 +6,7 @@ import type {
 } from '../../../shared/agent-context';
 import { S } from './styles';
 import './ContextViewer.css';
+import ActionTooltip from './ActionTooltip';
 
 const colors = [
   '#668bd1',
@@ -150,20 +151,37 @@ export default function ContextViewer({
   const button = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button
-        ref={button}
-        type="button"
-        style={{
-          ...S.finishTaskBtn,
-          background: 'var(--coco-color-surface-subtle)',
-          color: 'var(--coco-color-text-secondary)',
-        }}
-        onClick={() => setOpen(true)}
-        title="Inspect the agent’s context"
-        aria-haspopup="dialog"
-      >
-        Context
-      </button>
+      <ActionTooltip label="View conversation context">
+        <button
+          ref={button}
+          type="button"
+          className="chat-composer-context"
+          aria-label="Context"
+          style={{
+            ...S.finishTaskBtn,
+            background: 'var(--coco-color-surface-subtle)',
+            color: 'var(--coco-color-text-secondary)',
+          }}
+          onClick={() => setOpen(true)}
+          aria-haspopup="dialog"
+        >
+          <svg
+            className="chat-composer-context-icon"
+            aria-hidden="true"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5" />
+          </svg>
+          <span className="chat-composer-action-label">Context</span>
+        </button>
+      </ActionTooltip>
       {open && (
         <ContextDialog
           key={sessionId}

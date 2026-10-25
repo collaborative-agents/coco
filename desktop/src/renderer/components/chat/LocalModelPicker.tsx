@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { TutorModelOption } from './types';
-import { S } from './styles';
+import './LocalModelPicker.css';
 
 export default function LocalModelPicker({
   value,
@@ -42,47 +42,50 @@ export default function LocalModelPicker({
   }, [refreshKey]);
   const selected = models.find((model) => model.id === value);
   if (nativeModel)
-    return <div style={S.composerModelRow}>Pi · {nativeModel}</div>;
+    return (
+      <div className="tutor-model-picker">
+        <span className="local-model-picker__native" title={nativeModel}>
+          Pi · {nativeModel}
+        </span>
+      </div>
+    );
   if (!models.length) return null;
   return (
-    <div style={S.composerModelRow} data-testid="composer-model-selector">
-      <label>
-        Tutor model{' '}
-        <select
-          aria-label="Tutor model"
-          style={S.modelSelect}
-          value={value}
-          title={
-            selected
-              ? `${selected.label}\nProvider: ${selected.provider}\nModel: ${selected.model}${selected.baseUrl ? `\nEndpoint: ${selected.baseUrl}` : ''}`
-              : 'Tutor model'
+    <div className="tutor-model-picker" data-testid="composer-model-selector">
+      <select
+        aria-label="Tutor model"
+        value={value}
+        title={
+          selected
+            ? `${selected.label}\nProvider: ${selected.provider}\nModel: ${selected.model}${selected.baseUrl ? `\nEndpoint: ${selected.baseUrl}` : ''}`
+            : 'Tutor model'
+        }
+        disabled={disabled || switching}
+        onChange={async (event) => {
+          setSwitching(true);
+          setError('');
+          try {
+            const result = (await window.electron?.ipcRenderer.invoke(
+              'set-chat-model',
+              { modelId: event.target.value },
+            )) as { success?: boolean; modelId?: string; error?: string };
+            if (!result?.success || !result.modelId)
+              throw new Error(result?.error ?? 'Could not change model.');
+            onChange(result.modelId);
+          } catch (err) {
+            setError(String(err));
+          } finally {
+            setSwitching(false);
           }
-          disabled={disabled || switching}
-          onChange={async (event) => {
-            setSwitching(true);
-            setError('');
-            try {
-              const result = (await window.electron?.ipcRenderer.invoke(
-                'set-chat-model',
-                { modelId: event.target.value },
-              )) as { success?: boolean; modelId?: string; error?: string };
-              if (!result?.success || !result.modelId)
-                throw new Error(result?.error ?? 'Could not change model.');
-              onChange(result.modelId);
-            } catch (err) {
-              setError(String(err));
-            } finally {
-              setSwitching(false);
-            }
-          }}
-        >
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.label}
-            </option>
-          ))}
-        </select>
-      </label>
+        }}
+      >
+        {models.map((model) => (
+          <option key={model.id} value={model.id}>
+            {model.label}
+          </option>
+        ))}
+      </select>
+      {switching && <span role="status">Switching model…</span>}
       {error && <span role="alert">{error}</span>}
     </div>
   );

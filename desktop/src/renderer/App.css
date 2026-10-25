@@ -3,8 +3,9 @@
  *        See https://github.com/webpack-contrib/sass-loader#imports
  */
 /* The avatar window is resized dynamically by main.ts to fit whatever is on
-   stage (just-pet vs. bubble vs. history panel). The stage is a transparent
-   flex row: bubble on the left, pet anchored bottom-right. */
+   stage (just the pet, or the history panel too). The stage is a transparent
+   flex row with the pet anchored bottom-right. The observation bubble is
+   drawn in its own window (see AvatarBubbleView.css). */
 .pet-stage {
   width: 100%;
   height: 100%;
@@ -22,7 +23,7 @@
   width: 150px;
   height: 150px;
   flex-shrink: 0;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 .pet-image {
@@ -32,7 +33,7 @@
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
   /* Animated packs use a shared canvas scale. Individual source images have
      different transparent bounds, so the awake sprite is normalized below. */
   transform: scale(0.9);
@@ -100,18 +101,23 @@
   transition: opacity 400ms ease, transform 400ms ease;
 }
 
+.observation-bubble-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .bubble-dismiss-btn {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  width: 18px;
-  height: 18px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--coco-color-text-subtle);
-  font-size: var(--coco-text-control);
-  line-height: 18px;
+  color: var(--coco-color-text-secondary);
+  font-size: 20px;
+  line-height: 24px;
   cursor: pointer;
   border-radius: 50%;
   -webkit-app-region: no-drag;
@@ -154,19 +160,26 @@
 .observation-bubble-label {
   font-size: var(--coco-text-caption);
   font-weight: 700;
+  line-height: 1.35;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--bubble-accent);
   margin-bottom: var(--coco-space-1);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 5px;
 }
 
+/* Centered on the label's first line, however many lines it wraps to. */
 .observation-bubble-label::before {
   content: '';
+  flex-shrink: 0;
   width: 6px;
   height: 6px;
+  margin-top: calc(0.675em - 3px);
   border-radius: 50%;
   background: var(--bubble-accent);
   display: inline-block;
@@ -271,24 +284,22 @@
   font-weight: 700;
 }
 
+/* Thumbs (on the action page), page bars, then the arrow at the far right.
+   The row is laid out in order so a wide arrow can't cover the bars. */
 .bubble-framework-pager {
-  position: relative;
   min-height: 30px;
   margin-top: 6px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  gap: var(--coco-space-2);
   flex-shrink: 0;
 }
 
 .bubble-framework-page-bars {
-  position: absolute;
-  left: 50%;
-  top: 50%;
   display: flex;
   align-items: center;
   gap: var(--coco-space-1);
-  transform: translate(-50%, -50%);
+  margin-right: auto;
 }
 
 .bubble-framework-page-bar {
@@ -418,52 +429,7 @@
 }
 
 .bubble-pager-rating {
-  margin-right: auto;
-}
-
-/* Tier-1 (progress/observing) "?" badge: a passive explainer in the top-right
-   corner. No action — hovering reveals a tooltip that points to the pet. */
-.bubble-help-badge {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  width: 16px;
-  height: 16px;
-  line-height: 16px;
-  text-align: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--coco-color-text-subtle);
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 50%;
-  cursor: help;
-  -webkit-app-region: no-drag;
-}
-.bubble-help-badge:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: var(--coco-color-text-secondary);
-}
-.bubble-help-tip {
-  display: none;
-  position: absolute;
-  top: 22px;
-  right: 0;
-  width: 184px;
-  padding: 7px 9px;
-  z-index: 20;
-  background: var(--coco-color-text);
-  color: var(--coco-color-surface-subtle);
-  font-size: var(--coco-text-caption);
-  font-weight: 400;
-  line-height: 1.4;
-  text-align: left;
-  white-space: normal;
-  border-radius: var(--coco-radius-control);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-}
-.bubble-help-badge:hover .bubble-help-tip,
-.bubble-help-badge:focus .bubble-help-tip {
-  display: block;
+  display: flex;
 }
 
 /* Tail pointing toward the pet (right side). Inherits parent's accent border. */
@@ -563,90 +529,13 @@
   outline: none;
 }
 
-.pet-actions-menu {
-  position: absolute;
-  right: 20px;
-  bottom: 143px;
-  z-index: 30;
-  width: 164px;
-  padding: 5px;
-  overflow: hidden;
-  border: 1px solid rgba(60, 60, 67, 0.16);
-  border-radius: var(--coco-radius-control);
-  background: rgba(247, 247, 249, 0.96);
-  color: var(--coco-color-text);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.16),
-    0 2px 7px rgba(0, 0, 0, 0.09);
-  font-family: var(--coco-font-family);
-  pointer-events: auto;
-  transform-origin: bottom right;
-  animation: pet-menu-in 170ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  backdrop-filter: blur(20px) saturate(155%);
-  -webkit-backdrop-filter: blur(20px) saturate(155%);
-  -webkit-app-region: no-drag;
-}
-
-.pet-actions-menu button {
-  width: 100%;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--coco-radius-control);
-  background: transparent;
-  color: inherit;
-  font: 500 var(--coco-text-control)/1 var(--coco-font-family);
-  text-align: left;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-
-.pet-actions-menu button:hover,
-.pet-actions-menu button:focus-visible {
-  background: rgba(118, 118, 128, 0.13);
-  outline: none;
-}
-
-.pet-actions-menu button.pet-training-action {
-  background: var(--coco-color-primary);
-  color: var(--coco-color-surface);
-  font-weight: 650;
-  box-shadow: 0 1px 3px rgba(var(--coco-color-primary-rgb), 0.24);
-}
-
-.pet-actions-menu button.pet-training-action:hover,
-.pet-actions-menu button.pet-training-action:focus-visible {
-  background: var(--coco-color-primary-hover);
-  box-shadow: 0 2px 5px rgba(var(--coco-color-primary-rgb), 0.3);
-}
-
-.pet-actions-menu svg {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  fill: none;
-  stroke: rgba(75, 85, 99, 0.82);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.pet-actions-menu .pet-training-action svg {
-  stroke: currentColor;
-}
-
-.pet-actions-divider {
-  height: 1px;
-  margin: var(--coco-space-1) 7px;
-  background: rgba(60, 60, 67, 0.14);
-}
-
-@keyframes pet-menu-in {
-  from { opacity: 0; transform: translateY(3px) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+/* While Coco is dragged the pointer is over it the whole time; keep the
+   hover-only trigger and hint out of the way until the drag ends. */
+.pet-container.is-dragging .pet-actions-trigger,
+.pet-container.is-dragging .pet-drag-hint {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -658,48 +547,16 @@
     background: rgba(255, 255, 255, 0.1);
     color: rgba(255, 255, 255, 0.96);
   }
-
-  .pet-actions-menu {
-    border-color: rgba(255, 255, 255, 0.13);
-    background: rgba(43, 43, 47, 0.95);
-    color: rgba(255, 255, 255, 0.92);
-    box-shadow:
-      0 12px 30px rgba(0, 0, 0, 0.36),
-      0 2px 7px rgba(0, 0, 0, 0.2);
-  }
-
-  .pet-actions-menu button:hover,
-  .pet-actions-menu button:focus-visible {
-    background: rgba(255, 255, 255, 0.09);
-  }
-
-  .pet-actions-menu button.pet-training-action {
-    background: var(--coco-color-accent);
-    color: var(--coco-color-surface);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
-  }
-
-  .pet-actions-menu button.pet-training-action:hover,
-  .pet-actions-menu button.pet-training-action:focus-visible {
-    background: var(--coco-color-primary);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-  }
-
-  .pet-actions-menu svg { stroke: rgba(255, 255, 255, 0.7); }
-  .pet-actions-menu .pet-training-action svg { stroke: currentColor; }
-  .pet-actions-divider { background: rgba(255, 255, 255, 0.12); }
 }
 
 /* ── Observation-history floating panel ─────────────────────────────────────
-   Appears to the left of the pet, sharing the same zone as the bubble.
-   Rendered above the bubble (later in DOM, z-index: 10).                   */
+   Drawn in its own window to the left of the pet, in the same zone as the
+   bubble (see AvatarHistoryView.css).                                       */
 
 .obs-history-panel {
   position: absolute;
   bottom: 24px;
   right: 168px;        /* flush left of the 150px pet + 12px padding + 6px gap */
-  /* main.ts grows the window to ~440×540 when this panel is visible, so the
-     252px width + 168px right offset fits without clipping. */
   width: 252px;
   max-height: 480px;
   display: flex;
@@ -1438,23 +1295,20 @@
   display: none;
 }
 
+/* Same order as the bubble's pager, so the arrow can't cover the bars. */
 .toast-framework-pager {
-  position: relative;
   min-height: 34px;
   padding: 2px 14px 10px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  gap: var(--coco-space-2);
 }
 
 .toast-framework-page-bars {
-  position: absolute;
-  left: 50%;
-  top: 50%;
   display: flex;
   align-items: center;
   gap: var(--coco-space-1);
-  transform: translate(-50%, -60%);
+  margin-right: auto;
 }
 
 .toast-framework-page-bar {
@@ -1598,7 +1452,7 @@
 
 .toast-footer-rating,
 .toast-pager-rating {
-  margin-right: auto;
+  display: flex;
 }
 
 .coco-rating--compact .coco-rating-btn {
@@ -1620,247 +1474,6 @@
 
 .toast-cancel:hover {
   background: var(--coco-color-surface-muted);
-}
-
-/* ── Session-setup floating window ────────────────────────────────────────── */
-
-.setup-root {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  background: transparent;
-  padding: 0;
-}
-
-.setup-card {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: var(--coco-space-3);
-  background: var(--coco-color-surface);
-  border-radius: var(--coco-radius-card);
-  box-shadow:
-    0 4px 6px rgba(0, 0, 0, 0.07),
-    0 12px 28px rgba(0, 0, 0, 0.14);
-  font-family: var(--coco-font-family);
-  padding: 14px var(--coco-space-4) var(--coco-space-4);
-  overflow: hidden;
-}
-
-.setup-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border-bottom: 1px solid #f1f3f4;
-  padding-bottom: 10px;
-}
-
-.setup-brand-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--coco-color-primary);
-  flex-shrink: 0;
-}
-
-.setup-brand-name {
-  font-size: var(--coco-text-caption);
-  font-weight: 600;
-  color: var(--coco-color-text-muted);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.setup-task-textarea {
-  font-size: var(--coco-text-body);
-  color: var(--coco-color-text);
-  background: var(--coco-color-surface-subtle);
-  border: 1px solid var(--coco-color-border);
-  border-radius: var(--coco-radius-control);
-  padding: 7px 10px;
-  line-height: var(--coco-leading-body);
-  resize: none;
-  outline: none;
-  font-family: inherit;
-  transition: border-color 0.12s ease;
-  width: 100%;
-}
-
-.setup-task-textarea:focus {
-  border-color: var(--coco-color-primary);
-  background: var(--coco-color-surface);
-  box-shadow: 0 0 0 3px rgba(var(--coco-color-primary-rgb), 0.1);
-}
-
-.setup-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--coco-space-1);
-}
-
-.setup-label {
-  font-size: var(--coco-text-caption);
-  font-weight: 600;
-  color: var(--coco-color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.setup-select {
-  font-size: var(--coco-text-control);
-  color: var(--coco-color-text);
-  background: var(--coco-color-surface-subtle);
-  border: 1px solid var(--coco-color-border);
-  border-radius: var(--coco-radius-control);
-  padding: 6px 10px;
-  cursor: pointer;
-  appearance: auto;
-  outline: none;
-  transition: border-color 0.12s ease;
-}
-
-.setup-select:focus {
-  border-color: var(--coco-color-primary);
-  box-shadow: 0 0 0 3px rgba(var(--coco-color-primary-rgb), 0.1);
-}
-
-.setup-label-row {
-  display: flex;
-  align-items: center;
-  gap: var(--coco-space-1);
-  margin-bottom: var(--coco-space-1);
-}
-
-.setup-label-row .setup-label {
-  margin-bottom: 0;
-}
-
-.setup-help-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.setup-help-btn {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  border: 1.5px solid var(--coco-color-text-subtle);
-  background: transparent;
-  color: var(--coco-color-text-muted);
-  font-size: var(--coco-text-control);
-  font-weight: 700;
-  line-height: 1;
-  cursor: default;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  outline: none;
-}
-
-.setup-help-tooltip {
-  pointer-events: none;
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 220px;
-  background: #171717;
-  color: var(--coco-color-surface);
-  font-size: var(--coco-text-caption);
-  font-weight: 400;
-  line-height: 1.4;
-  padding: var(--coco-space-2) 10px;
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  z-index: 100;
-  white-space: normal;
-}
-
-.setup-help-wrap:hover .setup-help-tooltip {
-  opacity: 1;
-}
-
-.setup-help-arrow {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 5px solid #171717;
-}
-
-.setup-custom-input {
-  margin-top: 6px;
-  font-size: var(--coco-text-control);
-  color: var(--coco-color-text);
-  background: var(--coco-color-surface-subtle);
-  border: 1px solid var(--coco-color-border);
-  border-radius: var(--coco-radius-control);
-  padding: 6px 10px;
-  outline: none;
-  transition: border-color 0.12s ease;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.setup-custom-input:focus {
-  border-color: var(--coco-color-primary);
-  box-shadow: 0 0 0 3px rgba(var(--coco-color-primary-rgb), 0.1);
-}
-
-.setup-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--coco-space-2);
-  margin-top: auto;
-}
-
-.setup-btn-cancel {
-  padding: 6px 14px;
-  font-size: var(--coco-text-control);
-  font-weight: 500;
-  border-radius: var(--coco-radius-control);
-  border: 1px solid var(--coco-color-border);
-  background: transparent;
-  color: var(--coco-color-text-muted);
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.setup-btn-cancel:hover {
-  background: var(--coco-color-surface-muted);
-}
-
-.setup-btn-confirm {
-  padding: 6px 14px;
-  font-size: var(--coco-text-control);
-  font-weight: 500;
-  border-radius: var(--coco-radius-control);
-  border: 1px solid var(--coco-color-primary);
-  background: var(--coco-color-primary);
-  color: var(--coco-color-surface);
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.setup-btn-confirm:hover {
-  background: var(--coco-color-primary-hover);
-}
-
-.setup-btn-confirm:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 /* ── Session-rating floating window ─────────────────────────────────────────

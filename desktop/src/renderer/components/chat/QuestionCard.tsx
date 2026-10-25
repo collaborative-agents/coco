@@ -4,9 +4,11 @@ import { TutorMessage } from './MessageContent';
 import './QuestionCard.css';
 
 export default function QuestionCard({
+  requestId,
   call,
   interactive,
 }: {
+  requestId?: string;
   call: TutorToolCall;
   interactive: boolean;
 }) {
@@ -63,6 +65,7 @@ export default function QuestionCard({
         'answer-agent-question',
         call.id,
         { answers, cancelled },
+        requestId,
       );
       setSubmitted(true);
     } catch (err) {

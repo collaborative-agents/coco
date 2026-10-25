@@ -35,3 +35,5 @@ jobs:
           uv run --locked pytest -q
           lib/external_api/external_api/litellm_test.py
           lib/proactive_tutor/proactive_tutor/agents/tutor_test.py
+          lib/proactive_tutor/proactive_tutor/tools
+          lib/proactive_tutor/proactive_tutor/pi_bridge_test.py

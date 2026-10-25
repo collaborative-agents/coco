@@ -1,0 +1,142 @@
+/* Coco's ••• menu, in its own transparent window next to the avatar (see
+   createAvatarMenuWindow in main.ts). The padding leaves room for the drop
+   shadow and matches AVATAR_MENU_PADDING there. */
+.avatar-menu-view {
+  display: inline-block;
+  padding: 24px;
+}
+
+.pet-actions-menu {
+  width: 164px;
+  padding: 5px;
+  overflow: hidden;
+  border: 1px solid rgba(60, 60, 67, 0.16);
+  border-radius: var(--coco-radius-control);
+  background: rgba(247, 247, 249, 0.96);
+  color: var(--coco-color-text);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.16),
+    0 2px 7px rgba(0, 0, 0, 0.09);
+  font-family: var(--coco-font-family);
+  pointer-events: auto;
+  transform-origin: bottom right;
+  animation: pet-menu-in 170ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  backdrop-filter: blur(20px) saturate(155%);
+  -webkit-backdrop-filter: blur(20px) saturate(155%);
+  -webkit-app-region: no-drag;
+}
+
+.pet-actions-menu button {
+  width: 100%;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--coco-radius-control);
+  background: transparent;
+  color: inherit;
+  font: 500 var(--coco-text-control)/1 var(--coco-font-family);
+  text-align: left;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.pet-actions-menu button:hover,
+.pet-actions-menu button:focus-visible {
+  background: rgba(118, 118, 128, 0.13);
+  outline: none;
+}
+
+.pet-actions-menu button.pet-training-action {
+  background: var(--coco-color-primary);
+  color: var(--coco-color-surface);
+  font-weight: 650;
+  box-shadow: 0 1px 3px rgba(var(--coco-color-primary-rgb), 0.24);
+}
+
+.pet-actions-menu button.pet-training-action:hover,
+.pet-actions-menu button.pet-training-action:focus-visible {
+  background: var(--coco-color-primary-hover);
+  box-shadow: 0 2px 5px rgba(var(--coco-color-primary-rgb), 0.3);
+}
+
+.pet-actions-menu svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  fill: none;
+  stroke: rgba(75, 85, 99, 0.82);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pet-actions-menu .pet-training-action svg {
+  stroke: currentColor;
+}
+
+.pet-actions-divider {
+  height: 1px;
+  margin: var(--coco-space-1) 7px;
+  background: rgba(60, 60, 67, 0.14);
+}
+
+/* No room above Coco: the menu drops down from the ••• trigger, over Coco.
+   Opaque and without a fade, so Coco never shows through it. */
+.pet-actions-menu.is-below {
+  background: rgb(247, 247, 249);
+  transform-origin: top right;
+  animation-name: pet-menu-in-below;
+}
+
+@keyframes pet-menu-in-below {
+  from { transform: translateY(-3px) scale(0.96); }
+  to { transform: translateY(0) scale(1); }
+}
+
+@keyframes pet-menu-in {
+  from { opacity: 0; transform: translateY(3px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .pet-actions-menu {
+    border-color: rgba(255, 255, 255, 0.13);
+    background: rgba(43, 43, 47, 0.95);
+    color: rgba(255, 255, 255, 0.92);
+    box-shadow:
+      0 12px 30px rgba(0, 0, 0, 0.36),
+      0 2px 7px rgba(0, 0, 0, 0.2);
+  }
+
+  .pet-actions-menu button:hover,
+  .pet-actions-menu button:focus-visible {
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  .pet-actions-menu button.pet-training-action {
+    background: var(--coco-color-accent);
+    color: var(--coco-color-surface);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
+  }
+
+  .pet-actions-menu button.pet-training-action:hover,
+  .pet-actions-menu button.pet-training-action:focus-visible {
+    background: var(--coco-color-primary);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+
+  .pet-actions-menu svg { stroke: rgba(255, 255, 255, 0.7); }
+  .pet-actions-menu .pet-training-action svg { stroke: currentColor; }
+  .pet-actions-divider { background: rgba(255, 255, 255, 0.12); }
+  .pet-actions-menu.is-below { background: rgb(43, 43, 47); }
+}
+
+/* Between openings the menu stays laid out (so its size is known) but is not
+   drawn, so a reopened window never shows the previous frame. */
+.pet-actions-menu.is-closed {
+  visibility: hidden;
+  animation: none;
+}

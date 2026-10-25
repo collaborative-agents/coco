@@ -292,3 +292,95 @@ test('native provider sends inference directly with its own credentials', async 
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('two sessions overlap with independent routing and cancellation', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coco-pi-parallel-'));
+  let firstStarted;
+  const started = new Promise((resolve) => {
+    firstStarted = resolve;
+  });
+  const received = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    const id = req.headers['x-coco-session'];
+    received.push({ id, messages: body.messages });
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    if (id === 'a') {
+      res.write(': waiting\n\n');
+      firstStarted();
+      return;
+    }
+    res.end(
+      `data: ${JSON.stringify({
+        id: 'b-reply',
+        object: 'chat.completion.chunk',
+        created: 1,
+        model: 'coco',
+        choices: [
+          {
+            index: 0,
+            delta: { content: 'B completed independently.' },
+            finish_reason: 'stop',
+          },
+        ],
+      })}\n\ndata: [DONE]\n\n`,
+    );
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const context = {
+    model: 'fake',
+    instructions: 'Be helpful.',
+    profile: '',
+    history: [],
+    tools: [],
+  };
+  let a;
+  let b;
+  try {
+    const tutorUrl = `http://127.0.0.1:${server.address().port}`;
+    const aDir = path.join(directory, 'a');
+    const bDir = path.join(directory, 'b');
+    fs.mkdirSync(aDir);
+    fs.mkdirSync(bDir);
+    a = await createRuntime({
+      cwd: aDir,
+      sessionId: 'a',
+      dataDir: directory,
+      tutorUrl,
+      token: 'token',
+      context,
+    });
+    b = await createRuntime({
+      cwd: bDir,
+      sessionId: 'b',
+      dataDir: directory,
+      tutorUrl,
+      token: 'token',
+      context,
+    });
+    const first = a
+      .prompt('Task A private context', [], context)
+      .catch(() => {});
+    await started;
+    await b.prompt('Task B private context', [], context);
+    assert.deepEqual(
+      received.map((entry) => entry.id),
+      ['a', 'b'],
+    );
+    assert.ok(
+      !JSON.stringify(received[1].messages).includes('Task A private context'),
+    );
+    await a.abort();
+    await first;
+    await b.prompt('Continue B', [], context);
+    assert.equal(received.at(-1).id, 'b');
+  } finally {
+    a?.dispose();
+    b?.dispose();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

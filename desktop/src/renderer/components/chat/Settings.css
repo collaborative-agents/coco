@@ -81,3 +81,31 @@
   color: var(--coco-color-danger);
   font-size: var(--coco-text-secondary);
 }
+
+.local-settings {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--coco-space-4);
+}
+.local-settings > h2 {
+  font-size: var(--coco-text-section);
+  font-weight: 700;
+}
+.local-settings > p,
+.pi-provider-settings > p {
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-secondary);
+  line-height: var(--coco-leading-body);
+}
+.local-settings > .coco-button { align-self: flex-start; }
+.pi-provider-settings.ob-model-card {
+  gap: var(--coco-space-3);
+  padding: var(--coco-space-4);
+  border-color: var(--coco-color-border);
+  border-radius: var(--coco-radius-card);
+  background: var(--coco-color-surface-subtle);
+}
+.pi-provider-settings h3 { font-size: var(--coco-text-body); }
+.pi-provider-settings > .coco-button { align-self: flex-start; }
+.pi-provider-settings [role='alert'] { color: var(--coco-color-danger); }

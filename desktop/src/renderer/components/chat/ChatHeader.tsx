@@ -13,7 +13,6 @@ interface Props {
 
 export default function ChatHeader({
   chatEnabled,
-  sending,
   startingNewSession,
   handleNewSession,
   expanded,
@@ -31,13 +30,11 @@ export default function ChatHeader({
           type="button"
           style={{
             ...S.newSessionBtn,
-            ...(sending || startingNewSession || !chatEnabled
-              ? S.sendBtnDisabled
-              : {}),
+            ...(startingNewSession || !chatEnabled ? S.sendBtnDisabled : {}),
           }}
           title="Start a new session"
           aria-label="Start a new session"
-          disabled={sending || startingNewSession || !chatEnabled}
+          disabled={startingNewSession || !chatEnabled}
           onClick={handleNewSession}
         >
           <HeaderActionIcon name="new" />

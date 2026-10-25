@@ -84,6 +84,7 @@ export async function createRuntime({
       baseUrl: `${tutorUrl}/agent/v1`,
       api: 'openai-completions',
       apiKey: token,
+      headers: { 'X-Coco-Session': sessionId },
       models: [
         {
           id: 'coco',
@@ -118,6 +119,7 @@ export async function createRuntime({
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
+          'X-Coco-Session': sessionId,
         },
         body: JSON.stringify({ name: definition.name, arguments: args }),
         signal,

@@ -436,7 +436,7 @@ describe('deferred suggestion context', () => {
 
     fireEvent.click(screen.getByText('Launch checklist'));
     expect(
-      screen.getByText('Start by naming the launch owner.'),
+      await screen.findByText('Start by naming the launch owner.'),
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Ask Coco/)).toBeInTheDocument();
     expect(
@@ -928,4 +928,84 @@ describe('deferred suggestion context', () => {
       imageDataUrl: annotatedImageDataUrl,
     });
   });
+  it('keeps concurrent manual runs available during sleep and ignores background completion', async () => {
+    const listeners = new Map<string, (data: any) => void>();
+    const pending = new Map<string, (result: unknown) => void>();
+    const invoke = jest.fn(async (channel: string, payload?: any) => {
+      if (channel === 'start-new-chat-session') {
+        listeners.get('session-init')?.({ sessionId: 'b', preserveDraft: true });
+        return { success: true };
+      }
+      if (channel === 'send-chat-message') return new Promise((resolve) => pending.set(payload.sessionId, resolve));
+      return null;
+    });
+    (window as any).electron = { ipcRenderer: {
+      on: jest.fn((channel: string, callback: (data: any) => void) => {
+        listeners.set(channel, callback); return jest.fn();
+      }), sendMessage: jest.fn(), invoke,
+    } };
+    render(<SessionChatView />);
+    await act(async () => listeners.get('session-init')?.({ sessionId: 'a' }));
+    fireEvent.change(screen.getByPlaceholderText(/Ask Coco/), { target: { value: 'Task A' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(pending.has('a')).toBe(true));
+    await act(async () => listeners.get('coco-sleep-mode-changed')?.({ sleeping: true }));
+    expect(screen.getByRole('button', { name: 'Start a new session' })).toBeEnabled();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start a new session' })));
+    fireEvent.change(screen.getByPlaceholderText(/Ask Coco/), { target: { value: 'Task B' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(pending.has('b')).toBe(true));
+    const requests = invoke.mock.calls.filter(([channel]) => channel === 'send-chat-message').map(([, payload]) => payload);
+    fireEvent.change(screen.getByPlaceholderText(/Ask Coco/), { target: { value: 'Follow-up' } });
+    await act(async () => {
+      listeners.get('chat-stream-event')?.({ sessionId: 'a', requestId: requests[0].requestId, type: 'done', guidance: 'A finished' });
+      pending.get('a')?.({ streamed: true });
+    });
+    expect(screen.queryByText('A finished')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await act(async () => {
+      listeners.get('chat-stream-event')?.({ sessionId: 'b', requestId: requests[1].requestId, type: 'done', guidance: 'B finished' });
+      pending.get('b')?.({ streamed: true });
+    });
+    expect(screen.getByText('B finished')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+
+  it('carries pending suggestion context, screenshots, and text into a new conversation', async () => {
+    const listeners = new Map<string, (data: any) => void>();
+    const invoke = jest.fn(async (channel: string, _payload?: unknown) => {
+      if (channel === 'start-new-chat-session') {
+        listeners.get('session-init')?.({ sessionId: 'new', preserveDraft: true });
+        return { success: true };
+      }
+      if (channel === 'send-chat-message') return { guidance: 'Done.' };
+      return null;
+    });
+    (window as any).electron = { ipcRenderer: {
+      on: jest.fn((channel: string, callback: (data: any) => void) => {
+        listeners.set(channel, callback); return jest.fn();
+      }), sendMessage: jest.fn(), invoke,
+    } };
+    render(<SessionChatView />);
+    await act(async () => listeners.get('session-init')?.({ sessionId: 'old' }));
+    const imageDataUrl = 'data:image/png;base64,cHJldmlldw==';
+    act(() => {
+      listeners.get('help-request')?.({ rawObservation: 'Compare the latest draft.', screenObservation: 'The draft is open in the editor.', phrase: 'Review draft', deferUntilUserMessage: true });
+      listeners.get('hotkey-capture')?.({ imageDataUrl });
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Ask Coco/), { target: { value: 'Use @"/tmp/report.csv"' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start a new session' })));
+    expect(screen.getByPlaceholderText(/Ask Coco/)).toHaveValue('Use @"/tmp/report.csv"');
+    expect(screen.getByText('Suggestion context attached: Review draft')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview attached image 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('send-chat-message', expect.objectContaining({
+      userText: expect.stringContaining('Compare the latest draft.'),
+      images: [imageDataUrl], hotkeyImages: [imageDataUrl],
+      screenContext: 'The draft is open in the editor.',
+    })));
+  });
+
+
 });

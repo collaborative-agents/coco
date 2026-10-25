@@ -42,3 +42,9 @@ export const SECONDARY_CHAT_PROMPTS = [
   'Review my recent work activity to find one part that AI could handle.',
   'Suggest something useful to learn.',
 ];
+
+export const SUGGESTION_FOLLOW_UPS = [
+  'Walk me through this on my screen',
+  'Do the first step with me',
+  'Why does this help?',
+];

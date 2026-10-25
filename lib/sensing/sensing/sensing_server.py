@@ -189,6 +189,7 @@ class SessionConfigRequest(BaseModel):
     # explicit user changes and may switch back to the default scenario; ordinary
     # session-start updates are guarded against stale duplicate default writes.
     config_source: str = "session_start"
+    preserve_tutor_context: bool = False
     # Optional user-customized OBSERVER prompt (the "Custom" onboarding mode).
     # When set, it overrides the scenario observer prompt (written to a new file
     # in the user-data dir). The judge/tutor still use the base `scenario`.
@@ -500,7 +501,9 @@ async def configure_session(request: SessionConfigRequest):
                     status="ok", total_actions=await streamer.get_total_stored_actions()
                 )
 
-            await streamer.configure_session()
+            await streamer.configure_session(
+                preserve_tutor_context=request.preserve_tutor_context
+            )
             # Apply the user-chosen idle timeout to the screen instance
             if screen is not None:
                 screen.set_idle_timeout(request.struggle_detection_seconds)
@@ -948,29 +951,33 @@ async def main_async(
         # into pre-session observations (task-suggestion notifications etc.).
         # Retry with backoff so a slow tutor-server startup doesn't leave stale
         # state silently in place.
-        _reset_delays = [0.5, 1.0, 2.0, 4.0]
-        for _attempt, _delay in enumerate(_reset_delays, start=1):
-            try:
-                async with __import__("httpx").AsyncClient(timeout=10.0) as _client:
-                    _resp = await _client.post(f"{tutor_url.rstrip('/')}/context/reset")
-                    _resp.raise_for_status()
-                logger.info(
-                    "Tutor server session state reset at sensing server startup"
-                )
-                break
-            except Exception as _e:
-                if _attempt < len(_reset_delays):
-                    logger.warning(
-                        f"Could not reset tutor server at startup (attempt {_attempt}): {_e}. "
-                        f"Retrying in {_delay}s..."
+        # Desktop sleep restarts sensing independently; preserve its live tutor.
+        if _os.environ.get("COCO_RESET_TUTOR_ON_START", "1") != "0":
+            _reset_delays = [0.5, 1.0, 2.0, 4.0]
+            for _attempt, _delay in enumerate(_reset_delays, start=1):
+                try:
+                    async with __import__("httpx").AsyncClient(timeout=10.0) as _client:
+                        _resp = await _client.post(
+                            f"{tutor_url.rstrip('/')}/context/reset"
+                        )
+                        _resp.raise_for_status()
+                    logger.info(
+                        "Tutor server session state reset at sensing server startup"
                     )
-                    await __import__("asyncio").sleep(_delay)
-                else:
-                    logger.error(
-                        f"Could not reset tutor server after {len(_reset_delays)} attempts: {_e}. "
-                        "Stale session state (curriculum_state, conversation_history) may persist "
-                        "until the first session is registered via POST /session."
-                    )
+                    break
+                except Exception as _e:
+                    if _attempt < len(_reset_delays):
+                        logger.warning(
+                            f"Could not reset tutor server at startup (attempt {_attempt}): {_e}. "
+                            f"Retrying in {_delay}s..."
+                        )
+                        await __import__("asyncio").sleep(_delay)
+                    else:
+                        logger.error(
+                            f"Could not reset tutor server after {len(_reset_delays)} attempts: {_e}. "
+                            "Stale session state (curriculum_state, conversation_history) may persist "
+                            "until the first session is registered via POST /session."
+                        )
 
     # Initialize streamer — processing concerns live entirely in the processors
     streamer = Streamer(

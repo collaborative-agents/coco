@@ -24,6 +24,7 @@ export interface ChatMessage {
   role: 'user' | 'tutor';
   text: string;
   images?: string[];
+  screenContext?: string;
   isError?: boolean;
   /** Stable id for tutor messages so thumbs feedback can reference them. */
   id?: string;

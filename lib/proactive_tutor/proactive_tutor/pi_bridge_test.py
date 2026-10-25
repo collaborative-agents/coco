@@ -132,3 +132,51 @@ def test_completion_failure_is_reported_in_stream(bridge, monkeypatch):
     response = client.post("/agent/v1/chat/completions", json={"messages": []})
     assert "Provider unavailable" in response.text
     assert '"error"' in response.text
+
+
+def test_execution_sessions_isolate_model_task_history_and_turns(bridge):
+    client, foreground, _ = bridge
+    client.headers["Authorization"] = "Bearer secret"
+    for session_id in ("a", "b"):
+        result = client.post(
+            f"/agent/sessions/{session_id}",
+            json={
+                "model": f"model-{session_id}",
+                "problem": f"task-{session_id}",
+                "messages": [{"role": "user", "text": f"history-{session_id}"}],
+            },
+        )
+        assert result.status_code == 200
+        assert result.json()["model"] == f"model-{session_id}"
+        assert f"task-{session_id}" in result.json()["profile"]
+    client.post(
+        "/agent/turn",
+        headers={"X-Coco-Session": "a"},
+        json={"user_text": "only A", "text": "A finished"},
+    )
+    a = client.get("/agent/context", headers={"X-Coco-Session": "a"}).json()
+    b = client.get("/agent/context", headers={"X-Coco-Session": "b"}).json()
+    assert any("A finished" in message for message in a["history"])
+    assert not any("A finished" in message for message in b["history"])
+    assert not any("history-a" in message for message in b["history"])
+    assert foreground.conversation_history == ["Earlier suggestion"]
+    assert (
+        client.get("/agent/context", headers={"X-Coco-Session": "unknown"}).status_code
+        == 404
+    )
+
+
+def test_only_foreground_execution_updates_coaching_history(bridge):
+    client, foreground, _ = bridge
+    client.headers["Authorization"] = "Bearer secret"
+    for session_id in ("a", "b"):
+        client.post(f"/agent/sessions/{session_id}", json={"model": "fake"})
+    client.post("/agent/active/b")
+    for session_id in ("a", "b"):
+        client.post(
+            "/agent/turn",
+            headers={"X-Coco-Session": session_id},
+            json={"user_text": session_id, "text": f"reply-{session_id}"},
+        )
+    assert any("reply-b" in message for message in foreground.conversation_history)
+    assert not any("reply-a" in message for message in foreground.conversation_history)

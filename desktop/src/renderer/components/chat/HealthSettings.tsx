@@ -39,7 +39,7 @@ export default function HealthSettings({
       </h2>
       <div style={S.helpText}>
         {cocoSleeping
-          ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+          ? 'Coco is asleep. Screen sensing is paused. Manual chats and agent runs remain available.'
           : 'Checks services and models with short test requests, including a test image.'}
       </div>
       {systemPermissionHealth.missing.length > 0 && (

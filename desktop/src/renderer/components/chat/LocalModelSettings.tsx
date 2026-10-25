@@ -1,3 +1,4 @@
+import './Settings.css';
 import { useState } from 'react';
 import ModelsStep from '../onboarding/ModelsStep';
 import useModelSetup from '../onboarding/useModelSetup';
@@ -7,7 +8,7 @@ export default function LocalModelSettings() {
   const models = useModelSetup();
   const [saved, setSaved] = useState(false);
   return (
-    <section className="workspace-settings-section">
+    <section className="workspace-settings-section local-settings">
       <h2>Models &amp; providers</h2>
       <p>
         Choose your sensing and agent models. Saving restarts the local
@@ -15,6 +16,7 @@ export default function LocalModelSettings() {
       </p>
       <ModelsStep {...models.modelProps} />
       <button
+        className="coco-button coco-button--primary"
         type="button"
         disabled={models.savingModels}
         onClick={async () => {

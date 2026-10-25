@@ -1,0 +1,45 @@
+/* Coco's Activity panel, in its own transparent window beside the avatar (see
+   createAvatarHistoryWindow in main.ts). The padding leaves room for the drop
+   shadow and matches AVATAR_HISTORY_PADDING there. The view is laid out at its
+   natural size, independent of the window's current size. */
+.avatar-history-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  padding: 24px;
+}
+
+.avatar-history-card {
+  position: relative;
+  display: flex;
+}
+
+/* Points from the panel's edge at Coco, like the bubble's tail. */
+.avatar-history-tail {
+  position: absolute;
+  z-index: 11;
+  width: 12px;
+  height: 12px;
+  background: var(--coco-color-surface);
+  border-top: 1px solid rgba(99, 102, 241, 0.18);
+  border-right: 1px solid rgba(99, 102, 241, 0.18);
+  border-top-right-radius: 2px;
+  pointer-events: none;
+}
+
+.avatar-history-tail.is-left {
+  right: -6px;
+  transform: rotate(45deg);
+}
+
+.avatar-history-tail.is-right {
+  left: -6px;
+  transform: rotate(-135deg);
+}
+
+.avatar-history-view .obs-history-panel {
+  position: relative;
+  right: auto;
+  bottom: auto;
+}

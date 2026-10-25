@@ -8,6 +8,16 @@ import PiEventTranslator from './pi-events';
 import { retryOperation } from './retry-operation';
 import type { TutorStreamEvent } from './tutor-stream';
 
+export interface SessionContextInput {
+  model: string;
+  scenario: string;
+  problem: string;
+  user_name: string;
+  ai_tools: string[];
+  memory: string;
+  messages: { role: string; text: string }[];
+}
+
 interface AgentContext {
   model: string;
   instructions: string;
@@ -76,6 +86,7 @@ export default class PiHarness {
     text: string;
     images: string[];
     audioData?: string;
+    context: SessionContextInput;
     emit: (event: TutorStreamEvent) => void;
   }) {
     if (this.active)
@@ -95,6 +106,7 @@ export default class PiHarness {
         headers: {
           Authorization: `Bearer ${options.token}`,
           'Content-Type': 'application/json',
+          'X-Coco-Session': options.sessionId,
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.any([
@@ -111,8 +123,41 @@ export default class PiHarness {
       return response.json();
     };
     try {
+      const connection = readPiConnection();
+      let localContext = false;
+      const prepare = async () => {
+        const value = await request(
+          `sessions/${encodeURIComponent(options.sessionId)}`,
+          options.context,
+          connection.mode === 'native' ? 1500 : undefined,
+        );
+        localContext = true;
+        return value;
+      };
+      const context: AgentContext =
+        connection.mode === 'native'
+          ? await prepare().catch((error) => {
+              if (active.stopped) throw error;
+              return {
+                instructions: '',
+                profile: `Current task: ${options.context.problem}\nUser memory: ${options.context.memory}`,
+                history: options.context.messages.map(
+                  (m) => `${m.role}: ${m.text}`,
+                ),
+                tools: [],
+              };
+            })
+          : await retryOperation(prepare, {
+              shouldContinue: () => !active.stopped,
+            });
+      if (connection.mode === 'native')
+        context.model = `${connection.provider}/${connection.model}`;
       let userText = options.text;
       if (options.audioData) {
+        if (!localContext)
+          throw new Error(
+            'Voice transcription needs the local Coco service. Type a message or configure Coco models.',
+          );
         const transcription = await request('transcribe', {
           audio_data: options.audioData,
         });
@@ -122,29 +167,6 @@ export default class PiHarness {
       const cwd = fs.realpathSync(options.directory);
       if (!fs.statSync(cwd).isDirectory())
         throw new Error('Choose an existing working folder.');
-      const connection = readPiConnection();
-      let localContext = connection.mode !== 'native';
-      const context: AgentContext =
-        connection.mode === 'native'
-          ? await request('context', undefined, 1500)
-              .then((value) => {
-                localContext = true;
-                return value;
-              })
-              .catch((error) => {
-                if (active.stopped) throw error;
-                return {
-                  instructions: '',
-                  profile: '',
-                  history: [],
-                  tools: [],
-                };
-              })
-          : await retryOperation(() => request('context'), {
-              shouldContinue: () => !active.stopped,
-            });
-      if (connection.mode === 'native')
-        context.model = `${connection.provider}/${connection.model}`;
       const key = JSON.stringify([
         options.sessionId,
         cwd,
@@ -224,6 +246,14 @@ export default class PiHarness {
       }
     } finally {
       clearTimeout(timer);
+      await fetch(
+        `${options.tutorUrl}/agent/sessions/${encodeURIComponent(options.sessionId)}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${options.token}` },
+          signal: AbortSignal.timeout(1500),
+        },
+      ).catch(() => {});
       unsubscribe?.();
       if (this.active === active) this.active = undefined;
     }

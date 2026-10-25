@@ -33,6 +33,8 @@ interface NotificationPayload {
   suggestion?: InstantSuggestion;
   adjustable?: boolean;
   scenario?: string;
+  /** Pre-session invite; acting on its suggestion starts the session. */
+  sessionInvite?: boolean;
 }
 
 function suggestionToolLabel(suggestion: InstantSuggestion): string {
@@ -192,11 +194,10 @@ export function NotificationBubble({
   onDismiss,
   onHoverChange,
   suggestion,
-  onSuggestionAction,
   onChatAboutSuggestion,
+  onRunSuggestion,
   suggestionRating,
   onRateSuggestion,
-  copyConfirmed,
   adjustable,
   expanded,
   onToggleExpanded,
@@ -214,12 +215,10 @@ export function NotificationBubble({
   onDismiss?: () => void;
   onHoverChange?: (hovered: boolean) => void;
   suggestion?: InstantSuggestion;
-  onSuggestionAction?: (toolId: string | null) => void;
   onChatAboutSuggestion?: () => void;
   onRunSuggestion?: () => void;
   suggestionRating?: 'up' | 'down' | null;
   onRateSuggestion?: (rating: 'up' | 'down') => void;
-  copyConfirmed?: boolean;
   adjustable?: boolean;
   expanded?: boolean;
   onToggleExpanded?: () => void;
@@ -228,14 +227,16 @@ export function NotificationBubble({
   onFrameworkPageChange?: (page: 0 | 1) => void;
   rawObservation?: string;
 }) {
-  const isPrompt =
-    notifType === 'session-start-prompt' || notifType === 'session-end-prompt';
+  const isSessionInvite = notifType === 'session-start-prompt';
+  const isPrompt = isSessionInvite || notifType === 'session-end-prompt';
   const isSuggestionPreview =
     notifType === 'proactive-suggestion' && suggestion != null;
   const isRevealedSuggestion =
     notifType === 'instant-suggestion' && suggestion != null;
   const isFrameworkPager = showFrameworkIntro && suggestion != null;
   const isFrameworkOverview = isFrameworkPager && frameworkPage === 0;
+  const runWithCoco =
+    suggestion?.kind === 'delegate' && Boolean(onRunSuggestion);
   const explanation = suggestion
     ? buildSuggestionExplanation(suggestion)
     : null;
@@ -320,6 +321,12 @@ export function NotificationBubble({
             <span>{isFrameworkPager ? 'Try this' : 'Suggestion'}</span>
           </div>
         )}
+        {isSessionInvite && (
+          <div className="toast-suggestion-label">
+            <span aria-hidden="true">✦</span>
+            <span>Support available</span>
+          </div>
+        )}
         {/* eslint-disable-next-line no-nested-ternary */}
         {isFrameworkOverview && explanation ? (
           <div className="toast-framework-overview">
@@ -375,46 +382,23 @@ export function NotificationBubble({
             </button>
           )}
         </div>
-      ) : isRevealedSuggestion && suggestion.kind === 'delegate' ? (
-        <div className="toast-footer toast-tool-actions">
+      ) : isRevealedSuggestion ? (
+        <div className="toast-footer">
           {footerRating}
           <button
             type="button"
             className="toast-action toast-chat-action"
-            onClick={onChatAboutSuggestion}
+            onClick={runWithCoco ? onRunSuggestion : onChatAboutSuggestion}
           >
-            Chat with Coco
-          </button>
-          <button
-            type="button"
-            className="toast-action"
-            onClick={() => onSuggestionAction?.(null)}
-            disabled={copyConfirmed}
-            autoFocus
-          >
-            {copyConfirmed ? 'Copied ✓' : 'Copy prompt'}
+            {runWithCoco ? 'Run with Coco' : 'Chat with Coco'}
           </button>
         </div>
       ) : (
         actionLabel && (
           <div className="toast-footer">
             {footerRating}
-            {isRevealedSuggestion && (
-              <button
-                type="button"
-                className="toast-action toast-chat-action"
-                onClick={onChatAboutSuggestion}
-              >
-                Chat with Coco
-              </button>
-            )}
             <button type="button" className="toast-action" onClick={onAction}>
-              {/* eslint-disable-next-line no-nested-ternary */}
-              {isRevealedSuggestion
-                ? copyConfirmed
-                  ? 'Copied ✓'
-                  : 'Copy prompt'
-                : `${actionLabel} →`}
+              {`${actionLabel} →`}
             </button>
           </div>
         )
@@ -454,7 +438,6 @@ export default function NotificationView() {
   const [suggestionRating, setSuggestionRating] = useState<
     'up' | 'down' | null
   >(null);
-  const [copyConfirmed, setCopyConfirmed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [frameworkPage, setFrameworkPage] = useState<0 | 1>(0);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -497,10 +480,10 @@ export default function NotificationView() {
           adjustable: incoming?.adjustable === true,
           scenario: incoming?.scenario,
           notificationId: incoming?.notificationId,
+          sessionInvite: incoming?.sessionInvite === true,
         });
         setLoadingSuggestion(false);
         setSuggestionRating(null);
-        setCopyConfirmed(false);
         setExpanded(false);
         setFrameworkPage(0);
         setVisible(true);
@@ -540,6 +523,14 @@ export default function NotificationView() {
   if (!visible || !payload) return null;
 
   const ipc = window.electron?.ipcRenderer;
+  const reportResponse = (outcome: 'accepted' | 'dismissed') => {
+    if (!payload.notificationId) return;
+    ipc?.sendMessage('notification-response', {
+      notificationId: payload.notificationId,
+      outcome,
+    });
+  };
+
   const rateInstantSuggestion = (rating: 'up' | 'down') => {
     if (
       suggestionRating === rating ||
@@ -570,11 +561,20 @@ export default function NotificationView() {
     if (payload.notifType === 'proactive-suggestion' && loadingSuggestion) {
       return;
     }
+    // An invite's preview is accepted only by chatting about it; reading it
+    // and closing with "Got it" declines the session.
+    if (payload.sessionInvite && payload.notifType === 'instant-suggestion') {
+      reportResponse('dismissed');
+    } else if (
+      !payload.sessionInvite ||
+      payload.notifType === 'session-start-prompt'
+    ) {
+      reportResponse('accepted');
+    }
     if (payload.notifType === 'session-start-prompt') {
-      // Ask main to show the mini session-setup window.
-      ipc?.sendMessage('show-session-setup');
+      // Main starts the session, opens the chat, and destroys this window.
+      ipc?.sendMessage('session-invite-accepted');
       setVisible(false);
-      // Don't close — main will destroy this window after showing setup.
       return;
     }
     if (payload.notifType === 'session-end-prompt') {
@@ -612,6 +612,11 @@ export default function NotificationView() {
           notifType: 'instant-suggestion',
           suggestion,
         });
+        if (payload.sessionInvite) {
+          ipc?.sendMessage('session-invite-revealed', {
+            inviteId: payload.notificationId,
+          });
+        }
         const engagedAt = Math.floor(Date.now() / 1000);
         ipc?.sendMessage('activity-support-engaged', {
           observationId: payload.observationId,
@@ -638,7 +643,7 @@ export default function NotificationView() {
       return;
     }
     if (payload.notifType === 'instant-suggestion') {
-      // "Got it" on coaching text: accepted (reported above) and closed. It is
+      // "Got it" on coaching text: reported above and closed. It is
       // not a rating; the thumbs record whether it helped.
       setVisible(false);
       window.close();
@@ -651,6 +656,7 @@ export default function NotificationView() {
   };
 
   const handleCancel = () => {
+    reportResponse('dismissed');
     setVisible(false);
     window.close();
   };
@@ -679,6 +685,7 @@ export default function NotificationView() {
   };
 
   const handleDismiss = () => {
+    reportResponse('dismissed');
     recordUnengagedDismissal();
     setVisible(false);
     window.close();
@@ -696,22 +703,9 @@ export default function NotificationView() {
     });
   };
 
-  const handleSuggestionAction = (toolId: string | null) => {
-    ipc?.sendMessage('suggestion-action', {
-      toolId,
-      copyText: payload.suggestion?.copyText,
-    });
-    if (toolId === null) {
-      rateInstantSuggestion('up');
-      setCopyConfirmed(true);
-      return;
-    }
-    setVisible(false);
-    window.close();
-  };
-
   const handleChatAboutSuggestion = (execute = false) => {
     if (!payload.suggestion) return;
+    reportResponse('accepted');
     ipc?.sendMessage('chat-about-suggestion', {
       execute,
       observationId: payload.observationId,
@@ -719,6 +713,7 @@ export default function NotificationView() {
       rawObservation: payload.rawObservation,
       suggestion: payload.suggestion,
       surface: 'notification',
+      sessionInvite: payload.sessionInvite,
     });
     setVisible(false);
     window.close();
@@ -738,12 +733,10 @@ export default function NotificationView() {
         onDismiss={handleDismiss}
         onHoverChange={handleHoverChange}
         suggestion={payload.suggestion}
-        onSuggestionAction={handleSuggestionAction}
         onChatAboutSuggestion={() => handleChatAboutSuggestion()}
         onRunSuggestion={() => handleChatAboutSuggestion(true)}
         suggestionRating={suggestionRating}
         onRateSuggestion={rateInstantSuggestion}
-        copyConfirmed={copyConfirmed}
         adjustable={payload.adjustable}
         expanded={expanded}
         onToggleExpanded={handleToggleExpanded}

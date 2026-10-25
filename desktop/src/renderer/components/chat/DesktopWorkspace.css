@@ -155,6 +155,12 @@
   margin: 0;
   font-size: var(--coco-text-title);
 }
+.workspace-settings-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
 .workspace-settings-section {
   min-width: 0;
   padding: 0 0 14px;

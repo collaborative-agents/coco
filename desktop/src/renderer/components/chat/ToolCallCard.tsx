@@ -6,16 +6,24 @@ import QuestionCard from './QuestionCard';
 import { S } from './styles';
 
 export function ToolCallCard({
+  requestId,
   call,
   interactive = false,
   grouped = false,
 }: {
+  requestId?: string;
   call: TutorToolCall;
   interactive?: boolean;
   grouped?: boolean;
 }) {
   if (call.name === 'ask_user_question')
-    return <QuestionCard call={call} interactive={interactive} />;
+    return (
+      <QuestionCard
+        call={call}
+        interactive={interactive}
+        requestId={requestId}
+      />
+    );
   const rawDetails = (
     <div className="tool-activity-details">
       <div className="tool-activity-caption">Full tool call · JSON</div>

@@ -40,7 +40,7 @@ test('waits for explicit submission and supports a free-text answer after choice
   const { rerender } = render(
     <QuestionCard call={{ ...call, result: undefined }} interactive />,
   );
-  rerender(<QuestionCard call={call} interactive />);
+  rerender(<QuestionCard call={call} interactive requestId="run-1" />);
   const submit = screen.getByRole('button', {
     name: 'Submit answers',
   }) as HTMLButtonElement;
@@ -55,10 +55,15 @@ test('waits for explicit submission and supports a free-text answer after choice
   ).toBe(false);
   fireEvent.click(submit);
   await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith('answer-agent-question', 'q1', {
-      answers: [{ selected: [], text: 'My own style' }],
-      cancelled: false,
-    }),
+    expect(invoke).toHaveBeenCalledWith(
+      'answer-agent-question',
+      'q1',
+      {
+        answers: [{ selected: [], text: 'My own style' }],
+        cancelled: false,
+      },
+      'run-1',
+    ),
   );
   await waitFor(() =>
     expect(screen.queryByRole('button', { name: 'Submit answers' })).toBeNull(),

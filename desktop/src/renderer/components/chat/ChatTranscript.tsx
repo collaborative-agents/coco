@@ -4,10 +4,15 @@ import type { SavedConversation, ChatMessage } from './types';
 import { TutorMessage, SuggestionMessage } from './MessageContent';
 import AgentActivityList from './AgentActivityList';
 import ChatMetrics from './ChatMetrics';
+import { ScreenContextTag } from './ScreenContext';
 import RatingButtons from '../RatingButtons';
 import { messageCopyKey } from './message-format';
 import { chatSuggestionText } from '../../../shared/chat-suggestion';
-import { SCREEN_TASK_PROMPT, SECONDARY_CHAT_PROMPTS } from './constants';
+import {
+  SCREEN_TASK_PROMPT,
+  SECONDARY_CHAT_PROMPTS,
+  SUGGESTION_FOLLOW_UPS,
+} from './constants';
 
 interface Props {
   reviewing: SavedConversation | null;
@@ -91,7 +96,11 @@ export default function ChatTranscript({
         ))}
       {visibleMessages.map((m, i) => (
         // eslint-disable-next-line react/no-array-index-key
-        <div key={i} style={m.role === 'user' ? S.userRow : S.tutorRow}>
+        <div
+          key={i}
+          data-request-id={m.requestId}
+          style={m.role === 'user' ? S.userRow : S.tutorRow}
+        >
           {m.role === 'user' ? (
             <>
               <div style={S.userBubble}>
@@ -118,6 +127,7 @@ export default function ChatTranscript({
                   </div>
                 )}
               </div>
+              {m.screenContext && <ScreenContextTag text={m.screenContext} />}
               {m.text.trim() && (
                 <div style={S.userMessageActions}>
                   <button
@@ -146,6 +156,7 @@ export default function ChatTranscript({
                 {(m.activity && m.activity.length > 0) ||
                 (!m.activity && m.toolCalls?.length) ? (
                   <AgentActivityList
+                    requestId={m.requestId}
                     activity={
                       m.activity ??
                       m.toolCalls?.map((call) => ({
@@ -176,6 +187,28 @@ export default function ChatTranscript({
                     runDisabled={sending || startingNewSession}
                   />
                 )}
+                {m.suggestion &&
+                  !m.folded &&
+                  !reviewing &&
+                  !sending &&
+                  i === visibleMessages.length - 1 && (
+                    <div style={S.followUpRow} aria-label="Follow-up questions">
+                      {SUGGESTION_FOLLOW_UPS.map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          style={{
+                            ...S.followUpBtn,
+                            ...(startingNewSession ? S.sendBtnDisabled : {}),
+                          }}
+                          disabled={startingNewSession}
+                          onClick={() => void sendMessage(prompt, [])}
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 {!m.suggestion && (m.text || m.isError) && (
                   <div style={m.isError ? S.errBubble : S.tutorBubble}>
                     {m.isError ? (

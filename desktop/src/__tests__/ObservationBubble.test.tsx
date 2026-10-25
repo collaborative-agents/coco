@@ -42,7 +42,7 @@ describe('ObservationBubble 4D suggestion pages', () => {
       screen.queryByText(/Stage: You are updating payroll/),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: 'Copy prompt' }),
+      screen.queryByRole('button', { name: 'Chat with Coco' }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Show me how →' }));
@@ -50,7 +50,9 @@ describe('ObservationBubble 4D suggestion pages', () => {
     expect(
       screen.getByText(/Stage: You are updating payroll/),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Copy prompt' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Chat with Coco' }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Open Claude Cowork' }),
     ).not.toBeInTheDocument();
@@ -87,13 +89,36 @@ describe('ObservationBubble controls', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Dismiss' }))
-      .toBeInTheDocument();
-    expect(screen.queryByLabelText('Why no suggestion?'))
-      .not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Why no suggestion?'),
+    ).not.toBeInTheDocument();
   });
 
-  it('keeps the help badge on a passive bubble without a suggestion', () => {
+  it('offers View reply and dismiss on an execution completion reminder', () => {
+    const onViewConversation = jest.fn();
+    const onDismiss = jest.fn();
+    render(
+      <ObservationBubble
+        bubble={{
+          status: 'progress',
+          phrase: '',
+          fadingOut: false,
+          tutorMessage: 'Your reply is ready.',
+          agentReply: { sessionId: 'session', requestId: 'request' },
+        }}
+        onViewConversation={onViewConversation}
+        onDismiss={onDismiss}
+      />,
+    );
+    expect(screen.getByText('Reply ready')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View reply →' }));
+    expect(onViewConversation).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show a help badge or tooltip on passive bubbles', () => {
     render(
       <ObservationBubble
         bubble={{
@@ -104,7 +129,10 @@ describe('ObservationBubble controls', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Why no suggestion?')).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Why no suggestion?'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 
   it('allows an accidental suggestion rating to be corrected', () => {
@@ -146,9 +174,12 @@ describe('ObservationBubble controls', () => {
     );
   });
 
-  it('offers only copying and chatting as suggestion actions', () => {
+  it('offers only Run with Coco for delegation', () => {
+    const onRun = jest.fn();
     render(
       <ObservationBubble
+        onRunSuggestion={onRun}
+        onChatAboutSuggestion={jest.fn()}
         bubble={{
           status: 'inefficient',
           phrase: 'Delegate this task',
@@ -170,10 +201,12 @@ describe('ObservationBubble controls', () => {
     const actions = screen
       .getAllByRole('button')
       .map((button) => button.textContent);
-    expect(actions).toContain('Copy prompt');
-    expect(actions).toContain('Chat with Coco');
-    expect(actions).not.toContain('Run with Coco');
+    expect(actions).toContain('Run with Coco');
+    expect(actions).not.toContain('Chat with Coco');
+    expect(actions).not.toContain('Copy prompt');
     expect(actions).not.toContain('Open ChatGPT');
+    fireEvent.click(screen.getByRole('button', { name: 'Run with Coco' }));
+    expect(onRun).toHaveBeenCalledTimes(1);
     expect(actions).not.toContain('Open Claude');
     expect(actions).not.toContain('Open Coco Chat');
   });

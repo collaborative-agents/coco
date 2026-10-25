@@ -4,6 +4,7 @@ export type WorkspaceIconName =
   | 'settings'
   | 'new'
   | 'expand'
+  | 'pin'
   | 'collapse'
   | 'close';
 
@@ -20,6 +21,7 @@ export default function WorkspaceIcon({ name }: { name: WorkspaceIconName }) {
     ),
     settings: <path d="M4 8h16M4 16h16" />,
     new: <path d="M12 5v14M5 12h14" />,
+    pin: <path d="M8 3h8l-1 7 4 4v2H5v-2l4-4-1-7ZM12 16v6" />,
     expand: (
       <>
         <rect x="3" y="4" width="18" height="16" rx="2" />

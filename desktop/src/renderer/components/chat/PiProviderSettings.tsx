@@ -1,3 +1,4 @@
+import './Settings.css';
 import { useEffect, useState } from 'react';
 
 const invoke = (action: string, payload?: unknown) =>
@@ -62,7 +63,7 @@ export default function PiProviderSettings() {
   const prompt = status.flow?.prompt;
   const busy = pending || status.flow?.busy;
   return (
-    <section className="ob-model-card">
+    <section className="ob-model-card pi-provider-settings">
       <h3>Agent connection</h3>
       <p>
         Active:{' '}
@@ -77,70 +78,79 @@ export default function PiProviderSettings() {
         below. Pi’s file and command tools work independently; Coco’s screen and
         memory tools are available when its local service is running.
       </p>
-      <label>
+      <label className="coco-field">
         Pi provider
-        <select
-          className="ob-custom-input"
-          value={provider}
-          disabled={busy}
-          onChange={(e) => {
-            setProvider(e.target.value);
-            setModel('');
-          }}
-        >
-          {status.providers.map((p: any) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.connected ? ' — connected' : ''}
-            </option>
-          ))}
-        </select>
+        <span className="coco-select-wrap">
+          <select
+            className="coco-select"
+            value={provider}
+            disabled={busy}
+            onChange={(e) => {
+              setProvider(e.target.value);
+              setModel('');
+            }}
+          >
+            {status.providers.map((p: any) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.connected ? ' — connected' : ''}
+              </option>
+            ))}
+          </select>
+        </span>
       </label>
-      {selected?.oauth && (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => act('login', { provider, type: 'oauth' })}
-        >
-          {selected.oauth}
-        </button>
-      )}
-      {selected?.apiKey && (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => act('login', { provider, type: 'api_key' })}
-        >
-          Enter API key
-        </button>
-      )}
-      {selected?.connected && (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => act('logout', { provider })}
-        >
-          Sign out
-        </button>
-      )}
+      <div className="coco-actions">
+        {selected?.oauth && (
+          <button
+            className="coco-button"
+            type="button"
+            disabled={busy}
+            onClick={() => act('login', { provider, type: 'oauth' })}
+          >
+            {selected.oauth}
+          </button>
+        )}
+        {selected?.apiKey && (
+          <button
+            className="coco-button"
+            type="button"
+            disabled={busy}
+            onClick={() => act('login', { provider, type: 'api_key' })}
+          >
+            Enter API key
+          </button>
+        )}
+        {selected?.connected && (
+          <button
+            className="coco-button"
+            type="button"
+            disabled={busy}
+            onClick={() => act('logout', { provider })}
+          >
+            Sign out
+          </button>
+        )}
+      </div>
       {status.flow && <p role="status">{status.flow.message}</p>}
       {prompt && (
         <div>
-          <label>
+          <label className="coco-field">
             {prompt.message}
             {prompt.type === 'select' ? (
-              <select
-                className="ob-custom-input"
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-              >
-                <option value="">Choose…</option>
-                {prompt.options.map((o: any) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
+              <span className="coco-select-wrap">
+                <select
+                  className="coco-select"
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                >
+                  <option value="">Choose…</option>
+                  {prompt.options.map((o: any) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </span>
             ) : (
               <input
                 className="ob-custom-input"
@@ -157,6 +167,7 @@ export default function PiProviderSettings() {
             )}
           </label>
           <button
+            className="coco-button"
             type="button"
             disabled={pending || !answer}
             onClick={() => {
@@ -169,34 +180,42 @@ export default function PiProviderSettings() {
         </div>
       )}
       {status.flow?.busy && (
-        <button type="button" onClick={() => act('cancel')}>
+        <button
+          className="coco-button"
+          type="button"
+          onClick={() => act('cancel')}
+        >
           Cancel login
         </button>
       )}
       <button
+        className="coco-button"
         type="button"
         disabled={busy}
         onClick={() => act('refresh', { provider })}
       >
         Refresh models
       </button>
-      <label>
+      <label className="coco-field">
         Pi model
-        <select
-          className="ob-custom-input"
-          value={model}
-          disabled={busy}
-          onChange={(e) => setModel(e.target.value)}
-        >
-          <option value="">Choose a model…</option>
-          {models.map((m: any) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
+        <span className="coco-select-wrap">
+          <select
+            className="coco-select"
+            value={model}
+            disabled={busy}
+            onChange={(e) => setModel(e.target.value)}
+          >
+            <option value="">Choose a model…</option>
+            {models.map((m: any) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </span>
       </label>
       <button
+        className="coco-button coco-button--primary"
         type="button"
         disabled={busy || !model}
         onClick={() => act('save', { mode: 'native', provider, model })}
@@ -204,6 +223,7 @@ export default function PiProviderSettings() {
         Use native Pi
       </button>{' '}
       <button
+        className="coco-button"
         type="button"
         disabled={busy}
         onClick={() => act('save', { mode: 'coco' })}
