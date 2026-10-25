@@ -4,6 +4,7 @@ FastAPI server exposing TutorSystem over HTTP.
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import chz
@@ -467,7 +468,7 @@ async def suggestion_instant(req: InstantSuggestionRequest):
             req.task_label,
             req.scenario,
             req.ai_tools,
-            configured_model_name,
+            os.environ.get("COCO_INSTANT_SUGGESTION_MODEL") or configured_model_name,
             tutor.memory if tutor is not None else TutorSystem._load_memory(),
             req.image_paths,
         )

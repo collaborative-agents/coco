@@ -342,6 +342,11 @@ class TutorAgent:
                 {
                     "role": "assistant",
                     "content": response_text or None,
+                    **(
+                        {"pi_message": response.pi_message}
+                        if response.pi_message
+                        else {}
+                    ),
                     "tool_calls": [
                         call.model_dump(exclude_none=True)
                         for call in response.tool_calls

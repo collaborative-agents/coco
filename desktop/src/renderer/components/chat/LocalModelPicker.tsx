@@ -14,6 +14,7 @@ export default function LocalModelPicker({
   refreshKey: boolean;
 }) {
   const [models, setModels] = useState<TutorModelOption[]>([]);
+  const [defaultModelId, setDefaultModelId] = useState('');
   const [nativeModel, setNativeModel] = useState('');
   const [error, setError] = useState('');
   const [switching, setSwitching] = useState(false);
@@ -33,15 +34,20 @@ export default function LocalModelPicker({
     window.electron?.ipcRenderer
       .invoke('get-model-configuration')
       .then((config: any) => {
-        if (active) setModels(config?.tutors ?? []);
+        if (active) {
+          setModels(config?.tutors ?? []);
+          setDefaultModelId(config?.defaultTutorId ?? '');
+        }
       })
       .catch(() => {});
     return () => {
       active = false;
     };
   }, [refreshKey]);
-  const selected = models.find((model) => model.id === value);
-  if (nativeModel)
+  const selected = models.find(
+    (model) => model.id === (value || defaultModelId),
+  );
+  if (nativeModel && !models.length)
     return (
       <div className="tutor-model-picker">
         <span className="local-model-picker__native" title={nativeModel}>
@@ -54,7 +60,7 @@ export default function LocalModelPicker({
     <div className="tutor-model-picker" data-testid="composer-model-selector">
       <select
         aria-label="Tutor model"
-        value={value}
+        value={value || defaultModelId}
         title={
           selected
             ? `${selected.label}\nProvider: ${selected.provider}\nModel: ${selected.model}${selected.baseUrl ? `\nEndpoint: ${selected.baseUrl}` : ''}`

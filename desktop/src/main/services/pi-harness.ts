@@ -123,7 +123,11 @@ export default class PiHarness {
       return response.json();
     };
     try {
-      const connection = readPiConnection();
+      const selectedModel = options.context.model;
+      const [, provider, ...modelParts] = selectedModel.split('/');
+      const connection = selectedModel.startsWith('pi/')
+        ? { mode: 'native' as const, provider, model: modelParts.join('/') }
+        : selectedModel ? { mode: 'coco' as const } : readPiConnection();
       let localContext = false;
       const prepare = async () => {
         const value = await request(

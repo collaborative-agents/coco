@@ -5,7 +5,7 @@ import configureMainWindow, { resizeMainWindow } from './main-window-behavior';
 import AgentProgressReminder from './services/agent-progress-reminder';
 import isChatOutOfView from './services/chat-visibility';
 import type { ChatSuggestion } from '../shared/chat-suggestion';
-import { readPiConnection, registerPiProvider } from './services/pi-provider';
+import { readPiConnection, registerPiProvider, startPiInferenceBridge, validatePiModel } from './services/pi-provider';
 /* eslint global-require: off, no-console: off, promise/always-return: off */
 
 /**
@@ -313,7 +313,7 @@ const flushHotkeyCaptures = () => {
 // and lets us defer startup until the user has chosen their models.
 let observerStarted = false;
 // isFloatMode: chat panel is in narrow side-panel mode (vs. expanded width).
-let isFloatMode = true;
+let isFloatMode = false;
 // Set true once the app is genuinely quitting so window 'close' handlers stop
 // intercepting (they otherwise hide-instead-of-close, which would block quit).
 let isQuitting = false;
@@ -1341,6 +1341,7 @@ const showChatPanel = () => {
 
   const disp = screen.getDisplayMatching(chatWindow.getBounds());
   resizeMainWindow(chatWindow, isFloatMode ? CHAT_PANEL_W : CHAT_EXPANDED_W, disp.workArea);
+  chatWindow.webContents.send('float-window-state', { isFloat: isFloatMode });
   chatWindow.show();
   chatWindow.focus();
   // The avatar stays visible alongside the chat panel — never hide it, so the
@@ -1784,7 +1785,6 @@ const openChatForSession = (
   seed?: ChatSeed,
 ) => {
   const alreadyLoaded = chatWindow && !chatWindow.isDestroyed();
-  isFloatMode = true;
   showChatPanel();
   if (!chatWindow) return;
 
@@ -2134,6 +2134,7 @@ async function testModelConnection(
       return { success: false, error: 'Invalid model test request.' };
     }
     try {
+      if (connection.provider === 'pi') await validatePiModel(connection.model, role === 'sensing');
       const prepared = prepareModelConnectionTest(
         connection,
         role,
@@ -2330,8 +2331,12 @@ ipcMain.handle(
     try {
       if (agentRuns.busy) throw new Error('Stop the current run before changing models.');
       await agentRuns.dispose();
+      for (const connection of [input.sensing, ...input.tutors]) {
+        if (connection.provider === 'pi') await validatePiModel(connection.model, connection === input.sensing);
+      }
       const config = saveModelConfiguration(input);
       modelHealthCache.clear();
+      suggestionCache.clear();
       const runtime = resolveModelRuntime();
       if (observerStarted && runtime) {
         const defaultTutorModel = defaultTutor(runtime.config);
@@ -2375,6 +2380,8 @@ ipcMain.handle(
             `[Models] Services restarted but active session restoration failed: ${(err as Error).message}`,
           );
         }
+      } else if (isOnboardingComplete()) {
+        startObserver();
       }
       return { success: true, config };
     } catch (err) {
@@ -2852,12 +2859,19 @@ ipcMain.on(
   },
 );
 
+// The renderer requests the current mode after installing its listener, so
+// a newly mounted or reloaded view cannot miss the initial window state.
+ipcMain.removeAllListeners('get-float-window-state');
+ipcMain.on('get-float-window-state', (event) => {
+  if (event.sender !== chatWindow?.webContents) return;
+  event.sender.send('float-window-state', { isFloat: isFloatMode });
+});
+
 ipcMain.removeAllListeners('toggle-float-window');
 ipcMain.on('toggle-float-window', (_event, options?: { expanded?: boolean }) => {
   if (!chatWindow || chatWindow.isDestroyed()) return;
   isFloatMode = typeof options?.expanded === 'boolean' ? !options.expanded : !isFloatMode;
   showChatPanel();
-  chatWindow.webContents.send('float-window-state', { isFloat: isFloatMode });
 });
 
 ipcMain.on('shell-show-item-in-finder', (event, fullPath) => {
@@ -3417,7 +3431,9 @@ async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurn
   const modelId = sessionId === currentSessionId ? currentTutorModelId : conversation?.tutorModelId;
   const selected = config?.tutors.find(item => item.id === modelId) ?? (config ? defaultTutor(config) : null);
   const profile = readProfile();
-  const context = { model: selected?.model || process.env.TUTOR_MODEL || '', scenario: profile.scenario,
+  const legacyPi = !config ? readPiConnection() : null;
+  const selectedModel = selected?.model || (legacyPi?.mode === 'native' ? `pi/${legacyPi.provider}/${legacyPi.model}` : process.env.TUTOR_MODEL || '');
+  const context = { model: selectedModel, scenario: profile.scenario,
     problem: conversation?.problem || (sessionId === currentSessionId ? pendingTaskLabel : '') || '', user_name: profile.userName, ai_tools: profile.aiTools,
     memory: readLocalMemory(), messages: restorableMessages(conversation?.messages ?? [], input.displayText ?? input.userText) };
   const progressReminder = new AgentProgressReminder(text => {
@@ -4191,6 +4207,7 @@ const startObserver = () => {
 app
   .whenReady()
   .then(async () => {
+    await startPiInferenceBridge();
     await configureLocalServicePorts();
     initializeWakeWordService();
     powerMonitor.on('suspend', () => {

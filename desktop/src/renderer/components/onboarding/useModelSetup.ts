@@ -23,6 +23,7 @@ export default function useModelSetup() {
     },
   ]);
   const [defaultTutorId, setDefaultTutorId] = useState('tutor-1');
+  const [instantSuggestionModelId, setInstantSuggestionModelId] = useState('');
   const [connectionTests, setConnectionTests] = useState<
     Record<string, ConnectionTestStatus>
   >({});
@@ -73,11 +74,30 @@ export default function useModelSetup() {
   };
 
   useEffect(() => {
-
     window.electron?.ipcRenderer
       .invoke('get-model-configuration')
-      .then((config: any) => {
-        if (!config?.sensing || !Array.isArray(config.tutors)) return undefined;
+      .then(async (config: any) => {
+        if (!config?.sensing || !Array.isArray(config.tutors)) {
+          const status = await window.electron?.ipcRenderer.invoke(
+            'pi-provider',
+            'status',
+          );
+          if (status?.connection?.mode === 'native') {
+            const { provider, model } = status.connection;
+            setTutorModels([
+              {
+                id: 'legacy-pi-chat',
+                label: `Pi · ${model}`,
+                provider: 'pi',
+                model: `pi/${provider}/${model}`,
+                apiKey: '',
+                baseUrl: '',
+              },
+            ]);
+            setDefaultTutorId('legacy-pi-chat');
+          }
+          return undefined;
+        }
         setSensingModel({
           ...config.sensing,
           model: String(config.sensing.model).replace(
@@ -96,6 +116,7 @@ export default function useModelSetup() {
           })),
         );
         setDefaultTutorId(config.defaultTutorId);
+        setInstantSuggestionModelId(config.instantSuggestionModelId || '');
         return undefined;
       })
       .catch(() => {});
@@ -141,6 +162,7 @@ export default function useModelSetup() {
             baseUrl: item.baseUrl,
           })),
           defaultTutorId,
+          instantSuggestionModelId: instantSuggestionModelId || undefined,
           credentials,
         },
       );
@@ -171,9 +193,11 @@ export default function useModelSetup() {
       setTutors: setTutorModels,
       defaultTutorId,
       setDefaultTutorId,
+      instantSuggestionModelId,
+      setInstantSuggestionModelId,
       error: modelError,
       testStatuses: connectionTests,
       onTest: testModelConnection,
-      },
+    },
   };
 }

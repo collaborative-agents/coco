@@ -4,10 +4,13 @@ import { useEffect, useState } from 'react';
 const invoke = (action: string, payload?: unknown) =>
   window.electron.ipcRenderer.invoke('pi-provider', action, payload);
 
-export default function PiProviderSettings() {
+export default function PiProviderSettings({
+  onStatus,
+}: {
+  onStatus?: (status: any) => void;
+}) {
   const [status, setStatus] = useState<any>(null);
   const [provider, setProvider] = useState('');
-  const [model, setModel] = useState('');
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
@@ -28,7 +31,7 @@ export default function PiProviderSettings() {
               next.providers.find((p: any) => p.oauth)?.id ||
               '',
           );
-          setModel((current) => current || next.connection.model || '');
+          onStatus?.(next);
         }
       } catch {
         if (mounted) setError('Could not load Pi providers.');
@@ -41,7 +44,7 @@ export default function PiProviderSettings() {
       clearTimeout(timer);
       void invoke('cancel').catch(() => {});
     };
-  }, []);
+  }, [onStatus]);
   useEffect(() => {
     setAnswer('');
   }, [status?.flow?.prompt?.id]);
@@ -50,7 +53,9 @@ export default function PiProviderSettings() {
     setPending(true);
     try {
       await invoke(action, payload);
-      setStatus(await invoke('status'));
+      const next = await invoke('status');
+      setStatus(next);
+      onStatus?.(next);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -59,24 +64,14 @@ export default function PiProviderSettings() {
   };
   if (!status) return <p role="status">{error || 'Loading Pi providers…'}</p>;
   const selected = status.providers.find((p: any) => p.id === provider);
-  const models = status.models.filter((m: any) => m.provider === provider);
   const prompt = status.flow?.prompt;
   const busy = pending || status.flow?.busy;
   return (
     <section className="ob-model-card pi-provider-settings">
-      <h3>Agent connection</h3>
+      <h3>Connected providers</h3>
       <p>
-        Active:{' '}
-        {status.connection.mode === 'native'
-          ? `Pi · ${status.connection.provider} / ${status.connection.model}`
-          : 'Coco local model bridge'}
-      </p>
-      <p>
-        Pi connects directly to your provider using its native login. Native
-        chat works without Python services. Screen sensing, proactive
-        suggestions, and voice transcription need the Coco model configuration
-        below. Pi’s file and command tools work independently; Coco’s screen and
-        memory tools are available when its local service is running.
+        Sign in once through Pi, then choose its models for chat, sensing, or
+        instant suggestions below. Credentials stay with Pi.
       </p>
       <label className="coco-field">
         Pi provider
@@ -87,7 +82,6 @@ export default function PiProviderSettings() {
             disabled={busy}
             onChange={(e) => {
               setProvider(e.target.value);
-              setModel('');
             }}
           >
             {status.providers.map((p: any) => (
@@ -195,40 +189,6 @@ export default function PiProviderSettings() {
         onClick={() => act('refresh', { provider })}
       >
         Refresh models
-      </button>
-      <label className="coco-field">
-        Pi model
-        <span className="coco-select-wrap">
-          <select
-            className="coco-select"
-            value={model}
-            disabled={busy}
-            onChange={(e) => setModel(e.target.value)}
-          >
-            <option value="">Choose a model…</option>
-            {models.map((m: any) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        </span>
-      </label>
-      <button
-        className="coco-button coco-button--primary"
-        type="button"
-        disabled={busy || !model}
-        onClick={() => act('save', { mode: 'native', provider, model })}
-      >
-        Use native Pi
-      </button>{' '}
-      <button
-        className="coco-button"
-        type="button"
-        disabled={busy}
-        onClick={() => act('save', { mode: 'coco' })}
-      >
-        Use Coco bridge
       </button>
       {error && <p role="alert">{error}</p>}
     </section>

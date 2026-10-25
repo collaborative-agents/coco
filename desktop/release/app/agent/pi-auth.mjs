@@ -29,7 +29,7 @@ export function createAuthController(runtime, openExternal) {
         })),
         models: runtime
           .getModels()
-          .map((m) => ({ provider: m.provider, id: m.id, name: m.name })),
+          .map((m) => ({ provider: m.provider, id: m.id, name: m.name, input: m.input })),
         flow: flow
           ? { busy: flow.busy, message: flow.message, prompt: flow.prompt }
           : null,

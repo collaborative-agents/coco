@@ -114,3 +114,18 @@ it('keeps a chat draft while navigating through local settings', async () => {
   expect(draft).toHaveValue('Continue my project');
   await act(async () => {});
 });
+
+it('synchronizes the expand control with the window mode before the first click', async () => {
+  render(<SessionChatView />);
+  expect(sendMessage).toHaveBeenCalledWith('get-float-window-state');
+  act(() => listeners.get('float-window-state')?.({ isFloat: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+  expect(sendMessage).toHaveBeenLastCalledWith('toggle-float-window', {
+    expanded: true,
+  });
+  act(() => listeners.get('float-window-state')?.({ isFloat: false }));
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse' }));
+  expect(sendMessage).toHaveBeenLastCalledWith('toggle-float-window', {
+    expanded: false,
+  });
+});

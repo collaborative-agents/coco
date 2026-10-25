@@ -24,38 +24,70 @@ export function readPiConnection(): PiConnection {
   }
   return { mode: 'coco' };
 }
+let client: Promise<any> | undefined;
+export function getPiClient(): Promise<any> {
+  client ??= (async () => {
+    const file = path.join(
+      app.getAppPath(),
+      ...(app.isPackaged ? [] : ['release', 'app']),
+      'agent',
+      'pi-auth.mjs',
+    );
+    const mod = await import(
+      /* webpackIgnore: true */ pathToFileURL(file).href
+    );
+    const runtime = await mod.createModelRuntime(app.getPath('userData'));
+    return {
+      runtime,
+      auth: mod.createAuthController(runtime, (url: string) =>
+        shell.openExternal(url),
+      ),
+    };
+  })().catch((error) => {
+    client = undefined;
+    throw error;
+  });
+  return client;
+}
+
+export async function startPiInferenceBridge(): Promise<void> {
+  const file = path.join(
+    app.getAppPath(),
+    ...(app.isPackaged ? [] : ['release', 'app']),
+    'agent',
+    'pi-inference.mjs',
+  );
+  const mod = await import(/* webpackIgnore: true */ pathToFileURL(file).href);
+  const bridge = await mod.startInferenceBridge({
+    token: process.env.COCO_PI_BRIDGE_TOKEN,
+    getRuntime: async () => (await getPiClient()).runtime,
+  });
+  process.env.COCO_PI_INFERENCE_URL = bridge.url;
+  app.once('will-quit', () => bridge.close());
+}
+
+export async function validatePiModel(
+  modelId: string,
+  vision = false,
+): Promise<void> {
+  const [, provider, ...parts] = modelId.split('/');
+  const { runtime } = await getPiClient();
+  const model = runtime.getModel(provider, parts.join('/'));
+  if (!model || !runtime.hasConfiguredAuth(provider))
+    throw new Error(
+      'Connect the Pi provider and select an available model first.',
+    );
+  if (vision && !model.input.includes('image'))
+    throw new Error('Choose a vision-capable Pi model for sensing.');
+}
+
 export function registerPiProvider(
   busy: () => boolean,
   reset: () => Promise<void>,
 ) {
-  let client: Promise<any> | undefined;
   let owner: number | undefined;
-  const getClient = () => {
-    client ??= (async () => {
-      const file = path.join(
-        app.getAppPath(),
-        ...(app.isPackaged ? [] : ['release', 'app']),
-        'agent',
-        'pi-auth.mjs',
-      );
-      const mod = await import(
-        /* webpackIgnore: true */ pathToFileURL(file).href
-      );
-      const runtime = await mod.createModelRuntime(app.getPath('userData'));
-      return {
-        runtime,
-        auth: mod.createAuthController(runtime, (url: string) =>
-          shell.openExternal(url),
-        ),
-      };
-    })().catch((error) => {
-      client = undefined;
-      throw error;
-    });
-    return client;
-  };
   ipcMain.handle('pi-provider', async (event, action, payload = {}) => {
-    const { runtime, auth } = await getClient();
+    const { runtime, auth } = await getPiClient();
     if (action === 'status')
       return { ...(await auth.status()), connection: readPiConnection() };
     if (action === 'answer' || action === 'cancel') {
@@ -92,31 +124,6 @@ export function registerPiProvider(
     } else if (action === 'logout') {
       await auth.logout(payload.provider);
       await reset();
-    } else if (action === 'save') {
-      if (payload.mode !== 'coco' && payload.mode !== 'native')
-        throw new Error('Invalid connection mode.');
-      if (
-        payload.mode === 'native' &&
-        (!runtime.getModel(payload.provider, payload.model) ||
-          !(await runtime.checkAuth(payload.provider)))
-      )
-        throw new Error(
-          'Connect the provider and select an available model first.',
-        );
-      await reset();
-      fs.writeFileSync(
-        configPath(),
-        JSON.stringify(
-          payload.mode === 'coco'
-            ? { mode: 'coco' }
-            : {
-                mode: 'native',
-                provider: payload.provider,
-                model: payload.model,
-              },
-        ),
-        { mode: 0o600 },
-      );
     } else throw new Error('Unknown provider action.');
   });
   app.on('before-quit', () => {

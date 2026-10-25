@@ -86,6 +86,7 @@ export type Channels =
   | 'set-user-id'
   | 'toggle-float-window'
   | 'float-window-state'
+  | 'get-float-window-state'
   | 'get-chat-content-zoom-factor'
   | 'chat-content-zoom-factor'
   | 'open-chat-settings'

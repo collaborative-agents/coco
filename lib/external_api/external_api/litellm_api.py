@@ -43,6 +43,8 @@ class LiteLLMMessage(BaseModel):
     content: list[ContentBlock] = Field(default_factory=list)
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
+    # Preserve provider signatures across Pi tool-result round trips.
+    pi_message: dict[str, Any] | None = Field(default=None, exclude=True)
 
 
 def get_litellm_completion(

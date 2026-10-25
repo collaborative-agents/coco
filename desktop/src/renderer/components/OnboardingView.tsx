@@ -104,8 +104,7 @@ export default function OnboardingView() {
       return;
     }
     if (currentKey === 'models') {
-      const pi = await window.electron?.ipcRenderer.invoke('pi-provider', 'status');
-      if (pi?.connection?.mode !== 'native' && !(await models.saveModels())) return;
+      if (!(await models.saveModels())) return;
       if (modelsOnly) {
         window.electron?.ipcRenderer.sendMessage(
           'model-configuration-complete',

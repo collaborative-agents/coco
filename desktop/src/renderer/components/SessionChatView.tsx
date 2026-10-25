@@ -72,6 +72,7 @@ export default function SessionChatView() {
         setExpanded(!(payload as { isFloat: boolean }).isFloat);
       },
     );
+    window.electron?.ipcRenderer.sendMessage('get-float-window-state');
     return () => {
       if (typeof cleanup === 'function') cleanup();
     };
