@@ -53,11 +53,12 @@
   padding: var(--coco-space-8);
   text-align: center;
 }
-.ob-welcome > img {
-  width: 140px;
-  height: 140px;
+.ob-welcome-icon {
+  display: block;
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
   object-fit: contain;
-  margin-bottom: 20px;
 }
 .ob-welcome h2 {
   font-size: var(--coco-text-section);
@@ -69,22 +70,90 @@
   line-height: var(--coco-leading-body);
 }
 .ob-welcome-features {
-  margin-top: 26px;
   display: grid;
   gap: 20px;
   text-align: left;
-  border-top: 1px solid var(--coco-color-border);
-  padding-top: var(--coco-space-6);
 }
-.ob-welcome-features strong,
-.ob-welcome-features span {
+.ob-feature-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--coco-space-4);
+}
+.ob-feature-scene {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 112px;
+}
+.ob-feature-menu {
+  background: var(--coco-color-surface);
+  border: 1px solid var(--coco-color-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 14px #1720330d;
+  font-size: var(--coco-text-caption);
+}
+.ob-feature-bubble {
+  flex: 1;
+  min-width: 0;
+  max-width: 220px;
+}
+.ob-feature-bubble .observation-bubble {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  opacity: 1;
+  transform: none;
+  animation: none;
+  pointer-events: none;
+}
+.ob-feature-bubble .observation-bubble-tail {
+  right: auto;
+  left: -6px;
+  transform: rotate(-135deg);
+}
+.ob-feature-bubble .observation-bubble-label::before {
+  animation: none;
+}
+.ob-feature-menu {
+  width: 132px;
+  padding: 5px;
+}
+.ob-feature-menu > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  color: var(--coco-color-text-muted);
+}
+.ob-feature-menu > .ob-feature-menu-active {
+  background: var(--coco-color-primary);
+  color: white;
+  font-weight: 700;
+}
+.ob-feature-menu svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+.ob-feature-illustration {
+  width: 112px;
+  height: 112px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+.ob-feature-copy strong,
+.ob-feature-copy span {
   display: block;
 }
-.ob-welcome-features strong {
+.ob-feature-copy strong {
   font-size: var(--coco-text-body);
   margin-bottom: var(--coco-space-1);
 }
-.ob-welcome-features span {
+.ob-feature-copy span {
   color: var(--coco-color-text-muted);
   font-size: var(--coco-text-body);
   line-height: var(--coco-leading-body);

@@ -310,7 +310,10 @@ export default function ModelsStep({
           Connect OpenAI, Anthropic, Google, and other Pi providers, then add
           the models you want in Coco chat.
         </p>
-        <PiProviderSettings onStatus={setPiStatus} />
+        <details className="ob-provider-disclosure">
+          <summary className="ob-model-add">Connect a provider</summary>
+          <PiProviderSettings onStatus={setPiStatus} />
+        </details>
         {tutors.filter((item) => item.provider === 'pi').map(renderChatModel)}
         <label className="coco-field">
           Add a Pi model to chat
@@ -366,7 +369,7 @@ export default function ModelsStep({
           Additional model connections
         </h3>
         <p className="ob-sub">
-          Add Tinker, Tinfoil, an OpenAI-compatible endpoint, or LM Studio.
+          Add Tinker, Tinfoil, LM Studio, or a custom OpenAI-compatible endpoint.
           These models appear alongside Pi models in the chat picker.
         </p>
         {tutors.filter((item) => item.provider !== 'pi').map(renderChatModel)}

@@ -7,6 +7,7 @@ import VoiceStep from './onboarding/VoiceStep';
 import AvatarStep from './onboarding/AvatarStep';
 import ModelsStep from './onboarding/ModelsStep';
 import useModelSetup from './onboarding/useModelSetup';
+import cocoIcon from '../../../assets/icon.png';
 import './OnboardingView.css';
 import './onboarding/ModelSetup.css';
 
@@ -17,9 +18,9 @@ const PAGES = {
       'Choose the models that help Coco understand your work and respond to you.',
   },
   welcome: {
-    title: 'Meet Coco, your proactive co-assistant',
+    title: 'Welcome to Coco',
     description:
-      'A companion that understands your working context and offers help when you need it. Let’s make Coco feel at home.',
+      'Coco understands your working context and offers help when you need it.',
   },
   name: {
     title: 'What should Coco call you?',
@@ -118,7 +119,16 @@ export default function OnboardingView() {
     <SetupShell
       label={modelsOnly ? 'Model setup' : 'Getting started'}
       title={PAGES[currentKey].title}
-      illustration={null}
+      illustration={
+        currentKey === 'welcome' ? (
+          <img
+            className="ob-welcome-icon"
+            src={cocoIcon}
+            alt=""
+            draggable={false}
+          />
+        ) : null
+      }
       description={PAGES[currentKey].description}
       closeLabel="Close setup for now"
       onClose={() =>

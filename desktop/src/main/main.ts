@@ -2,6 +2,7 @@ import type { Rectangle } from 'electron';
 import { placeAvatarMenu } from './avatar-menu';
 import { placeAvatarBubble, avatarBubbleMaxHeight, type AvatarCardPlacement } from './avatar-bubble';
 import configureMainWindow, { resizeMainWindow } from './main-window-behavior';
+import setupWindowOptions from './setup-window-options';
 import AgentProgressReminder from './services/agent-progress-reminder';
 import isChatOutOfView from './services/chat-visibility';
 import type { ChatSuggestion } from '../shared/chat-suggestion';
@@ -558,23 +559,8 @@ const preloadPath = () =>
 // and the normal avatar + webapp windows are created.
 
 const createOnboardingWindow = (modelsOnly = false) => {
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
-  const w = 440;
-  const h = 700;
-  const x = Math.round((sw - w) / 2);
-  const y = Math.round((sh - h) / 2);
-
   onboardingWindow = new BrowserWindow({
-    show: false,
-    x,
-    y,
-    width: w,
-    height: h,
-    transparent: true,
-    frame: false,
-    alwaysOnTop: true,
-    resizable: false,
-    skipTaskbar: true,
+    ...setupWindowOptions(screen.getPrimaryDisplay().workArea),
     webPreferences: { preload: preloadPath() },
   });
 
