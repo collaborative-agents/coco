@@ -20,28 +20,33 @@ export default function LocalModelPicker({
   const [switching, setSwitching] = useState(false);
   useEffect(() => {
     let active = true;
-    window.electron?.ipcRenderer
-      .invoke('pi-provider', 'status')
-      .then((result: any) => {
-        if (active)
-          setNativeModel(
-            result?.connection?.mode === 'native'
-              ? `${result.connection.provider} / ${result.connection.model}`
-              : '',
-          );
-      })
-      .catch(() => {});
-    window.electron?.ipcRenderer
-      .invoke('get-model-configuration')
-      .then((config: any) => {
-        if (active) {
-          setModels(config?.tutors ?? []);
-          setDefaultModelId(config?.defaultTutorId ?? '');
-        }
-      })
-      .catch(() => {});
+    const refresh = () => {
+      window.electron?.ipcRenderer
+        .invoke('pi-provider', 'status')
+        .then((result: any) => {
+          if (active)
+            setNativeModel(
+              result?.connection?.mode === 'native'
+                ? `${result.connection.provider} / ${result.connection.model}`
+                : '',
+            );
+        })
+        .catch(() => {});
+      window.electron?.ipcRenderer
+        .invoke('get-model-configuration')
+        .then((config: any) => {
+          if (active) {
+            setModels(config?.tutors ?? []);
+            setDefaultModelId(config?.defaultTutorId ?? '');
+          }
+        })
+        .catch(() => {});
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
     return () => {
       active = false;
+      window.removeEventListener('focus', refresh);
     };
   }, [refreshKey]);
   const selected = models.find(

@@ -77,6 +77,18 @@
   font-weight: 700;
   padding: 3px 0;
 }
+.ob-provider-disclosure > summary {
+  list-style: none;
+}
+.ob-provider-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.ob-provider-disclosure > summary::before {
+  content: '+ ';
+}
+.ob-provider-disclosure[open] > summary::before {
+  content: '− ';
+}
 .ob-model-remove {
   color: var(--coco-color-danger);
 }
