@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from proactive_tutor.html_executor import VIZ_ROOT, VizResult, save_html_visualization
+from proactive_tutor.pi_bridge import create_pi_router
 from proactive_tutor.tutor_system import TutorSystem
 from py_utils.logging import init_logger
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ logger = init_logger(__name__)
 
 app = FastAPI(title="Tutor System API")
 tutor: TutorSystem | None = None
+app.include_router(create_pi_router(lambda: tutor))
 
 # Model the server was started with. Used by the stateless /suggestion/instant
 # endpoint, which does not own a TutorSystem instance. Set in main_async();

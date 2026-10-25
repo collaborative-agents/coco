@@ -1,3 +1,4 @@
+import { readPiConnection, registerPiProvider } from './services/pi-provider';
 /* eslint global-require: off, no-console: off, promise/always-return: off */
 
 /**
@@ -28,8 +29,10 @@ import {
   screen,
   powerMonitor,
   systemPreferences,
+  desktopCapturer,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import { DesktopAppUpdater } from './app-updater';
 import log from 'electron-log';
 import axios from 'axios';
 import { resolveHtmlPath } from './util';
@@ -59,6 +62,9 @@ import {
 import {
   readConversations,
   saveConversation,
+  saveConversationDirectory,
+  settleStoredReply,
+  interruptStaleReplies,
 } from './conversation-store';
 import {
   defaultTutor,
@@ -70,6 +76,11 @@ import {
   type ModelConfigurationInput,
   type ModelConnection,
 } from './model-config-store';
+import PiHarness from './services/pi-harness';
+import { parseAgentActivity } from '../shared/agent-execution';
+import { getSystemPermissionWarning, systemPermissionButtonLabel, systemPermissionExplanation } from './system-permission-warning';
+import { openSystemPermissionSettings } from './open-system-permission-settings';
+import configureFullscreenCompanionWindow from './services/fullscreen-companion-window';
 import { ObservationSleepGuard } from './observation-sleep-guard';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
 import type {
@@ -79,6 +90,12 @@ import type {
 } from '../renderer/components/observation-types';
 
 const dotenv = require('dotenv');
+const piHarness = new PiHarness();
+registerPiProvider(() => piHarness.busy, () => piHarness.dispose());
+const piBridgeToken = randomUUID();
+process.env.COCO_PI_BRIDGE_TOKEN = piBridgeToken;
+let pendingAgentRequest: string | null = null;
+
 
 app.setName('coco');
 
@@ -123,13 +140,12 @@ const ensureDefaultWorkspaceExists = () => {
   }
 };
 
-class AppUpdater {
-  constructor() {
-    log.transports.file.level = 'info';
-    autoUpdater.logger = log;
-    autoUpdater.checkForUpdatesAndNotify();
-  }
-}
+let installUpdateAfterShutdown = false;
+const desktopAppUpdater = new DesktopAppUpdater({
+  updater: autoUpdater, logger: log, isPackaged: app.isPackaged,
+  platform: process.platform, currentVersion: () => app.getVersion(),
+  requestRestartAndInstall: () => { installUpdateAfterShutdown = true; app.quit(); },
+});
 
 // ── Window state ─────────────────────────────────────────────────────────────
 // avatarWindow      : always-on-top 150×150 pet/avatar (loads local index.html)
@@ -151,6 +167,7 @@ let hotkeyCaptureInProgress = false;
 let wakeWordCaptureWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
+let proactiveSuggestionOpen = false;
 let latestHiddenSuggestionObservationId: string | undefined;
 let onboardingWindow: BrowserWindow | null = null;
 let sessionSetupWindow: BrowserWindow | null = null;
@@ -259,6 +276,132 @@ let isFloatMode = true;
 // Set true once the app is genuinely quitting so window 'close' handlers stop
 // intercepting (they otherwise hide-instead-of-close, which would block quit).
 let isQuitting = false;
+
+function agentDirectory(sessionId: string | null = currentSessionId): string {
+  const conversation = sessionId
+    ? readConversations().find((item) => item.sessionId === sessionId)
+    : undefined;
+  if (conversation?.workingDirectory) return conversation.workingDirectory;
+  let directory = path.join(app.getPath('userData'), 'workspace');
+  // Older conversations used a single shared folder. Preserve that choice
+  // when first opening them; new sessions start in Coco's default workspace.
+  if (conversation?.messages.length) {
+    try {
+      const saved = JSON.parse(
+        fs.readFileSync(
+          path.join(app.getPath('userData'), 'agent-workspace.json'),
+          'utf8',
+        ),
+      );
+      if (typeof saved.directory === 'string' && saved.directory)
+        directory = saved.directory;
+    } catch {
+      /* No legacy folder setting. */
+    }
+  }
+  fs.mkdirSync(directory, { recursive: true });
+  if (sessionId) saveConversationDirectory(sessionId, directory);
+  return directory;
+}
+
+ipcMain.handle(
+  'get-agent-workspace',
+  (_event, { sessionId }: { sessionId?: string | null } = {}) => ({
+    directory: agentDirectory(sessionId),
+  }),
+);
+ipcMain.handle(
+  'choose-agent-workspace',
+  async (
+    _event,
+    { sessionId = currentSessionId }: { sessionId?: string | null } = {},
+  ) => {
+    if (!sessionId)
+      throw new Error('Open a conversation before choosing a folder.');
+    if (pendingAgentRequest)
+      throw new Error('Stop the current run before changing folders.');
+    const result = await dialog.showOpenDialog({
+      title: 'Choose Coco’s working folder',
+      defaultPath: agentDirectory(sessionId),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    if (pendingAgentRequest)
+      throw new Error('Stop the current run before changing folders.');
+    const directory = fs.realpathSync(result.filePaths[0]);
+    saveConversationDirectory(sessionId, directory);
+    return { directory };
+  },
+);
+ipcMain.handle('get-agent-context', (_event, sessionId: string) =>
+  typeof sessionId === 'string' ? piHarness.getContextSnapshot(sessionId) : null,
+);
+ipcMain.handle(
+  'answer-agent-question',
+  (_event, toolCallId: string, response: unknown) =>
+    piHarness.answerQuestion(toolCallId, response),
+);
+ipcMain.handle('stop-agent-run', (_event, requestId: string) => {
+  return piHarness.abort(requestId);
+});
+
+ipcMain.handle('get-supported-modes', () => ['everyday_support', 'custom']);
+ipcMain.on('close-chat-window', () => chatWindow?.close());
+ipcMain.on('quit-from-onboarding', () => app.quit());
+ipcMain.on('quit-from-avatar', () => app.quit());
+ipcMain.on('proactive-suggestion-open-state', (_event, { open } = {}) => { proactiveSuggestionOpen = open === true; });
+
+const readSystemPermissionWarning = () =>
+  getSystemPermissionWarning(process.platform, {
+    accessibilityTrusted: systemPreferences.isTrustedAccessibilityClient(false),
+    screenCaptureStatus: systemPreferences.getMediaAccessStatus('screen'),
+  });
+
+const readSystemPermissionHealth = () => {
+  const warning = readSystemPermissionWarning();
+  return {
+    missing: (warning?.settingsTargets ?? []).map((target) => ({
+      target,
+      label: systemPermissionButtonLabel(target).replace(/^Open /, ''),
+      actionLabel: systemPermissionButtonLabel(target),
+      explanation: systemPermissionExplanation(target),
+    })),
+  };
+};
+
+ipcMain.handle('get-system-permissions', (event) => {
+  if (
+    event.sender !== chatWindow?.webContents &&
+    event.sender !== onboardingWindow?.webContents
+  )
+    return { missing: [] };
+  return readSystemPermissionHealth();
+});
+ipcMain.handle('open-system-permissions', async (event, target?: unknown) => {
+  if (
+    event.sender !== chatWindow?.webContents &&
+    event.sender !== onboardingWindow?.webContents
+  )
+    return { success: false };
+  const requestedTarget =
+    target === 'accessibility' ||
+    target === 'input-monitoring' ||
+    target === 'screen-recording'
+      ? target
+      : undefined;
+  try {
+    if (!requestedTarget) throw new Error('Choose a permission setting.');
+    await openSystemPermissionSettings(requestedTarget, {
+      screenStatus: () => systemPreferences.getMediaAccessStatus('screen'),
+      requestScreenAccess: () => desktopCapturer.getSources({ types: ['screen'] }),
+      openExternal: (url) => shell.openExternal(url),
+      warn: (message) => log.warn(message),
+    });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
 
 // ── User profile ──────────────────────────────────────────────────────────────
 const profilePath = () => path.join(app.getPath('userData'), 'coco-profile.json');
@@ -432,6 +575,7 @@ const createAvatarWindow = () => {
     webPreferences: { preload: preloadPath() },
   });
 
+  configureFullscreenCompanionWindow(avatarWindow);
   avatarWindow.loadURL(resolveHtmlPath('index.html'));
 
   avatarWindow.on('ready-to-show', () => {
@@ -480,8 +624,9 @@ const createChatWindow = () => {
     show: false,
     width: CHAT_PANEL_W,
     height: 700,
-    frame: false,
-    transparent: true,
+    frame: process.platform === 'darwin',
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
+    transparent: false,
     resizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -567,7 +712,7 @@ const showChatPanel = () => {
 
   chatWindow.setSize(w, h);
   chatWindow.setPosition(dx + sw - w - 16, dy + Math.floor((sh - h) / 2));
-  chatWindow.setAlwaysOnTop(true, 'floating');
+  configureFullscreenCompanionWindow(chatWindow);
   chatWindow.show();
   chatWindow.focus();
   // The avatar stays visible alongside the chat panel — never hide it, so the
@@ -873,7 +1018,7 @@ async function openCoco(): Promise<void> {
 }
 
 function setupPending(): boolean {
-  return !isOnboardingComplete() || !readModelConfiguration();
+  return !isOnboardingComplete() || (!readModelConfiguration() && readPiConnection().mode !== 'native');
 }
 
 function openPrimaryTrayAction(): void {
@@ -960,6 +1105,10 @@ function createTray(): void {
         },
       },
       { type: 'separator' },
+      ...(desktopAppUpdater.isSupported() ? [{
+        label: 'Check for Updates…',
+        click: () => { void desktopAppUpdater.checkForUpdates(true); },
+      }] : []),
       { label: 'Quit', click: () => app.quit() },
     ]),
   );
@@ -1096,7 +1245,7 @@ const showNotification = (payload: {
     latestHiddenSuggestionObservationId = undefined;
   }
   if (
-    notificationHovered &&
+    (notificationHovered || proactiveSuggestionOpen) &&
     notificationWindow &&
     !notificationWindow.isDestroyed()
   ) {
@@ -1105,6 +1254,7 @@ const showNotification = (payload: {
   }
   // Destroy any existing notification before showing a new one (dedup guard).
   notificationHovered = false;
+  proactiveSuggestionOpen = false;
   notificationWindow?.destroy();
 
   const { workArea } = screen.getPrimaryDisplay();
@@ -1130,6 +1280,7 @@ const showNotification = (payload: {
     webPreferences: { preload: preloadPath() },
   });
 
+  configureFullscreenCompanionWindow(notificationWindow);
   const url = `${resolveHtmlPath('index.html')}?view=notification`;
   notificationWindow.loadURL(url);
 
@@ -1144,6 +1295,7 @@ const showNotification = (payload: {
   notificationWindow.on('closed', () => {
     notificationWindow = null;
     notificationHovered = false;
+    proactiveSuggestionOpen = false;
   });
 };
 
@@ -1547,6 +1699,8 @@ ipcMain.handle(
   'save-model-configuration',
   async (_event, input: ModelConfigurationInput) => {
     try {
+      if (pendingAgentRequest) throw new Error('Stop the current run before changing models.');
+      await piHarness.dispose();
       const config = saveModelConfiguration(input);
       modelHealthCache.clear();
       const runtime = resolveModelRuntime();
@@ -1604,6 +1758,7 @@ ipcMain.handle(
 ipcMain.handle(
   'set-chat-model',
   async (_event, { modelId }: { modelId?: string } = {}) => {
+    if (pendingAgentRequest) return { success: false, error: 'Stop the current run before changing models.' };
     const config = readModelConfiguration();
     const selected = config?.tutors.find((item) => item.id === modelId);
     if (!selected) return { success: false, error: 'Tutor model not found.' };
@@ -1791,6 +1946,7 @@ async function setCocoSleepMode(sleeping: boolean) {
   syncWakeWordService();
 
   if (sleeping) {
+    await piHarness.abort();
     if (isSessionActive) endCurrentSession();
     await Promise.all([
       serviceManager.stopService('sensing-server'),
@@ -2022,10 +2178,38 @@ ipcMain.on(
 // ── Chat-panel width toggle ────────────────────────────────────────────────────
 // The renderer sends this when the user clicks the expand / collapse button to
 // switch the chat between the narrow side panel and a wider reading width.
+ipcMain.removeAllListeners('fit-notification-height');
+ipcMain.on(
+  'fit-notification-height',
+  (event, { height }: { height?: unknown } = {}) => {
+    if (
+      !notificationWindow ||
+      notificationWindow.isDestroyed() ||
+      event.sender !== notificationWindow.webContents ||
+      typeof height !== 'number' ||
+      !Number.isFinite(height)
+    ) {
+      return;
+    }
+    const current = notificationWindow.getBounds();
+    const { workArea } = screen.getDisplayMatching(current);
+    const maxHeight = Math.min(
+      NOTIF_EXPANDED_HEIGHT,
+      workArea.y + workArea.height - current.y,
+    );
+    const fitted = Math.round(
+      Math.max(NOTIF_HEIGHT, Math.min(height, maxHeight)),
+    );
+    if (fitted !== current.height) {
+      notificationWindow.setBounds({ ...current, height: fitted });
+    }
+  },
+);
+
 ipcMain.removeAllListeners('toggle-float-window');
-ipcMain.on('toggle-float-window', () => {
+ipcMain.on('toggle-float-window', (_event, options?: { expanded?: boolean }) => {
   if (!chatWindow || chatWindow.isDestroyed()) return;
-  isFloatMode = !isFloatMode; // isFloatMode === narrow side-panel
+  isFloatMode = typeof options?.expanded === 'boolean' ? !options.expanded : !isFloatMode;
   showChatPanel();
   chatWindow.webContents.send('float-window-state', { isFloat: isFloatMode });
 });
@@ -2172,6 +2356,7 @@ let syntheticObsSeq = 0;
 // Statuses that show a "Help me with this" button (mirrors the renderer's
 // TIER2_STATUSES in App.tsx). Only these warrant a precompute.
 const PRECOMPUTE_STATUSES = new Set([
+  'support_needed',
   'stuck',
   'mistake',
   'inefficient',
@@ -2412,6 +2597,7 @@ async function createProactiveTutorSession(
   struggleSeconds: number,
   seed?: ChatSeed,
 ): Promise<string | null> {
+  if (pendingAgentRequest) throw new Error('Stop the current run before starting another conversation.');
   // Read the user's onboarding profile to get their selected AI tools and mode.
   const { aiTools, scenario, customObserverPrompt, userName } = readProfile();
 
@@ -2512,7 +2698,7 @@ ipcMain.handle(
 // Chat history is local-only: the renderer persists completed turns here and
 // asks main to rebuild tutor context before continuing an older conversation.
 ipcMain.removeHandler('get-chat-conversations');
-ipcMain.handle('get-chat-conversations', () => readConversations());
+ipcMain.handle('get-chat-conversations', () => readConversations().map((conversation) => interruptStaleReplies(conversation, (id) => id === pendingAgentRequest)));
 
 ipcMain.removeHandler('save-chat-conversation');
 ipcMain.handle('save-chat-conversation', (_event, payload) => {
@@ -2524,6 +2710,7 @@ ipcMain.removeHandler('resume-chat-conversation');
 ipcMain.handle(
   'resume-chat-conversation',
   async (_event, { sessionId }: { sessionId?: string } = {}) => {
+    if (pendingAgentRequest) return { success: false, error: 'Stop the current run before switching conversations.' };
     const conversation = readConversations().find(
       (saved) => saved.sessionId === sessionId,
     );
@@ -2639,103 +2826,81 @@ function endCurrentSession() {
 // for guidance, returning it synchronously — no backend, DB, or WebSocket.
 // Pasted images arrive as data URLs; we persist them to temp files so the tutor
 // server (which reads image paths from disk) can include them in the LLM call.
-ipcMain.removeHandler('send-chat-message');
-ipcMain.handle(
-  'send-chat-message',
-  async (
-    ipcEvent,
-    {
-      requestId,
-      userText,
-      images,
-      hotkeyImages,
-    }: {
-      requestId: string;
-      userText: string;
-      images?: string[];
-      hotkeyImages?: string[];
-    },
-  ) => {
-    const tutorPort = process.env.TUTOR_PORT || '8081';
+interface AgentTurnInput {
+  requestId: string;
+  userText?: string;
+  displayText?: string;
+  images?: string[];
+  hotkeyImages?: string[];
+  audioData?: string;
+  isRetry?: boolean;
+}
+async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurnInput) {
+  if (pendingAgentRequest) return { error: 'Coco is already working. Stop the current run first.' };
+  if (!currentSessionId) return { error: 'Open a conversation before sending a message.' };
+  if (input.audioData !== undefined && (!input.audioData || input.audioData.length > 16_000_000))
+    return { error: 'The voice recording is empty or too large.' };
+  const sessionId = currentSessionId;
+  let userText = input.displayText ?? input.userText ?? (input.audioData ? 'Voice message' : '');
+  const conversation = readConversations().find((item) => item.sessionId === sessionId);
+  const messages = [...(conversation?.messages ?? [])];
+  if (!messages.some((message) => message.requestId === input.requestId)) {
+    if (input.isRetry && messages.at(-1)?.role === 'tutor') messages.pop();
+    if (messages.at(-1)?.role !== 'user' || messages.at(-1)?.text !== userText)
+      messages.push({ role: 'user', text: userText, images: input.images });
+    messages.push({ role: 'tutor', text: '', requestId: input.requestId,
+      isStreaming: true, retryText: userText, retryRequestKind: 'chat' });
+  }
+  saveConversation({ sessionId, problem: conversation?.problem ?? pendingTaskLabel ?? '',
+    tutorModelId: currentTutorModelId, messages });
+  pendingAgentRequest = input.requestId;
+  let activity: ReturnType<typeof parseAgentActivity>;
 
-    // Persist any pasted images to temp files for the tutor's vision call.
-    const imagePaths: string[] = [];
-    const hotkeyImageSet = new Set(hotkeyImages ?? []);
-    let hotkeyImageCount = 0;
-    for (const dataUrl of images ?? []) {
-      const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/.exec(dataUrl);
-      if (!m) continue;
-      const ext = m[1].split('/')[1]?.split('+')[0] || 'png';
-      const isHotkeyCapture = hotkeyImageSet.has(dataUrl);
-      const sourceLabel = isHotkeyCapture ? 'hotkey' : 'paste';
-      const file = path.join(
-        os.tmpdir(),
-        `coco-${sourceLabel}-${randomUUID()}.${ext}`,
-      );
-      try {
-        fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
-        imagePaths.push(file);
-        if (isHotkeyCapture) hotkeyImageCount += 1;
-      } catch (err) {
-        log.warn(`[Chat] Failed to write pasted image: ${(err as Error).message}`);
+  const emit = (streamEvent: TutorStreamEvent) => {
+    if (streamEvent.activity) activity = parseAgentActivity(streamEvent.activity);
+    if (streamEvent.type === 'transcription') {
+      userText = String(streamEvent.text ?? '');
+      const saved = readConversations().find((item) => item.sessionId === sessionId);
+      const index = saved?.messages.findIndex((message) => message.requestId === input.requestId) ?? -1;
+      if (saved && index > 0 && saved.messages[index - 1].role === 'user') {
+        saved.messages[index - 1].text = userText;
+        saveConversation(saved);
       }
     }
-
-    const contextualizedUserText = hotkeyImageCount > 0
-      ? [
-          '<hotkey_screenshot_context>',
-          `${hotkeyImageCount} attached image${hotkeyImageCount === 1 ? ' was' : 's were'} deliberately captured by the user with Coco's screenshot hotkey.`,
-          'Treat the attached hotkey capture as the primary visual state the user chose for this request. Do not call observe_screen merely to capture or inspect the same screen again. Only request a new live-screen observation if the user explicitly asks for an updated view after this capture.',
-          '</hotkey_screenshot_context>',
-          userText,
-        ].filter(Boolean).join('\n')
-      : userText;
-
-    try {
-      await consumeTutorStream(
-        `http://127.0.0.1:${tutorPort}/events/user_prompt/stream`,
-        {
-          // Current-screen context is now retrieved only when the tutor calls
-          // observe_screen; ordinary chat turns skip the observer entirely.
-          observation: '',
-          user_text: contextualizedUserText,
-          image_paths: imagePaths.length ? imagePaths : null,
-        },
-        (streamEvent: TutorStreamEvent) => {
-          ipcEvent.sender.send('chat-stream-event', {
-            requestId,
-            ...streamEvent,
-            ...(streamEvent.type === 'done'
-              ? { observerMetrics: streamEvent.observer_metrics ?? null }
-              : {}),
-          });
-        },
-        undefined,
-        {
-          // This is an activity timeout, refreshed by every SSE chunk (including
-          // server keep-alives), plus a separate ceiling for genuinely runaway
-          // tool/model loops.
-          idleMs: 60_000,
-          hardMs: 5 * 60_000,
-        },
-      );
-      return { streamed: true };
-    } catch (err) {
-      const ax = err as { response?: { data?: unknown }; message?: string };
-      log.error('[Chat] streaming user prompt failed:', JSON.stringify(ax?.response?.data ?? ax?.message));
-      const error =
-        err instanceof TutorStreamTimeoutError
-          ? 'The tutor took too long to respond. Please retry.'
-          : 'The tutor could not generate a response. Please try again.';
-      ipcEvent.sender.send('chat-stream-event', {
-        requestId,
-        type: 'error',
-        error,
-      });
-      return { error };
+    if (streamEvent.type === 'done' || streamEvent.type === 'error') {
+      settleStoredReply(sessionId, input.requestId, {
+        text: String(streamEvent.error ?? streamEvent.guidance ?? ''),
+        isError: streamEvent.type === 'error',
+        tutorMetrics: streamEvent.llm_metrics as LLMCallMetrics | undefined,
+        activity, stopped: streamEvent.stopped === true,
+      }, userText);
     }
-  },
-);
+    if (!event.sender.isDestroyed()) event.sender.send('chat-stream-event', {
+      requestId: input.requestId, ...streamEvent,
+    });
+  };
+  try {
+    const images = input.images ?? [];
+    const text = input.hotkeyImages?.length
+      ? `The attached screenshot was deliberately captured by the user. Use it as the primary visual context; do not observe the same screen again unless asked for an updated view.\n\n${input.userText ?? ''}`
+      : input.userText ?? '';
+    await piHarness.run({
+      requestId: input.requestId, sessionId,
+      directory: agentDirectory(sessionId),
+      tutorUrl: `http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}`,
+      token: piBridgeToken, text, images, audioData: input.audioData, emit,
+    });
+    return { streamed: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The agent could not complete this request.';
+    log.error('[Agent]', message);
+    emit({ type: 'error', error: message });
+    return { error: message };
+  } finally {
+    pendingAgentRequest = null;
+  }
+}
+ipcMain.handle('send-chat-message', runAgentTurn);
 
 ipcMain.removeAllListeners('open-image-preview');
 ipcMain.on('open-image-preview', (event, payload: unknown) => {
@@ -2829,62 +2994,7 @@ ipcMain.on('save-image-annotation', (event, payload: unknown) => {
   dismissImagePreviewWindow(imagePreviewWindow);
 });
 
-ipcMain.removeHandler('send-audio-message');
-ipcMain.handle(
-  'send-audio-message',
-  async (
-    ipcEvent,
-    {
-      requestId,
-      audioData,
-    }: {
-      requestId: string;
-      audioData: string;
-    },
-  ) => {
-    if (!audioData || audioData.length > 16_000_000) {
-      return { error: 'The voice recording is empty or too large.' };
-    }
-    const tutorPort = process.env.TUTOR_PORT || '8081';
-    try {
-      await consumeTutorStream(
-        `http://127.0.0.1:${tutorPort}/events/audio_prompt/stream`,
-        {
-          audio_data: audioData,
-          audio_format: 'wav',
-          session_id: currentSessionId,
-        },
-        (streamEvent: TutorStreamEvent) => {
-          ipcEvent.sender.send('chat-stream-event', {
-            requestId,
-            ...streamEvent,
-          });
-        },
-        undefined,
-        {
-          idleMs: 60_000,
-          hardMs: 5 * 60_000,
-        },
-      );
-      return { streamed: true };
-    } catch (err) {
-      log.error(
-        '[Chat] streaming audio prompt failed:',
-        err instanceof Error ? err.message : String(err),
-      );
-      const error =
-        err instanceof TutorStreamTimeoutError
-          ? 'The tutor took too long to respond to the voice message. Please retry.'
-          : 'The tutor could not process the voice message. Please try again.';
-      ipcEvent.sender.send('chat-stream-event', {
-        requestId,
-        type: 'error',
-        error,
-      });
-      return { error };
-    }
-  },
-);
+ipcMain.handle('send-audio-message', runAgentTurn);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
@@ -3042,6 +3152,7 @@ ipcMain.handle(
       profile.hideAvatar = hideAvatar;
       fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
       applyAvatarVisibility(hideAvatar);
+      chatWindow?.webContents.send('avatar-visibility-changed', { hideAvatar });
       return { success: true };
     } catch (err) {
       log.error('[Settings] Failed to update avatar visibility:', err);
@@ -3197,7 +3308,7 @@ const createWindow = async () => {
     // completes or skips onboarding (see 'onboarding-complete' handler).
     createOnboardingWindow();
     createTray();
-  } else if (!modelConfiguration) {
+  } else if (!modelConfiguration && readPiConnection().mode !== 'native') {
     // Legacy environment variables may be sufficient to start the services,
     // but users still need an explicit, inspectable model configuration.
     createOnboardingWindow(true);
@@ -3208,7 +3319,7 @@ const createWindow = async () => {
 
   // Remove this if your app does not use auto updates
   // eslint-disable-next-line
-  new AppUpdater();
+  desktopAppUpdater.start();
 };
 
 /**
@@ -3279,7 +3390,7 @@ const startObserver = () => {
   const { tutor: tutorModel, observer: observerModel } = effectiveModels();
   if (!tutorModel || !observerModel) {
     log.warn('[Models] No models chosen yet — services not started.');
-    showModelsRequiredWarning();
+    if (readPiConnection().mode !== 'native') showModelsRequiredWarning();
     return;
   }
   observerStarted = true;
@@ -3592,7 +3703,9 @@ app.on('before-quit', (event) => {
   if (isQuitting) return;
   event.preventDefault();
   isQuitting = true;
+  desktopAppUpdater.stop();
   log.info('App quitting: waiting up to 10s for services to stop...');
+  void piHarness.dispose();
   stopObservationStream();
   wakeWordService?.stop('disabled');
   const shutdownTimeoutMs = 10_000;
@@ -3600,7 +3713,8 @@ app.on('before-quit', (event) => {
     .shutdown(shutdownTimeoutMs)
     .then(() => {
       log.info('Services stopped, quitting app.');
-      app.quit();
+      if (installUpdateAfterShutdown) autoUpdater.quitAndInstall();
+      else app.quit();
     })
     .catch((e) => {
       log.warn('Error while stopping services, quitting anyway', e);

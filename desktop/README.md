@@ -2,6 +2,31 @@
 
 The Electron + React shell that hosts Coco's avatar, chat, and onboarding UI. It spawns the Python backend services (`sensing` and `proactive_tutor`) as child processes and communicates with them over local HTTP.
 
+### Local agent execution
+
+Chat runs through the bundled pi harness. It can read, edit, and write files and
+run commands in the conversation's selected working folder. The folder is a
+working directory, not a sandbox. Tool activity, interactive questions, Stop,
+context inspection, screenshots, and voice input are available in the chat.
+
+Models and provider credentials are configured locally in onboarding or Settings.
+The pi runtime calls the local tutor service through an authenticated loopback
+bridge; that service uses the configured model providers and Coco tools. There is
+no hosted Coco login, gateway, training panel, or automatic personalization worker.
+The editable memory in Settings remains user-authored and local.
+
+Each conversation retains its folder and pi session history. This port follows
+`dev/nv`'s single-active-run behavior: stop a running turn before changing models,
+folders, or conversations. Concurrent background conversations from `coco-learn`
+are a separate follow-up.
+
+The native ESM runtime and SDK dependencies live under `release/app/agent` and
+`release/app/node_modules`; packaging must include `agent/**`. After changing
+agent dependencies, install them with `npm --prefix release/app ci` from this
+directory. Validate with `npm run typecheck`, `npm test -- --runInBand`,
+`npm run test:agent`, and `npm run build`. The agent integration test uses a local
+mock HTTP server and does not call a real model.
+
 ### Folder structure
 
 ```
@@ -151,3 +176,24 @@ uv run --locked python -m external_api.dependency_smoke
 Release builds repeat this check before packaging, then run
 `tutor-server --dependency-smoke-test` from the frozen services bundle before
 signing. A failure stops the release before installers are published.
+
+### Native Pi provider login
+
+In **Settings → Models & providers → Agent connection** (also available during
+onboarding), choose a Pi provider and sign in with its OAuth button or enter an API
+key. Complete the browser/device-code flow or paste the callback when prompted,
+choose a model, then click **Use native Pi**. **Use Coco bridge** switches back to
+the existing local Python model configuration.
+
+Pi owns provider authentication and token refresh. Credentials are stored in the
+SDK's `pi/auth.json` under Electron's user-data directory; they are not sent to the
+renderer or to a hosted Coco backend. This is a local credential file, not an OS
+keychain. The connection selection is stored separately in `pi-connection.json`.
+Sign out removes the selected provider's stored Pi credentials (environment-provided
+credentials, if any, are managed outside the app).
+
+Native text/image chat and Pi's file/command tools do not require Python services.
+When the local Coco service is running, its context and tools remain available.
+Screen sensing, proactive suggestions, and voice transcription still require the
+local services and their model configuration. Native login alone does not configure
+those services. Native-only users can finish onboarding after choosing a Pi model.

@@ -1,0 +1,53 @@
+:root {
+  /* Shared desktop design tokens. Keep page styles semantic, not pixel-specific. */
+  --coco-font-family:
+    'PT Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --coco-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --coco-text-caption: 12px;
+  --coco-text-secondary: 13px;
+  --coco-text-control: 14px;
+  --coco-text-body: 16px;
+  --coco-text-lead: 18px;
+  --coco-text-section: 20px;
+  --coco-text-title: 28px;
+  --coco-text-display: 36px;
+  --coco-leading-body: 1.5;
+  --coco-leading-control: 1.4;
+  --coco-leading-heading: 1.25;
+  --coco-space-1: 4px;
+  --coco-space-2: 8px;
+  --coco-space-3: 12px;
+  --coco-space-4: 16px;
+  --coco-space-6: 24px;
+  --coco-space-8: 32px;
+  --coco-control-height: 36px;
+  --coco-radius-pill: 999px;
+
+  --coco-color-primary: #204a79;
+  --coco-color-primary-hover: #173d68;
+  --coco-color-primary-rgb: 32, 74, 121;
+  --coco-color-accent: #467bae;
+  --coco-color-accent-soft: #e9efff;
+  --coco-color-accent-border: #bcd0fc;
+
+  --coco-color-surface: #ffffff;
+  --coco-color-surface-subtle: #f9fafb;
+  --coco-color-surface-muted: #f3f4f6;
+  --coco-color-text: #111827;
+  --coco-color-text-secondary: #374151;
+  --coco-color-text-muted: #6b7280;
+  --coco-color-text-subtle: #6b7280;
+  --coco-color-border: #e5e7eb;
+
+  --coco-color-success: #16a34a;
+  --coco-color-success-rgb: 22, 163, 74;
+  --coco-color-danger: #b91c1c;
+  --coco-color-danger-soft: #fef2f2;
+  --coco-color-danger-border: #fecaca;
+
+  --coco-radius-control: 10px;
+  --coco-radius-card: 16px;
+  --coco-shadow-panel: 0 6px 20px rgba(0, 0, 0, 0.18);
+  --coco-focus-ring: 0 0 0 3px rgba(var(--coco-color-primary-rgb), 0.16);
+}

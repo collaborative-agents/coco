@@ -1,0 +1,9 @@
+.chat-composer-surface textarea:focus,
+.chat-composer-surface textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.chat-composer-surface button:not(:disabled):hover {
+  filter: brightness(0.95);
+}

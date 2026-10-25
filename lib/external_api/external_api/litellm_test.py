@@ -49,6 +49,28 @@ def test_text_only_query(monkeypatch):
     ]
 
 
+def test_gemini_3_omits_deprecated_sampling_parameters(monkeypatch):
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return {
+            "choices": [{"message": {"content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+
+    monkeypatch.setattr(litellm_api, "completion", fake_completion)
+    get_litellm_completion(
+        [{"role": "user", "content": "Hello"}],
+        model="gemini/gemini-3-flash-preview",
+        temperature=0.2,
+        top_p=0.8,
+    )
+
+    assert "temperature" not in captured
+    assert "top_p" not in captured
+
+
 def test_image_query(monkeypatch):
     """Test image message serialization without downloading or inference."""
     captured: dict = {}

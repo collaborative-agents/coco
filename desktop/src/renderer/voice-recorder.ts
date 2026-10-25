@@ -217,7 +217,10 @@ export async function startVoiceRecorder(
   timer = window.setTimeout(() => finish(true), maxDurationMs);
   return {
     done,
-    stop: () => finish(false),
+    // A manual second click must not submit ambient noise as a voice turn.
+    // Auto-stop already requires a detected speech segment; apply the same
+    // requirement when the user explicitly stops recording.
+    stop: () => finish(true),
     cancel,
   };
 }

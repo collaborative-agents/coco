@@ -9,6 +9,7 @@ dependencies = [
     "external_api",
     "py_utils",
     "memory-mcp",
+    "mcp>=1.8.1,<2",
     # Web server
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
@@ -16,6 +17,7 @@ dependencies = [
     "chz>=0.3.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.25.0",
+    "pyobjc-framework-EventKit>=10.0; sys_platform == 'darwin'",
 ]
 
 [build-system]

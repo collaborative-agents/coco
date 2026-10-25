@@ -47,6 +47,9 @@ TUTOR_HIDDEN_IMPORTS = COMMON_HIDDEN_IMPORTS + [
     "memory_mcp.server",
 ]
 
+if platform.system() == "Darwin":
+    TUTOR_HIDDEN_IMPORTS += ["EventKit", "Foundation", "objc"]
+
 SENSING_HIDDEN_IMPORTS = COMMON_HIDDEN_IMPORTS + [
     # async DB / cache
     "aiosqlite",

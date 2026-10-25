@@ -2,17 +2,23 @@
   "compilerOptions": {
     "incremental": true,
     "target": "es2022",
-    "module": "node16",
+    "module": "esnext",
     "lib": ["dom", "es2022"],
     "jsx": "react-jsx",
     "strict": true,
     "sourceMap": true,
-    "moduleResolution": "node16",
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "allowJs": true,
     "outDir": ".erb/dll"
   },
-  "exclude": ["test", "release/build", "release/app/dist", ".erb/dll"]
+  "exclude": ["release/app/agent", "tests", "test", "release/build", "release/app/dist", ".erb/dll"],
+  "ts-node": {
+    "compilerOptions": {
+      "module": "node16",
+      "moduleResolution": "node16"
+    }
+  }
 }

@@ -14,5 +14,10 @@
     "postinstall": "npm run rebuild && npm run link-modules",
     "link-modules": "node -r ts-node/register ../../.erb/scripts/link-modules.ts"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-server": "0.85.0",
+    "@juicesharp/rpiv-ask-user-question": "2.13.8",
+    "pi-context-view": "0.5.0"
+  }
 }

@@ -13,6 +13,7 @@ export type ObservationStatus =
   | 'inefficient'
   | 'ai_struggle'
   | 'observing'
+  | 'support_needed'
   | 'discernment_opportunity';
 
 export interface LLMCallMetrics {
@@ -54,10 +55,18 @@ export interface TutorMemoryResult {
   evidence?: TutorObservation[];
 }
 
+export interface AgentQuestion {
+  header: string;
+  question: string;
+  multiSelect?: boolean;
+  options: { label: string; description: string; preview?: string }[];
+}
+
 export interface TutorToolCall {
   id: string;
   name: string;
   arguments: {
+    [key: string]: unknown;
     query?: string;
     focus?: string;
     start_hh_mm_ago?: string | null;
@@ -67,6 +76,11 @@ export interface TutorToolCall {
   };
   status: 'running' | 'completed' | 'error';
   result?: {
+    waitingForAnswer?: boolean;
+    questions?: AgentQuestion[];
+    cancelled?: boolean;
+    answers?: { questionIndex: number; answer: string | null; selected?: string[] }[];
+    output?: string;
     count?: number;
     results?: TutorMemoryResult[];
     observation?: string;
@@ -82,6 +96,18 @@ export interface ObservationEvent {
   ts?: number;
   scenario?: string;
   applying_ai_output?: string;
+  suggestion_title?: string;
+  intervention_source?: 'judge';
+  trigger_type?: string;
+  teaching_depth?: 'introduce' | 'reinforce' | 'deepen' | 'not_applicable';
+  /** Brief evidence behind need_support. */
+  rationale?: string;
+  /** Observer's explicit personalized intervention decision. */
+  need_support?: 'yes' | 'no';
+  /** Sensing-owned global eligibility for presenting proactive support. */
+  proactive_allowed?: boolean;
+  /** Seconds remaining in sensing's shown-to-shown proactive cooldown. */
+  proactive_cooldown_remaining_s?: number;
   /** Stable id of the observer call that produced this event (for feedback joins). */
   observation_id?: string;
   llm_metrics?: LLMCallMetrics;
@@ -105,6 +131,19 @@ export interface InstantSuggestion {
   prompt?: string;
   copyText: string;
   llm_metrics?: LLMCallMetrics;
+  fourDDimension?:
+    | 'delegation'
+    | 'description'
+    | 'discernment'
+    | 'diligence';
+  teachingDepth?: 'introduce' | 'reinforce' | 'deepen';
+  /** One-sentence explanation shown before the suggestion's action. */
+  noticed?: string;
+  aiCan?: string;
+  why?: string;
+  check?: string;
+  triggerType?: string;
+  interventionSource?: 'judge' | 'observer';
   /**
    * The user's own AI tools (from their onboarding selection), so a `delegate`
    * bubble can show one "Open" button per available tool and let the user pick
@@ -149,7 +188,7 @@ export const AI_TOOLS: Record<string, AiToolDef> = {
   grok: { id: 'grok', label: 'Grok', category: 'chatbot', open: { via: 'website', url: 'https://grok.com/' } },
   qwen: { id: 'qwen', label: 'Qwen', category: 'chatbot', open: { via: 'website', url: 'https://chat.qwen.ai/' } },
   // Agents → open a terminal (CLI) or a desktop app
-  'claude-code': { id: 'claude-code', label: 'Claude Code', category: 'agent', open: { via: 'terminal' } },
+  'claude-code': { id: 'claude-code', label: 'Claude Code', category: 'agent', open: { via: 'app', app: 'Claude' } },
   'gemini-cli': { id: 'gemini-cli', label: 'Gemini CLI', category: 'agent', open: { via: 'terminal' } },
   codex: { id: 'codex', label: 'Codex', category: 'agent', open: { via: 'terminal' } },
   opencode: { id: 'opencode', label: 'OpenCode', category: 'agent', open: { via: 'terminal' } },
@@ -226,6 +265,7 @@ export const STATUS_TO_MOOD: Record<ObservationStatus, PetMood> = {
   inefficient: 'tool',             // AI-could-help theme
   ai_struggle: 'tool',             // AI tool theme
   observing: 'idle',               // neutral default
+  support_needed: 'tool',          // personalized observer says help is useful now
   discernment_opportunity: 'tool', // just applied AI output — review nudge incoming
 };
 
@@ -277,6 +317,12 @@ export const PHRASES: Record<ObservationStatus, string[]> = {
     'Monitoring in the background',
     'Still tracking — looking good',
   ],
+  support_needed: [
+    'I found a moment where I may be able to help',
+    'I may have something useful for this',
+    'Looks like some support could help here',
+    'I can help with what you’re doing now',
+  ],
   discernment_opportunity: [
     'You just applied AI output — quick review recommended',
     'AI content applied — worth a scan before moving on',
@@ -291,6 +337,7 @@ export const STATUS_LABEL: Record<ObservationStatus, string> = {
   inefficient: 'AI could help',
   ai_struggle: 'AI hiccup',
   observing: 'Watching',
+  support_needed: 'Support available',
   discernment_opportunity: 'Review AI output',
 };
 
@@ -334,7 +381,7 @@ export function cleanObservation(raw: string): string {
 }
 
 // ── Activity lanes ───────────────────────────────────────────────────────────
-// The 7 raw statuses collapse into 4 user-facing "lanes". Lanes are the unit
+// Raw statuses collapse into 4 user-facing "lanes". Lanes are the unit
 // the Activity panel speaks in: they drive dot colors, the flow timeline, and
 // every rolled-up metric, so timeline / dots / counts can never drift apart.
 
@@ -343,6 +390,7 @@ export type ActivityLane = 'flow' | 'watching' | 'focus' | 'assist';
 export const STATUS_TO_LANE: Record<ObservationStatus, ActivityLane> = {
   progress: 'flow', // producing, on track
   observing: 'watching', // neutral background
+  support_needed: 'focus', // personalized observer found a moment needing attention
   stuck: 'focus', // slowed down — a hard, normal part of working
   mistake: 'focus', // worth a second look
   inefficient: 'assist', // AI could help
@@ -353,8 +401,8 @@ export const STATUS_TO_LANE: Record<ObservationStatus, ActivityLane> = {
 export const LANE_LABEL: Record<ActivityLane, string> = {
   flow: 'Flow',
   watching: 'Watching',
-  focus: 'Focus moment',
-  assist: 'AI assist',
+  focus: 'AI suggest',
+  assist: 'AI suggest',
 };
 
 // Single source of truth for lane colors. Amber (not red) for focus moments —
@@ -366,7 +414,16 @@ export const LANE_COLOR: Record<ActivityLane, string> = {
   assist: '#6366f1', // blue/violet
 };
 
-export function laneOf(status: ObservationStatus): ActivityLane {
+export function laneOf(
+  status: ObservationStatus,
+  needSupport?: ObservationEvent['need_support'],
+): ActivityLane {
+  // The everyday observer's explicit decision is authoritative. Its compact
+  // schema replaced the legacy friction categories, so a stale/compatibility
+  // status must not make History show a Focus moment or AI assist that
+  // contradicts need_support.
+  if (needSupport === 'yes') return 'focus';
+  if (needSupport === 'no') return 'watching';
   return STATUS_TO_LANE[status] ?? 'watching';
 }
 
@@ -377,10 +434,14 @@ export interface ActivityRecord {
   /** Unix timestamp (seconds). */
   ts: number;
   status: ObservationStatus;
+  /** Explicit observer decision used to classify the History lane. */
+  need_support?: ObservationEvent['need_support'];
   /** Cleaned, human-readable observation text. */
   observation: string;
   /** Stable join key for updating this record when the user reacts later. */
   observation_id?: string;
+  /** Eligibility decision attached by sensing when this event was emitted. */
+  proactive_allowed?: boolean;
   /** Present when this observation offered actionable proactive support. */
   proactive_support?: {
     engaged: boolean;

@@ -15,8 +15,10 @@
  */
 
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { NotificationBubble } from '../renderer/components/NotificationView';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import NotificationView, {
+  NotificationBubble,
+} from '../renderer/components/NotificationView';
 import type { InstantSuggestion } from '../renderer/components/observation-types';
 
 // ---------------------------------------------------------------------------
@@ -276,7 +278,7 @@ describe('instant suggestion actions', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Chat about it' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Chat with Coco' }));
     expect(onChat).toHaveBeenCalledTimes(1);
   });
 
@@ -293,17 +295,18 @@ describe('instant suggestion actions', () => {
       />,
     );
 
-    expect(
-      screen.getByRole('button', { name: 'Good suggestion' }),
-    ).toBeDisabled();
+    const good = screen.getByRole('button', { name: 'Good suggestion' });
+    expect(good).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(good);
+    expect(onRate).not.toHaveBeenCalled();
     const bad = screen.getByRole('button', { name: 'Not helpful' });
-    expect(bad).toBeEnabled();
+    expect(bad).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(bad);
     expect(onRate).toHaveBeenCalledWith('down');
   });
 
-  it('offers Coco Chat as the default delegation destination', () => {
-    const onOpenCocoChat = jest.fn();
+  it('makes copying the prompt the main delegation action', () => {
+    const onChat = jest.fn();
     render(
       <NotificationBubble
         message="Ask an AI tool"
@@ -313,17 +316,263 @@ describe('instant suggestion actions', () => {
           title: 'Ask an AI tool',
           prompt: 'Explain this error.',
           copyText: 'Explain this error.',
-          targetTool: 'chatgpt',
-          availableTools: [],
+          targetTool: 'claude-code',
+          availableTools: [
+            { id: 'claude-cowork', label: 'Claude Cowork', category: 'agent' },
+            { id: 'claude-code', label: 'Claude Code', category: 'agent' },
+          ],
         }}
-        onOpenCocoChat={onOpenCocoChat}
+        onChatAboutSuggestion={onChat}
       />,
     );
 
-    const coco = screen.getByRole('button', { name: 'Open Coco Chat' });
-    expect(coco).toHaveClass('toast-coco-chat-action');
-    fireEvent.click(coco);
-    expect(onOpenCocoChat).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Chat with Coco' }));
+    expect(onChat).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole('button', { name: 'Open Claude Code' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Open Claude Cowork' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Open Coco Chat' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy prompt' })).toHaveFocus();
+  });
+
+  it('shows the 4D overview before an AI-upskilling suggestion', () => {
+    const onPageChange = jest.fn();
+    render(
+      <NotificationBubble
+        message="Ask an AI tool"
+        notifType="proactive-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Description: diagnose the failed build',
+          prompt:
+            'Stage: A GitHub Actions packaging job failed on an M-chip Mac.\nTask: Diagnose the console error and identify the likely cause.\nRules: Use the visible error evidence and do not suggest deleting user data.',
+          copyText:
+            'Stage: A GitHub Actions packaging job failed on an M-chip Mac.\nTask: Diagnose the console error and identify the likely cause.\nRules: Use the visible error evidence and do not suggest deleting user data.',
+          targetTool: 'chatgpt',
+          availableTools: [
+            { id: 'chatgpt', label: 'ChatGPT', category: 'chatbot' },
+          ],
+        }}
+        showFrameworkIntro
+        frameworkPage={0}
+        onFrameworkPageChange={onPageChange}
+      />,
+    );
+
+    expect(screen.getByText('Delegation')).toBeInTheDocument();
+    expect(screen.getByText('Description')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Diagnose the console error and identify the likely cause/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /GitHub Actions packaging job failed.*visible error evidence/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/^Stage: A GitHub Actions packaging job failed/),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show me how →' }));
+    expect(onPageChange).toHaveBeenCalledWith(1);
+  });
+
+  it('grounds a Discernment overview in the current suggestion', () => {
+    const explanation =
+      'Before running the generated Git command, verify the target repository and branch, then check that it will not overwrite unrelated work. Also review the remote destination and confirm the final commit before sharing the result with your team.';
+    render(
+      <NotificationBubble
+        message="Check the generated command"
+        notifType="proactive-suggestion"
+        suggestion={{
+          kind: 'content',
+          title: 'Discernment: verify before running',
+          body: explanation,
+          copyText: explanation,
+        }}
+        showFrameworkIntro
+      />,
+    );
+
+    expect(screen.getByText('Discernment')).toBeInTheDocument();
+    expect(screen.queryByText('Delegation')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/verify the target repository and branch/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/confirm the final commit before sharing the result/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(explanation)).not.toHaveTextContent(/…$/);
+    expect(
+      screen.getByRole('button', { name: 'Show me how →' }),
+    ).toBeInTheDocument();
+  });
+
+  it('uses a left arrow to return from the Description suggestion', () => {
+    const onPageChange = jest.fn();
+    render(
+      <NotificationBubble
+        message={'**Ask an AI tool**\n\nExplain this error.'}
+        notifType="instant-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Ask an AI tool',
+          prompt: 'Explain this error.',
+          copyText: 'Explain this error.',
+          availableTools: [],
+        }}
+        showFrameworkIntro
+        frameworkPage={1}
+        onFrameworkPageChange={onPageChange}
+      />,
+    );
+
+    expect(screen.getByText('Explain this error.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '← Why' }));
+    expect(onPageChange).toHaveBeenCalledWith(0);
+  });
+
+  it('explains a delegation moment before showing the prompt', () => {
+    const { container } = render(
+      <NotificationBubble
+        message="Paste this prompt into Claude"
+        notifType="proactive-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Paste this prompt into Claude',
+          prompt: 'Stage: ...\nTask: ...\nRules: ...',
+          copyText: 'Stage: ...',
+          fourDDimension: 'delegation',
+          noticed: "Looks like you're entering grades one by one.",
+          aiCan: 'Claude can format your sheet for Canvas.',
+          why: 'That saves about twenty minutes.',
+          check: 'Spot-check three rows before importing.',
+        }}
+        showFrameworkIntro
+        frameworkPage={0}
+      />,
+    );
+
+    expect(screen.getByText('Delegation')).toBeInTheDocument();
+    const lines = Array.from(container.querySelectorAll('.toast-why-line'));
+    expect(lines.map((line) => line.textContent)).toEqual([
+      "Looks like you're entering grades one by one.",
+      'Claude can format your sheet for Canvas.',
+      'That saves about twenty minutes.',
+      'Spot-check three rows before importing.',
+    ]);
+    expect(lines[0]).toHaveClass('toast-why-line--lead');
+    expect(lines[1]).not.toHaveClass('toast-why-line--lead');
+    expect(screen.queryByText(/Stage:/)).not.toBeInTheDocument();
+  });
+
+  it('makes clear the AI does the work when the model writes an instruction', () => {
+    render(
+      <NotificationBubble
+        message="Paste this prompt into ChatGPT"
+        notifType="proactive-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Paste this prompt into ChatGPT',
+          prompt: 'Stage: ...',
+          copyText: 'Stage: ...',
+          fourDDimension: 'delegation',
+          noticed: "Looks like you're building a partner interest form.",
+          aiCan: 'Draft a full set of tailored form questions.',
+        }}
+        showFrameworkIntro
+        frameworkPage={0}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        'AI can help: Draft a full set of tailored form questions.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('leaves natural "could" phrasing alone', () => {
+    render(
+      <NotificationBubble
+        message="Paste this prompt into Claude"
+        notifType="proactive-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Paste this prompt into Claude',
+          prompt: 'Stage: ...',
+          copyText: 'Stage: ...',
+          fourDDimension: 'delegation',
+          noticed: "You're drafting the form from scratch.",
+          aiCan: 'Claude could turn your notes into a first draft.',
+        }}
+        showFrameworkIntro
+        frameworkPage={0}
+      />,
+    );
+
+    expect(
+      screen.getByText('Claude could turn your notes into a first draft.'),
+    ).toBeInTheDocument();
+  });
+
+  it('explains a discernment moment as what to check and why', () => {
+    const { container } = render(
+      <NotificationBubble
+        message="Check the dates before sending"
+        notifType="proactive-suggestion"
+        suggestion={{
+          kind: 'content',
+          title: 'Check the dates before sending',
+          body: 'Compare each date with the thread.',
+          copyText: 'Compare each date with the thread.',
+          fourDDimension: 'discernment',
+          noticed: "Looks like you're pasting ChatGPT's summary.",
+          aiCan: 'not shown for checking moments',
+          why: 'AI summaries often mix up details.',
+          check: 'Check the dates against the original thread.',
+        }}
+        showFrameworkIntro
+        frameworkPage={0}
+      />,
+    );
+
+    expect(screen.getByText('Discernment')).toBeInTheDocument();
+    expect(
+      Array.from(container.querySelectorAll('.toast-why-line')).map(
+        (line) => line.textContent,
+      ),
+    ).toEqual([
+      "Looks like you're pasting ChatGPT's summary.",
+      'Check the dates against the original thread.',
+      'AI summaries often mix up details.',
+    ]);
+  });
+
+  it('labels the action page "Try this"', () => {
+    render(
+      <NotificationBubble
+        message={'**Paste this prompt into Claude**\n\nExplain this error.'}
+        notifType="instant-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Paste this prompt into Claude',
+          prompt: 'Explain this error.',
+          copyText: 'Explain this error.',
+          availableTools: [],
+        }}
+        showFrameworkIntro
+        frameworkPage={1}
+      />,
+    );
+
+    expect(screen.getByText('Try this')).toBeInTheDocument();
   });
 });
 
@@ -373,5 +622,57 @@ describe('window controls', () => {
 
     rerender(<NotificationBubble message={message} adjustable expanded />);
     expect(screen.getByText(/full-message-ending/)).toBeInTheDocument();
+  });
+
+  it('shows a daily summary in full without requiring expansion', () => {
+    const message = `${'Yesterday summary detail '.repeat(12)}summary-ending`;
+    render(<NotificationBubble message={message} notifType="daily-summary" />);
+    expect(screen.getByText(/summary-ending/)).toBeInTheDocument();
+  });
+});
+
+describe('interactive notification locking', () => {
+  it('locks replacements while the first framework page is displayed', () => {
+    const listeners = new Map<string, (...args: any[]) => void>();
+    const sendMessage = jest.fn();
+    Object.defineProperty(window, 'electron', {
+      configurable: true,
+      value: {
+        ipcRenderer: {
+          sendMessage,
+          invoke: jest.fn(),
+          on: (channel: string, callback: (...args: any[]) => void) => {
+            listeners.set(channel, callback);
+            return () => listeners.delete(channel);
+          },
+        },
+      },
+    });
+
+    render(<NotificationView />);
+    act(() => {
+      listeners.get('notification')?.({
+        message: 'This task could use AI support.',
+        actionLabel: 'Reveal full suggestion',
+        notifType: 'proactive-suggestion',
+        observationId: 'obs-1',
+        status: 'inefficient',
+        scenario: 'ai_upskilling',
+        suggestion: {
+          kind: 'content',
+          title: 'Draft a clear request',
+          body: 'Include the context and constraints.',
+          copyText: 'Include the context and constraints.',
+        },
+      });
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'proactive-suggestion-open-state',
+      { open: true },
+    );
+    expect(
+      screen.getByRole('button', { name: 'Show me how →' }),
+    ).toBeInTheDocument();
   });
 });

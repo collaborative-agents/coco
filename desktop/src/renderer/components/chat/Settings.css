@@ -1,0 +1,83 @@
+.settings-heading {
+  margin: 0 0 8px;
+  font-size: var(--coco-text-section);
+  font-weight: 650;
+  color: var(--coco-color-text);
+}
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.settings-toggle-copy {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.settings-toggle-copy > span,
+.settings-note {
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-secondary);
+  line-height: var(--coco-leading-body);
+}
+.settings-toggle-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.settings-toggle-control > span {
+  font-size: var(--coco-text-secondary);
+  color: var(--coco-color-text-secondary);
+}
+.settings-switch {
+  appearance: none;
+  width: 44px;
+  height: 26px;
+  margin: 0;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 20px;
+  background: var(--coco-color-border);
+  cursor: pointer;
+  position: relative;
+}
+.settings-switch::after {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  top: 2px;
+  left: 2px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px #0002;
+}
+.settings-switch:checked {
+  background: var(--coco-color-accent);
+  border-color: var(--coco-color-accent);
+}
+.settings-switch:checked::after {
+  transform: translateX(18px);
+}
+.settings-switch:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.settings-switch:focus-visible {
+  outline: 2px solid var(--coco-color-accent);
+  outline-offset: 3px;
+}
+.settings-avatar {
+  border-top: 1px solid var(--coco-color-border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.settings-note {
+  margin: 6px 0 0;
+}
+.settings-error {
+  color: var(--coco-color-danger);
+  font-size: var(--coco-text-secondary);
+}

@@ -8,6 +8,24 @@ import {
 } from 'electron';
 
 export type Channels =
+  | 'pi-provider'
+  | 'open-avatar-actions-menu'
+  | 'quit-from-avatar'
+  | 'proactive-suggestion-open-state'
+  | 'fit-notification-height'
+  | 'avatar-visibility-changed'
+  | 'chat-suggestion'
+  | 'reveal-chat-suggestion'
+  | 'get-agent-workspace'
+  | 'choose-agent-workspace'
+  | 'get-agent-context'
+  | 'answer-agent-question'
+  | 'stop-agent-run'
+  | 'get-supported-modes'
+  | 'get-system-permissions'
+  | 'open-system-permissions'
+  | 'close-chat-window'
+  | 'quit-from-onboarding'
   | 'open-main-window'
   | 'close-main-window'
   | 'notification'
@@ -114,6 +132,7 @@ export type Channels =
   | 'wake-word-capture-window-ready';
 
 const electronHandler = {
+  platform: process.platform,
   ipcRenderer: {
     sendMessage(channel: Channels, ...args: unknown[]) {
       ipcRenderer.send(channel, ...args);

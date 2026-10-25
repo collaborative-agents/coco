@@ -1,5 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import type { ReactElement } from 'react';
+import './global.css';
 import NotificationView from './components/NotificationView';
 import ImagePreviewView from './components/ImagePreviewView';
 import OnboardingView from './components/OnboardingView';
@@ -11,7 +13,7 @@ const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
 const view = new URLSearchParams(window.location.search).get('view');
 
-let rendered: JSX.Element;
+let rendered: ReactElement;
 if (view === 'onboarding') {
   rendered = <OnboardingView />;
 } else if (view === 'notification') {
@@ -29,10 +31,3 @@ if (view === 'onboarding') {
 }
 
 root.render(rendered);
-
-// calling IPC exposed from preload script
-window.electron?.ipcRenderer.once('ipc-example', (arg) => {
-  // eslint-disable-next-line no-console
-  console.log(arg);
-});
-window.electron?.ipcRenderer.sendMessage('ipc-example', ['ping']);
