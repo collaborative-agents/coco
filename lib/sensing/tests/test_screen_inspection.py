@@ -21,7 +21,11 @@ def test_inspect_uses_active_monitor():
 
     assert result == ("/tmp/inspect.jpg", "timestamp")
     screen._save_frame.assert_awaited_once_with(
-        "active", 0, 0, "inspect", draw_box=False
+        "active",
+        "inspect",
+        timestamp=None,
+        monitor=None,
+        monitor_index=2,
     )
 
 
@@ -43,7 +47,11 @@ def test_inspect_falls_back_to_cursor_monitor(monkeypatch):
 
     assert result == ("/tmp/inspect.jpg", "timestamp")
     screen._save_frame.assert_awaited_once_with(
-        "under-cursor", 0, 0, "inspect", draw_box=False
+        "under-cursor",
+        "inspect",
+        timestamp=None,
+        monitor={"left": 100, "top": 0, "width": 100, "height": 100},
+        monitor_index=2,
     )
 
 
