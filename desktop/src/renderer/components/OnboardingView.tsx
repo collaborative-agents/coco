@@ -29,7 +29,7 @@ const PAGES = {
   permissions: {
     title: 'Permissions & privacy',
     description:
-      'Coco needs a few permissions to understand your activity. Here’s what each one does and how your data is used.',
+      'Screen access is optional for chat. Grant these permissions if you want Coco to understand your activity.',
   },
   voice: {
     title: 'Hey Coco',
@@ -71,14 +71,7 @@ export default function OnboardingView() {
 
   const stepKeys: StepKey[] = modelsOnly
     ? ['models']
-    : [
-        'welcome',
-        'name',
-        'permissions',
-        'voice',
-        'models',
-        'avatar',
-      ];
+    : ['welcome', 'name', 'permissions', 'voice', 'models', 'avatar'];
   const step = stepKeys.indexOf(currentKey);
   const busy = models.savingModels || voiceBusy;
   const blocked = busy || (currentKey === 'permissions' && !permissionsReady);
@@ -141,6 +134,18 @@ export default function OnboardingView() {
           >
             {nextLabel}
           </button>
+          {currentKey === 'permissions' && !permissionsReady && (
+            <button
+              type="button"
+              className="ob-btn ob-btn-secondary"
+              onClick={() => {
+                models.modelProps.setSensingEnabled(false);
+                setCurrentKey(stepKeys[step + 1]);
+              }}
+            >
+              Continue without screen access
+            </button>
+          )}
           {step > 0 && (
             <button
               type="button"
@@ -184,9 +189,7 @@ export default function OnboardingView() {
         />
       )}
       {currentKey === 'permissions' && (
-        <PermissionsStep
-          onReady={setPermissionsReady}
-        />
+        <PermissionsStep onReady={setPermissionsReady} />
       )}
       {currentKey === 'voice' && <VoiceStep onBusy={setVoiceBusy} />}
       {currentKey === 'models' && (

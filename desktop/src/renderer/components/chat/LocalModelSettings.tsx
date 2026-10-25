@@ -11,8 +11,8 @@ export default function LocalModelSettings() {
     <section className="workspace-settings-section local-settings">
       <h2>Models &amp; providers</h2>
       <p>
-        Choose your sensing and agent models. Saving restarts the local
-        services.
+        Connect models for Coco chat through Pi or add another model service.
+        Screen sensing is optional.
       </p>
       <ModelsStep {...models.modelProps} />
       <button

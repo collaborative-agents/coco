@@ -59,12 +59,12 @@ export default function LocalModelPicker({
   return (
     <div className="tutor-model-picker" data-testid="composer-model-selector">
       <select
-        aria-label="Tutor model"
+        aria-label="Chat model"
         value={value || defaultModelId}
         title={
           selected
             ? `${selected.label}\nProvider: ${selected.provider}\nModel: ${selected.model}${selected.baseUrl ? `\nEndpoint: ${selected.baseUrl}` : ''}`
-            : 'Tutor model'
+            : 'Chat model'
         }
         disabled={disabled || switching}
         onChange={async (event) => {

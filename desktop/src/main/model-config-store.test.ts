@@ -1,6 +1,7 @@
 import {
   buildRoleModelEnvironments,
   credentialId,
+  resolveModelIds,
   validateModelConfiguration,
 } from './model-config-store';
 
@@ -104,7 +105,7 @@ describe('model configuration', () => {
       defaultTutorId: 'fast',
     });
 
-    expect(config.sensing.model).toBe('hosted_vllm/thinkingmachines/inkling');
+    expect(config.sensing?.model).toBe('hosted_vllm/thinkingmachines/inkling');
   });
 
   it('routes an Inkling tutor through Tinker with a tutor-scoped key', () => {
@@ -175,4 +176,29 @@ describe('shared Pi model assignments', () => {
       }),
     ).toThrow('sensing');
   });
+});
+
+it('allows chat without sensing and never inherits a legacy observer model', () => {
+  const config = validateModelConfiguration({
+    sensing: null,
+    tutors: [
+      { id: 'chat', label: 'Chat', provider: 'pi', model: 'pi/test/chat' },
+    ],
+    defaultTutorId: 'chat',
+  });
+  expect(config.sensing).toBeNull();
+  expect(resolveModelIds(config, { OBSERVER_MODEL: 'gemini/legacy' })).toEqual({
+    tutor: 'pi/test/chat',
+    observer: '',
+  });
+  expect(
+    buildRoleModelEnvironments(config, { 'sensing:gemini': 'old-secret' })
+      .sensingEnv,
+  ).toEqual({});
+  expect(
+    resolveModelIds(null, {
+      TUTOR_MODEL: 'openai/chat',
+      OBSERVER_MODEL: 'gemini/legacy',
+    }).observer,
+  ).toBe('gemini/legacy');
 });

@@ -28,7 +28,9 @@ export default function PiProviderSettings({
             (current) =>
               current ||
               next.connection.provider ||
+              next.providers.find((p: any) => p.connected)?.id ||
               next.providers.find((p: any) => p.oauth)?.id ||
+              next.providers[0]?.id ||
               '',
           );
           onStatus?.(next);
@@ -68,11 +70,8 @@ export default function PiProviderSettings({
   const busy = pending || status.flow?.busy;
   return (
     <section className="ob-model-card pi-provider-settings">
-      <h3>Connected providers</h3>
-      <p>
-        Sign in once through Pi, then choose its models for chat, sensing, or
-        instant suggestions below. Credentials stay with Pi.
-      </p>
+      <h4>Connect a provider</h4>
+      <p>Sign in or enter an API key. Then add a model to chat below.</p>
       <label className="coco-field">
         Pi provider
         <span className="coco-select-wrap">

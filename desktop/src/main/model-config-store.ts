@@ -23,14 +23,14 @@ export interface ModelConnection {
 
 export interface ModelConfiguration {
   version: 1;
-  sensing: ModelConnection;
+  sensing: ModelConnection | null;
   tutors: ModelConnection[];
   defaultTutorId: string;
   instantSuggestionModelId?: string;
 }
 
 export interface ModelConfigurationInput {
-  sensing: ModelConnection;
+  sensing: ModelConnection | null;
   tutors: ModelConnection[];
   defaultTutorId: string;
   instantSuggestionModelId?: string;
@@ -137,7 +137,7 @@ export function validateModelConfiguration(
         .map(normalizeConnection)
         .filter((item): item is ModelConnection => item !== null)
     : [];
-  if (!sensing)
+  if (input?.sensing != null && !sensing)
     throw new Error('A sensing provider and vision model are required.');
   if (tutors.length === 0) throw new Error('Add at least one tutor model.');
   if (new Set(tutors.map((item) => item.id)).size !== tutors.length) {
@@ -230,7 +230,9 @@ export function getModelConfigurationView(): ModelConfigurationView | null {
   if (!config) return null;
   const credentials = readCredentials();
   const ids = new Set<string>([
-    credentialId('sensing', config.sensing.provider),
+    ...(config.sensing
+      ? [credentialId('sensing', config.sensing.provider)]
+      : []),
     ...config.tutors.map((item) => credentialId('tutor', item.provider)),
   ]);
   return {
@@ -252,7 +254,9 @@ export function saveModelConfiguration(
   });
 
   const allowedCredentialIds = new Set([
-    credentialId('sensing', config.sensing.provider),
+    ...(config.sensing
+      ? [credentialId('sensing', config.sensing.provider)]
+      : []),
     ...config.tutors.map((item) => credentialId('tutor', item.provider)),
   ]);
   Object.keys(credentials).forEach((id) => {
@@ -260,7 +264,9 @@ export function saveModelConfiguration(
   });
 
   const required: Array<['sensing' | 'tutor', ProviderId]> = [
-    ['sensing', config.sensing.provider],
+    ...(config.sensing
+      ? [['sensing', config.sensing.provider] as ['sensing', ProviderId]]
+      : []),
     ...config.tutors.map((item): ['tutor', ProviderId] => [
       'tutor',
       item.provider,
@@ -317,10 +323,12 @@ export function buildRoleModelEnvironments(
   fallbackEnv: NodeJS.ProcessEnv = {},
 ): { sensingEnv: Record<string, string>; tutorEnv: Record<string, string> } {
   return {
-    sensingEnv: {
-      ...connectionEnv(config.sensing, 'sensing', credentials, fallbackEnv),
-      MEMORY_MODEL: config.sensing.model,
-    },
+    sensingEnv: config.sensing
+      ? {
+          ...connectionEnv(config.sensing, 'sensing', credentials, fallbackEnv),
+          MEMORY_MODEL: config.sensing.model,
+        }
+      : {},
     tutorEnv: Object.assign(
       {
         COCO_INSTANT_SUGGESTION_MODEL: config.tutors.find(
@@ -389,4 +397,18 @@ export function defaultTutor(config: ModelConfiguration): ModelConnection {
     config.tutors.find((item) => item.id === config.defaultTutorId) ??
     config.tutors[0]
   );
+}
+
+/** Managed absence is intentional; only unmanaged installs use legacy env IDs. */
+export function resolveModelIds(
+  config: ModelConfiguration | null,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return {
+    tutor: (config ? defaultTutor(config).model : env.TUTOR_MODEL || '').trim(),
+    observer: (config
+      ? (config.sensing?.model ?? '')
+      : env.OBSERVER_MODEL || ''
+    ).trim(),
+  };
 }

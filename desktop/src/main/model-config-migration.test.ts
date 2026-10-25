@@ -46,3 +46,12 @@ it('ignores legacy overrides after unified configuration is saved', () => {
   expect(readModelConfiguration()).toEqual(config);
   expect(read).toHaveBeenCalledTimes(1);
 });
+
+it('reloads an explicitly disabled sensing selection', () => {
+  jest
+    .spyOn(fs, 'readFileSync')
+    .mockReturnValue(
+      JSON.stringify({ ...config, sensing: null, unifiedRouting: true }),
+    );
+  expect(readModelConfiguration()).toEqual({ ...config, sensing: null });
+});

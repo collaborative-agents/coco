@@ -42,47 +42,48 @@ export default function HealthSettings({
           ? 'Coco is asleep. Screen sensing is paused. Manual chats and agent runs remain available.'
           : 'Checks services and models with short test requests, including a test image.'}
       </div>
-      {systemPermissionHealth.missing.length > 0 && (
-        <div role="alert" style={S.healthList}>
-          {systemPermissionHealth.missing.map((permission) => (
-            <div key={permission.target} style={S.healthRow}>
-              <span style={{ ...S.healthDot, background: '#ef4444' }} />
-              <div style={{ flex: 1 }}>
-                <div style={S.healthName}>
-                  {permission.label} permission required
+      {serviceHealth?.sensing.status !== 'disabled' &&
+        systemPermissionHealth.missing.length > 0 && (
+          <div role="alert" style={S.healthList}>
+            {systemPermissionHealth.missing.map((permission) => (
+              <div key={permission.target} style={S.healthRow}>
+                <span style={{ ...S.healthDot, background: '#ef4444' }} />
+                <div style={{ flex: 1 }}>
+                  <div style={S.healthName}>
+                    {permission.label} permission required
+                  </div>
+                  <div style={{ ...S.healthDetail, color: '#b45309' }}>
+                    {permission.explanation}
+                  </div>
+                  <button
+                    type="button"
+                    style={{
+                      ...S.connectionTestButton,
+                      marginTop: 7,
+                      ...(permissionOpening ? S.sendBtnDisabled : {}),
+                    }}
+                    disabled={permissionOpening !== null}
+                    onClick={() => void openSystemPermission(permission.target)}
+                  >
+                    {permissionOpening === permission.target
+                      ? 'Opening…'
+                      : permission.actionLabel}
+                  </button>
                 </div>
-                <div style={{ ...S.healthDetail, color: '#b45309' }}>
-                  {permission.explanation}
-                </div>
-                <button
-                  type="button"
-                  style={{
-                    ...S.connectionTestButton,
-                    marginTop: 7,
-                    ...(permissionOpening ? S.sendBtnDisabled : {}),
-                  }}
-                  disabled={permissionOpening !== null}
-                  onClick={() => void openSystemPermission(permission.target)}
-                >
-                  {permissionOpening === permission.target
-                    ? 'Opening…'
-                    : permission.actionLabel}
-                </button>
               </div>
-            </div>
-          ))}
-          {permissionError && (
-            <div
-              style={{
-                color: 'var(--coco-color-danger)',
-                fontSize: 'var(--coco-text-secondary)',
-              }}
-            >
-              {permissionError}
-            </div>
-          )}
-        </div>
-      )}
+            ))}
+            {permissionError && (
+              <div
+                style={{
+                  color: 'var(--coco-color-danger)',
+                  fontSize: 'var(--coco-text-secondary)',
+                }}
+              >
+                {permissionError}
+              </div>
+            )}
+          </div>
+        )}
       {cocoSleeping && (
         <div role="status" style={S.healthDetail}>
           Sleeping intentionally stops the sensing server and tutor agent.
@@ -97,7 +98,9 @@ export default function HealthSettings({
             ] as const
           ).map(([key, label, health]) => {
             const serviceStatusLabel = health
-              ? `${health.connected ? 'Connected' : 'Not connected'} (service)`
+              ? health.status === 'disabled'
+                ? 'Off (optional)'
+                : `${health.connected ? 'Connected' : 'Not connected'} (service)`
               : `${healthLoading ? 'Checking…' : 'Not checked'} (service)`;
             const modelAssessment = health?.modelAssessment;
             const modelStatusLabel = modelAssessment
@@ -119,6 +122,7 @@ export default function HealthSettings({
             ].filter(Boolean);
             const hasHealthIssue = Boolean(
               health &&
+                health.status !== 'disabled' &&
                 (!health.connected || modelAssessment?.status === 'failed'),
             );
             const isFullyConnected = Boolean(

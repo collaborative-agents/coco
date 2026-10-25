@@ -4,25 +4,17 @@ import type { ModelDraft, ConnectionTestStatus } from './ModelsStep';
 export default function useModelSetup() {
   const [modelError, setModelError] = useState('');
   const [savingModels, setSavingModels] = useState(false);
+  const [sensingEnabled, setSensingEnabled] = useState(false);
   const [sensingModel, setSensingModel] = useState<ModelDraft>({
     id: 'sensing',
     label: 'Sensing',
-    provider: 'gemini',
-    model: 'gemini/gemini-2.5-pro',
+    provider: 'pi',
+    model: '',
     apiKey: '',
     baseUrl: '',
   });
-  const [tutorModels, setTutorModels] = useState<ModelDraft[]>([
-    {
-      id: 'tutor-1',
-      label: 'Gemini 3 Flash',
-      provider: 'gemini',
-      model: 'gemini/gemini-3-flash-preview',
-      apiKey: '',
-      baseUrl: '',
-    },
-  ]);
-  const [defaultTutorId, setDefaultTutorId] = useState('tutor-1');
+  const [tutorModels, setTutorModels] = useState<ModelDraft[]>([]);
+  const [defaultTutorId, setDefaultTutorId] = useState('');
   const [instantSuggestionModelId, setInstantSuggestionModelId] = useState('');
   const [connectionTests, setConnectionTests] = useState<
     Record<string, ConnectionTestStatus>
@@ -50,7 +42,7 @@ export default function useModelSetup() {
         role,
         connection: {
           id: model.id,
-          label: model.label || (role === 'sensing' ? 'Sensing' : 'Tutor'),
+          label: model.label || (role === 'sensing' ? 'Sensing' : 'Chat'),
           provider: model.provider,
           model: model.model,
           baseUrl: model.baseUrl,
@@ -77,7 +69,7 @@ export default function useModelSetup() {
     window.electron?.ipcRenderer
       .invoke('get-model-configuration')
       .then(async (config: any) => {
-        if (!config?.sensing || !Array.isArray(config.tutors)) {
+        if (!config || !Array.isArray(config.tutors)) {
           const status = await window.electron?.ipcRenderer.invoke(
             'pi-provider',
             'status',
@@ -98,15 +90,17 @@ export default function useModelSetup() {
           }
           return undefined;
         }
-        setSensingModel({
-          ...config.sensing,
-          model: String(config.sensing.model).replace(
-            /^(?:hosted_vllm|tinker)\//,
-            '',
-          ),
-          apiKey: '',
-          baseUrl: config.sensing.baseUrl ?? '',
-        });
+        setSensingEnabled(Boolean(config.sensing));
+        if (config.sensing)
+          setSensingModel({
+            ...config.sensing,
+            model: String(config.sensing.model).replace(
+              /^(?:hosted_vllm|tinker)\//,
+              '',
+            ),
+            apiKey: '',
+            baseUrl: config.sensing.baseUrl ?? '',
+          });
         setTutorModels(
           config.tutors.map((item: any) => ({
             ...item,
@@ -124,20 +118,26 @@ export default function useModelSetup() {
 
   const saveModels = async () => {
     try {
-      if (!sensingModel.model.trim()) {
+      if (sensingEnabled && !sensingModel.model.trim()) {
         setModelError('Enter a vision-capable sensing model.');
+        return false;
+      }
+      if (!tutorModels.length) {
+        setModelError(
+          'Add a Pi model or an additional model connection for chat.',
+        );
         return false;
       }
       if (
         tutorModels.some((item) => !item.label.trim() || !item.model.trim())
       ) {
-        setModelError('Give every tutor model a name and model ID.');
+        setModelError('Give every chat model a name and model ID.');
         return false;
       }
       setSavingModels(true);
       setModelError('');
       const credentials: Record<string, string> = {};
-      if (sensingModel.apiKey.trim()) {
+      if (sensingEnabled && sensingModel.apiKey.trim()) {
         credentials[`sensing:${sensingModel.provider}`] = sensingModel.apiKey;
       }
       tutorModels.forEach((item) => {
@@ -147,13 +147,15 @@ export default function useModelSetup() {
       const result = await window.electron?.ipcRenderer.invoke(
         'save-model-configuration',
         {
-          sensing: {
-            id: 'sensing',
-            label: 'Sensing',
-            provider: sensingModel.provider,
-            model: sensingModel.model,
-            baseUrl: sensingModel.baseUrl,
-          },
+          sensing: sensingEnabled
+            ? {
+                id: 'sensing',
+                label: 'Sensing',
+                provider: sensingModel.provider,
+                model: sensingModel.model,
+                baseUrl: sensingModel.baseUrl,
+              }
+            : null,
           tutors: tutorModels.map((item) => ({
             id: item.id,
             label: item.label,
@@ -187,6 +189,8 @@ export default function useModelSetup() {
     savingModels,
     saveModels,
     modelProps: {
+      sensingEnabled,
+      setSensingEnabled,
       sensing: sensingModel,
       setSensing: setSensingModel,
       tutors: tutorModels,

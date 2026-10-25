@@ -44,7 +44,10 @@ import log from 'electron-log';
 import axios from 'axios';
 import { resolveHtmlPath } from './util';
 import { serviceManager } from './services/manager';
-import { configureServiceModelArguments } from './services/model-arguments';
+import {
+  configureServiceModelArguments,
+  startModelServices,
+} from './services/model-arguments';
 import {
   startObservationStream,
   stopObservationStream,
@@ -80,6 +83,7 @@ import {
   prepareModelConnectionTest,
   readModelConfiguration,
   resolveModelRuntime,
+  resolveModelIds,
   saveModelConfiguration,
   type ModelConfigurationInput,
   type ModelConnection,
@@ -311,7 +315,8 @@ const flushHotkeyCaptures = () => {
 
 // True once the Python services have been started. Guards against double-start
 // and lets us defer startup until the user has chosen their models.
-let observerStarted = false;
+let servicesStarted = false;
+let sensingEnabled = false;
 // isFloatMode: chat panel is in narrow side-panel mode (vs. expanded width).
 let isFloatMode = false;
 // Set true once the app is genuinely quitting so window 'close' handlers stop
@@ -2022,6 +2027,9 @@ ipcMain.handle(
         modelHealthInFlight.delete(cacheKey);
       }
     }
+    if (role === 'sensing' && savedConfig && !savedConfig.sensing) {
+      return { status: 'not_configured', detail: 'Sensing is optional. Chat is available; proactive suggestions and self-evolving memory are off.' };
+    }
     const legacyModel = role === 'sensing'
       ? process.env.OBSERVER_MODEL
       : process.env.TUTOR_MODEL;
@@ -2102,7 +2110,7 @@ ipcMain.handle(
     assessModelConfiguration('tutor'),
   ]);
   const [sensing, tutor] = await Promise.all([
-    checkService(
+    savedConfig && !savedConfig.sensing ? Promise.resolve({ connected: false, status: 'disabled', detail: 'Sensing is turned off.', modelAssessment: sensingAssessment }) : checkService(
       `http://127.0.0.1:${sensingPort}/health`,
       'coco-sensing',
       sensingAssessment,
@@ -2270,7 +2278,7 @@ async function restoreSessionAfterModelRestart(): Promise<void> {
     try {
       await Promise.all([
         axios.get(`${tutor}/health`, { timeout: 1000 }),
-        axios.get(`${sensing}/health`, { timeout: 1000 }),
+        ...(sensingEnabled && !isCocoSleeping() ? [axios.get(`${sensing}/health`, { timeout: 1000 })] : []),
       ]);
       break;
     } catch {
@@ -2309,6 +2317,7 @@ async function restoreSessionAfterModelRestart(): Promise<void> {
       { timeout: 8000 },
     );
   }
+  if (!sensingEnabled || isCocoSleeping()) return;
   await axios.post(
     `${sensing}/session`,
     {
@@ -2332,13 +2341,13 @@ ipcMain.handle(
       if (agentRuns.busy) throw new Error('Stop the current run before changing models.');
       await agentRuns.dispose();
       for (const connection of [input.sensing, ...input.tutors]) {
-        if (connection.provider === 'pi') await validatePiModel(connection.model, connection === input.sensing);
+        if (connection?.provider === 'pi') await validatePiModel(connection.model, connection === input.sensing);
       }
       const config = saveModelConfiguration(input);
       modelHealthCache.clear();
       suggestionCache.clear();
       const runtime = resolveModelRuntime();
-      if (observerStarted && runtime) {
+      if (servicesStarted && runtime) {
         const defaultTutorModel = defaultTutor(runtime.config);
         const activeTutorModel =
           runtime.config.tutors.find(
@@ -2346,7 +2355,16 @@ ipcMain.handle(
           ) ?? defaultTutorModel;
         currentTutorModelId = activeTutorModel.id;
         process.env.TUTOR_MODEL = defaultTutorModel.model;
-        process.env.OBSERVER_MODEL = runtime.config.sensing.model;
+        process.env.OBSERVER_MODEL = runtime.config.sensing?.model ?? '';
+        sensingEnabled = Boolean(runtime.config.sensing);
+        stopObservationStream();
+        if (!sensingEnabled) {
+          latestHiddenSuggestionObservationId = undefined;
+          if (avatarInvite) avatarWindow?.webContents.send('session-invite-clear', avatarInvite);
+          avatarInvite = null;
+          notificationWindow?.destroy();
+          avatarWindow?.webContents.send('system-suspend');
+        }
         await Promise.all([
           serviceManager.stopService('tutor-server'),
           serviceManager.stopService('sensing-server'),
@@ -2366,13 +2384,21 @@ ipcMain.handle(
           'model_name',
           activeTutorModel.model,
         );
-        serviceManager.configureServiceArg(
-          'sensing-server',
-          'observer_model',
-          runtime.config.sensing.model,
+        if (runtime.config.sensing) {
+          serviceManager.configureServiceArg(
+            'sensing-server',
+            'observer_model',
+            runtime.config.sensing.model,
+          );
+        }
+        startModelServices(
+          serviceManager,
+          runtime.config.sensing?.model ?? '',
+          isCocoSleeping(),
         );
-        serviceManager.startService('tutor-server');
-        serviceManager.startService('sensing-server');
+        if (sensingEnabled && !isCocoSleeping()) {
+          subscribeToObservations();
+        }
         try {
           await restoreSessionAfterModelRestart();
         } catch (err) {
@@ -2568,7 +2594,7 @@ ipcMain.handle('get-coco-sleep-mode', () => ({
 
 async function restoreSensingSession(sessionId: string, profile: ReturnType<typeof readProfile>) {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (isCocoSleeping() || currentSessionId !== sessionId) return;
+    if (!sensingEnabled || isCocoSleeping() || currentSessionId !== sessionId) return;
     try {
       await axios.post(`http://127.0.0.1:${process.env.SENSING_PORT || '8080'}/session`, {
         node_uuid: sessionId, struggle_detection_seconds: 120, scenario: profile.scenario,
@@ -2597,10 +2623,12 @@ async function setCocoSleepMode(sleeping: boolean) {
     avatarInvite = null;
     suggestionCache.clear();
     notificationWindow?.destroy();
+    stopObservationStream();
     serviceManager.configureServiceEnv('sensing-server', { COCO_RESET_TUTOR_ON_START: '0' });
     await serviceManager.stopService('sensing-server');
-  } else if (observerStarted) {
+  } else if (servicesStarted && sensingEnabled) {
     serviceManager.startService('sensing-server');
+    subscribeToObservations();
     if (currentSessionId) {
       const sessionId = currentSessionId;
       const profile = readProfile();
@@ -3045,7 +3073,7 @@ function precomputeSuggestion(event: {
   image_paths?: string[];
 }): Promise<InstantSuggestion | null> | undefined {
   const id = event.observation_id;
-  if (!id) return undefined;
+  if (!sensingEnabled || !id) return undefined;
   const cached = suggestionCache.get(id);
   if (cached) return cached.promise;
   pruneSuggestionCache();
@@ -3067,6 +3095,7 @@ function precomputeSuggestion(event: {
       { timeout: SUGGESTION_REQUEST_TIMEOUT_MS },
     )
     .then((resp) => {
+      if (!sensingEnabled) return null;
       const data = resp.data as InstantSuggestion;
       recordSupportSuggestion(id, data);
       avatarHistoryWindow?.webContents.send('activity-history-changed');
@@ -3270,7 +3299,7 @@ async function createProactiveTutorSession(
     log.warn(`[ProactiveSession] Tutor context setup failed: ${(err as Error).message}`);
   }
 
-  if (isCocoSleeping()) return sessionId;
+  if (!sensingEnabled || isCocoSleeping()) return sessionId;
 
   // Configure the sensing session (struggle-detection window + observer prompt).
   // This is proactive-only — chat still works if the sensing server is down.
@@ -3800,7 +3829,7 @@ ipcMain.handle(
       log.warn(`[Settings] Tutor update failed: ${(err as Error).message}`);
     }
     // Update the observer/judge scenario too (sensing) if a session is running.
-    if (currentSessionId) {
+    if (sensingEnabled && !isCocoSleeping() && currentSessionId) {
       const { customObserverPrompt } = readProfile();
       try {
         await axios.post(
@@ -3942,11 +3971,11 @@ app.on('will-quit', () => {
 });
 
 // Warning shown when neither first-launch configuration nor legacy developer
-// environment variables provide both required model roles.
+// environment variables provide a chat model.
 const showModelsRequiredWarning = () => {
   showNotification({
     message:
-      'Coco is paused. Open Settings and configure a sensing model and at least one tutor model.',
+      'Open Settings and configure at least one chat model to use Coco.',
     actionLabel: 'Got it',
   });
 };
@@ -3954,34 +3983,27 @@ const showModelsRequiredWarning = () => {
 // Effective model ids. Managed app configuration wins when present; legacy
 // developer environment variables remain supported as a fallback.
 const effectiveModels = (): { tutor: string; observer: string } => {
-  const runtime = resolveModelRuntime();
-  return {
-    tutor: (
-      runtime ? defaultTutor(runtime.config).model : process.env.TUTOR_MODEL || ''
-    ).trim(),
-    observer: (
-      runtime?.config.sensing.model || process.env.OBSERVER_MODEL || ''
-    ).trim(),
-  };
+  return resolveModelIds(readModelConfiguration());
 };
 
-// Starts the sensing services and observation stream. Called once onboarding
+// Starts chat and, when configured, sensing and its observation stream. Called once onboarding
 // is complete (or immediately on subsequent launches where it's already done),
 // and again from update-settings the moment the user first saves their models.
 const startObserver = () => {
   // Already running — nothing to do (guards the two call sites + the
   // start-on-save path in update-settings).
-  if (observerStarted) return;
+  if (servicesStarted) return;
 
-  // Gate on model choice: until BOTH roles are explicitly set, do not spawn
-  // Python services that could otherwise start with an unintended provider.
+  // Chat needs a tutor model. Sensing is optional and never falls back to
+  // a legacy environment model when managed configuration disables it.
   const { tutor: tutorModel, observer: observerModel } = effectiveModels();
-  if (!tutorModel || !observerModel) {
+  if (!tutorModel) {
     log.warn('[Models] No models chosen yet — services not started.');
     if (readPiConnection().mode !== 'native') showModelsRequiredWarning();
     return;
   }
-  observerStarted = true;
+  servicesStarted = true;
+  sensingEnabled = Boolean(observerModel);
 
   // Shared records directory. Both the sensing server (observer/judge) and the
   // tutor server read $COCO_RECORDS_DIR so all their JSONL logs — and, in
@@ -4054,7 +4076,7 @@ const startObserver = () => {
         true,
       );
     }
-    serviceManager.startAll();
+    startModelServices(serviceManager, observerModel, isCocoSleeping());
   } catch (e) {
     console.warn('Failed to start services:', e);
   }
@@ -4062,6 +4084,10 @@ const startObserver = () => {
   // Trim old activity history once per launch so the JSONL stays bounded.
   pruneActivity(Math.floor(Date.now() / 1000));
 
+  if (sensingEnabled && !isCocoSleeping()) subscribeToObservations();
+};
+
+function subscribeToObservations() {
   // Subscribe to the sensing server's live observation feed and forward
   // each event to the avatar window. The SSE client retries with backoff,
   // so it's safe to start before the sensing server is fully up.
@@ -4069,7 +4095,7 @@ const startObserver = () => {
   startObservationStream({
     url: `http://127.0.0.1:${sensingPort}/observations/stream`,
     onEvent: (event) => {
-      if (isCocoSleeping()) return;
+      if (!sensingEnabled || isCocoSleeping()) return;
       if (observationSleepGuard.shouldSuppress(event.ts)) {
         if (event.observation) {
           log.info(
@@ -4132,6 +4158,7 @@ const startObserver = () => {
             // rather than the observer diagnosis that led to it.
             if (
               !value ||
+              !sensingEnabled ||
               isCocoSleeping() ||
               !hideAvatarMode ||
               latestHiddenSuggestionObservationId !== event.observation_id
@@ -4202,7 +4229,7 @@ const startObserver = () => {
       }
     },
   });
-};
+}
 
 app
   .whenReady()
@@ -4249,7 +4276,7 @@ app
     // finishes or skips onboarding.
     const canStartConfiguredModels = Boolean(
       readModelConfiguration() ||
-        (process.env.TUTOR_MODEL?.trim() && process.env.OBSERVER_MODEL?.trim()),
+        process.env.TUTOR_MODEL?.trim(),
     );
     if (isOnboardingComplete() && canStartConfiguredModels) {
       hideAvatarMode = readHideAvatarSetting();

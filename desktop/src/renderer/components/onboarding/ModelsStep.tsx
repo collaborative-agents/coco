@@ -1,10 +1,6 @@
 import { useState } from 'react';
 import PiProviderSettings from '../chat/PiProviderSettings';
-const MODEL_PROVIDERS = [
-  ['pi', 'Connected through Pi'],
-  ['gemini', 'Google Gemini'],
-  ['openai', 'OpenAI'],
-  ['anthropic', 'Anthropic'],
+const ADDITIONAL_PROVIDERS = [
   ['tinker', 'Tinker'],
   ['tinfoil', 'Tinfoil (confidential)'],
   ['hosted_vllm', 'OpenAI-compatible endpoint'],
@@ -47,6 +43,9 @@ function ModelFields({
   onTest: () => void;
   testStatus: ConnectionTestStatus | undefined;
 }) {
+  const legacyProvider =
+    value.provider !== 'pi' &&
+    !ADDITIONAL_PROVIDERS.some(([id]) => id === value.provider);
   const update = (field: keyof ModelDraft, next: string) =>
     onChange({ ...value, [field]: next });
   let modelPlaceholder = sensing
@@ -58,7 +57,7 @@ function ModelFields({
   return (
     <div className="ob-model-card">
       <div className="ob-model-card-title">
-        {sensing ? 'Sensitive sensing model' : value.label || 'Tutor model'}
+        {sensing ? 'Sensing model' : value.label || 'Additional model'}
       </div>
       {sensing && (
         <div className="ob-model-warning">
@@ -70,33 +69,57 @@ function ModelFields({
         <input
           className="ob-custom-input"
           value={value.label}
-          placeholder="Display name, e.g. Claude Sonnet"
+          aria-label="Model display name"
+          placeholder="Display name"
           onChange={(event) => update('label', event.target.value)}
         />
       )}
-      <select
-        className="ob-custom-input"
-        value={value.provider}
-        onChange={(event) =>
-          onChange({
-            ...value,
-            provider: event.target.value,
-            model: '',
-            apiKey: '',
-            baseUrl: '',
-          })
-        }
-      >
-        {MODEL_PROVIDERS.map(([id, label]) => (
-          <option key={id} value={id}>
-            {label}
-          </option>
-        ))}
-      </select>
+      {legacyProvider && (
+        <p className="ob-sub">
+          Existing direct connection. You can keep using it or connect this
+          provider through Pi above.
+        </p>
+      )}
+      {(sensing || value.provider !== 'pi') && (
+        <select
+          className="ob-custom-input"
+          aria-label={sensing ? 'Sensing provider' : 'Additional provider'}
+          value={value.provider}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              provider: event.target.value,
+              model: '',
+              apiKey: '',
+              baseUrl: '',
+            })
+          }
+        >
+          {sensing && <option value="pi">Connected through Pi</option>}
+          {legacyProvider && (
+            <option value={value.provider}>
+              {(
+                {
+                  openai: 'OpenAI',
+                  anthropic: 'Anthropic',
+                  gemini: 'Google Gemini',
+                  open_anonymity: 'Open Anonymity',
+                } as Record<string, string>
+              )[value.provider] || value.provider}{' '}
+              (existing connection)
+            </option>
+          )}
+          {ADDITIONAL_PROVIDERS.map(([id, label]) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
+        </select>
+      )}
       {value.provider === 'pi' ? (
         <select
           className="ob-custom-input"
-          aria-label={sensing ? 'Sensing Pi model' : 'Tutor Pi model'}
+          aria-label={sensing ? 'Sensing Pi model' : 'Chat Pi model'}
           value={value.model}
           onChange={(event) => {
             const selected = piModels.find(
@@ -133,6 +156,7 @@ function ModelFields({
         <input
           className="ob-custom-input"
           value={value.model}
+          aria-label={sensing ? 'Sensing model ID' : 'Additional model ID'}
           placeholder={modelPlaceholder}
           onChange={(event) => update('model', event.target.value)}
         />
@@ -187,6 +211,8 @@ function ModelFields({
 }
 
 export default function ModelsStep({
+  sensingEnabled,
+  setSensingEnabled,
   sensing,
   setSensing,
   tutors,
@@ -199,6 +225,8 @@ export default function ModelsStep({
   testStatuses,
   onTest,
 }: {
+  sensingEnabled: boolean;
+  setSensingEnabled: (enabled: boolean) => void;
   sensing: ModelDraft;
   setSensing: (next: ModelDraft) => void;
   tutors: ModelDraft[];
@@ -218,129 +246,214 @@ export default function ModelsStep({
         (provider: any) => provider.id === model.provider && provider.connected,
       ),
   );
-  const updateTutor = (index: number, next: ModelDraft) =>
-    setTutors(tutors.map((item, i) => (i === index ? next : item)));
-  const addTutor = () => {
-    const id = `tutor-${Date.now()}`;
-    setTutors([
-      ...tutors,
-      {
-        id,
-        label: '',
-        provider: 'anthropic',
-        model: '',
-        apiKey: '',
-        baseUrl: '',
-      },
-    ]);
+  const addConnection = (connection: ModelDraft) => {
+    setTutors([...tutors, connection]);
+    if (!defaultTutorId) setDefaultTutorId(connection.id);
   };
-  return (
-    <>
-      <PiProviderSettings onStatus={setPiStatus} />
-      <p className="ob-sub">
-        The sensing model reads your screen to detect when help may be useful
-        and curate context. Tutor models generate proactive suggestions and chat
-        responses only when needed.
-      </p>
-      <label className="coco-field">
-        Reuse a configured model for sensing
-        <select
-          className="ob-custom-input"
-          value=""
-          onChange={(event) => {
-            const selected = tutors.find(
-              (item) => item.id === event.target.value,
-            );
-            if (selected)
-              setSensing({ ...selected, id: 'sensing', label: 'Sensing' });
-          }}
-        >
-          <option value="">Choose a model or configure below…</option>
-          {tutors
-            .filter(
-              (item) =>
-                item.model &&
-                (item.provider !== 'pi' ||
-                  piModels.some(
-                    (m) =>
-                      `pi/${m.provider}/${m.id}` === item.model &&
-                      m.input?.includes('image'),
-                  )),
-            )
-            .map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.label}
-              </option>
-            ))}
-        </select>
-      </label>
+  const addAdditional = () =>
+    addConnection({
+      id: `model-${Date.now()}`,
+      label: '',
+      provider: 'hosted_vllm',
+      model: '',
+      apiKey: '',
+      baseUrl: '',
+    });
+  const renderChatModel = (tutor: ModelDraft) => (
+    <div key={tutor.id} className="ob-model-wrap">
       <ModelFields
         piModels={piModels}
-        value={sensing}
-        onChange={setSensing}
-        sensing
-        onTest={() => onTest('sensing', sensing)}
-        testStatus={testStatuses.sensing}
+        value={tutor}
+        sensing={false}
+        onChange={(next) =>
+          setTutors(tutors.map((item) => (item.id === tutor.id ? next : item)))
+        }
+        onTest={() => onTest('tutor', tutor)}
+        testStatus={testStatuses[tutor.id]}
       />
-      <div className="ob-model-section-title">Tutor models</div>
-      {tutors.map((tutor, index) => (
-        <div key={tutor.id} className="ob-model-wrap">
+      <div className="ob-model-actions">
+        <label htmlFor={`default-${tutor.id}`}>
+          <input
+            id={`default-${tutor.id}`}
+            type="radio"
+            name="default-chat-model"
+            checked={defaultTutorId === tutor.id}
+            onChange={() => setDefaultTutorId(tutor.id)}
+          />{' '}
+          Default for new chats
+        </label>
+        <button
+          type="button"
+          className="ob-model-remove"
+          aria-label={`Remove ${tutor.label || 'model'}`}
+          onClick={() => {
+            const next = tutors.filter((item) => item.id !== tutor.id);
+            setTutors(next);
+            if (instantSuggestionModelId === tutor.id)
+              setInstantSuggestionModelId('');
+            if (defaultTutorId === tutor.id)
+              setDefaultTutorId(next[0]?.id || '');
+          }}
+        >
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+  return (
+    <>
+      <section aria-labelledby="pi-connections-heading">
+        <h3 id="pi-connections-heading" className="ob-model-section-title">
+          Pi connections
+        </h3>
+        <p className="ob-sub">
+          Connect OpenAI, Anthropic, Google, and other Pi providers, then add
+          the models you want in Coco chat.
+        </p>
+        <PiProviderSettings onStatus={setPiStatus} />
+        {tutors.filter((item) => item.provider === 'pi').map(renderChatModel)}
+        <label className="coco-field">
+          Add a Pi model to chat
+          <select
+            className="ob-custom-input"
+            value=""
+            onChange={(event) => {
+              const selected = piModels.find(
+                (model) =>
+                  `pi/${model.provider}/${model.id}` === event.target.value,
+              );
+              if (!selected) return;
+              addConnection({
+                id: `pi-${Date.now()}`,
+                label: selected.name,
+                provider: 'pi',
+                model: event.target.value,
+                apiKey: '',
+                baseUrl: '',
+              });
+            }}
+          >
+            <option value="">Choose a connected model…</option>
+            {piModels
+              .filter(
+                (model) =>
+                  !tutors.some(
+                    (item) => item.model === `pi/${model.provider}/${model.id}`,
+                  ),
+              )
+              .map((model) => (
+                <option
+                  key={`${model.provider}/${model.id}`}
+                  value={`pi/${model.provider}/${model.id}`}
+                >
+                  {model.name} · {model.provider}
+                </option>
+              ))}
+          </select>
+        </label>
+        {!piModels.length && (
+          <p className="ob-sub">
+            Connect a provider above to load its models. Additional connections
+            below also work without Pi.
+          </p>
+        )}
+      </section>
+      <section aria-labelledby="additional-connections-heading">
+        <h3
+          id="additional-connections-heading"
+          className="ob-model-section-title"
+        >
+          Additional model connections
+        </h3>
+        <p className="ob-sub">
+          Add Tinker, Tinfoil, an OpenAI-compatible endpoint, or LM Studio.
+          These models appear alongside Pi models in the chat picker.
+        </p>
+        {tutors.filter((item) => item.provider !== 'pi').map(renderChatModel)}
+        <button type="button" className="ob-model-add" onClick={addAdditional}>
+          + Add model connection
+        </button>
+      </section>
+      <h3 className="ob-model-section-title">Optional sensing</h3>
+      <label className="coco-field">
+        <span>
+          <input
+            type="checkbox"
+            checked={sensingEnabled}
+            onChange={(event) => setSensingEnabled(event.target.checked)}
+          />{' '}
+          Enable screen sensing (optional)
+        </span>
+      </label>
+      <p className="ob-sub">
+        You can use Coco for chat without a sensing model. Without this
+        connection, proactive suggestions and self-evolving memory are
+        unavailable. Connect a sensing model later when you have a provider you
+        trust with your screen.
+      </p>
+      {sensingEnabled && (
+        <>
+          <label className="coco-field">
+            Reuse a configured model for sensing
+            <select
+              className="ob-custom-input"
+              value=""
+              onChange={(event) => {
+                const selected = tutors.find(
+                  (item) => item.id === event.target.value,
+                );
+                if (selected)
+                  setSensing({ ...selected, id: 'sensing', label: 'Sensing' });
+              }}
+            >
+              <option value="">Choose a model or configure below…</option>
+              {tutors
+                .filter(
+                  (item) =>
+                    item.model &&
+                    (item.provider !== 'pi' ||
+                      piModels.some(
+                        (m) =>
+                          `pi/${m.provider}/${m.id}` === item.model &&
+                          m.input?.includes('image'),
+                      )),
+                )
+                .map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+            </select>
+          </label>
           <ModelFields
             piModels={piModels}
-            value={tutor}
-            sensing={false}
-            onChange={(next) => updateTutor(index, next)}
-            onTest={() => onTest('tutor', tutor)}
-            testStatus={testStatuses[tutor.id]}
+            value={sensing}
+            onChange={setSensing}
+            sensing
+            onTest={() => onTest('sensing', sensing)}
+            testStatus={testStatuses.sensing}
           />
-          <div className="ob-model-actions">
-            <label htmlFor={`default-${tutor.id}`}>
-              <input
-                id={`default-${tutor.id}`}
-                type="radio"
-                name="default-tutor"
-                checked={defaultTutorId === tutor.id}
-                onChange={() => setDefaultTutorId(tutor.id)}
-              />{' '}
-              Default for new chats
-            </label>
-            {tutors.length > 1 && (
-              <button
-                type="button"
-                className="ob-model-remove"
-                onClick={() => {
-                  const next = tutors.filter((item) => item.id !== tutor.id);
-                  setTutors(next);
-                  if (instantSuggestionModelId === tutor.id)
-                    setInstantSuggestionModelId('');
-                  if (defaultTutorId === tutor.id)
-                    setDefaultTutorId(next[0].id);
-                }}
-              >
-                Remove
-              </button>
-            )}
-          </div>
-        </div>
-      ))}
-      <button type="button" className="ob-model-add" onClick={addTutor}>
-        + Add another tutor model
-      </button>
-      <label className="coco-field">
-        Instant suggestion model
-        <select
-          className="ob-custom-input"
-          value={instantSuggestionModelId}
-          onChange={(event) => setInstantSuggestionModelId(event.target.value)}
-        >
-          <option value="">Use default chat model</option>
-          {tutors.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.label || 'Unnamed model'}
-            </option>
-          ))}
-        </select>
-      </label>
+        </>
+      )}
+      {sensingEnabled && (
+        <label className="coco-field">
+          Instant suggestion model
+          <select
+            className="ob-custom-input"
+            value={instantSuggestionModelId}
+            onChange={(event) =>
+              setInstantSuggestionModelId(event.target.value)
+            }
+          >
+            <option value="">Use default chat model</option>
+            {tutors.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label || 'Unnamed model'}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {error && <div className="ob-model-error">{error}</div>}
     </>
   );

@@ -867,7 +867,7 @@ describe('deferred suggestion context', () => {
       },
     };
     render(<SessionChatView />);
-    await screen.findByRole('combobox', { name: 'Tutor model' });
+    await screen.findByRole('combobox', { name: 'Chat model' });
 
     const imageDataUrl = 'data:image/png;base64,cHJldmlldw==';
     act(() => {

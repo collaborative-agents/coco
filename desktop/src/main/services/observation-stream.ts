@@ -40,7 +40,8 @@ interface StartOpts {
 const MIN_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 5_000;
 
-let stopped = false;
+let stopped = true;
+let generation = 0;
 let activeAbort: AbortController | null = null;
 let backoffMs = MIN_BACKOFF_MS;
 
@@ -116,22 +117,31 @@ export function startObservationStream({ url, onEvent }: StartOpts) {
   // Guard against concurrent double-starts (e.g. two startObserver() calls).
   // A running loop has activeAbort set while a connection is open; between
   // retries it is null but stopped is false, so check both.
-  if (!stopped && activeAbort !== null) {
+  if (!stopped) {
     log.warn('[ObservationStream] already running — ignoring duplicate start');
     return;
   }
   stopped = false;
+  const currentGeneration = ++generation;
+  const isCurrent = () => !stopped && generation === currentGeneration;
+  backoffMs = MIN_BACKOFF_MS;
 
   const loop = async () => {
-    while (!stopped) {
+    while (isCurrent()) {
       const ctrl = new AbortController();
       activeAbort = ctrl;
       try {
-        await consumeStream(url, onEvent, ctrl.signal);
+        await consumeStream(
+          url,
+          (event) => {
+            if (isCurrent()) onEvent(event);
+          },
+          ctrl.signal,
+        );
         // Stream ended cleanly — server closed. Treat like a transient drop.
         log.info('[ObservationStream] stream ended; will reconnect');
       } catch (err) {
-        if (stopped) return;
+        if (!isCurrent()) return;
         // Node's `fetch()` reports connection failures as a generic
         // "fetch failed" and stashes the real reason on `.cause`.
         // Surface it (ECONNREFUSED, ENOTFOUND, …) so we can tell whether
@@ -143,9 +153,9 @@ export function startObservationStream({ url, onEvent }: StartOpts) {
           `[ObservationStream] connection error (retrying in ${backoffMs}ms): ${detail}`,
         );
       } finally {
-        activeAbort = null;
+        if (activeAbort === ctrl) activeAbort = null;
       }
-      if (stopped) return;
+      if (!isCurrent()) return;
       await new Promise((r) => setTimeout(r, backoffMs));
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
     }
@@ -156,6 +166,7 @@ export function startObservationStream({ url, onEvent }: StartOpts) {
 
 export function stopObservationStream() {
   stopped = true;
+  generation += 1;
   activeAbort?.abort();
   activeAbort = null;
 }
