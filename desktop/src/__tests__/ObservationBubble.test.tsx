@@ -1,6 +1,70 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
-import ObservationBubble from '../renderer/components/ObservationBubble';
+import ObservationBubble, {
+  BubbleState,
+} from '../renderer/components/ObservationBubble';
+
+describe('ObservationBubble 4D suggestion pages', () => {
+  const bubble: BubbleState = {
+    status: 'inefficient',
+    phrase: 'This task could be delegated.',
+    fadingOut: false,
+    scenario: 'ai_upskilling',
+    suggestion: {
+      kind: 'delegate',
+      title: 'Description: give AI a precise task',
+      prompt:
+        'Stage: You are updating payroll.\nTask: Read the policy and update the spreadsheet.\nRules: Follow the rounding policy.',
+      copyText:
+        'Stage: You are updating payroll.\nTask: Read the policy and update the spreadsheet.\nRules: Follow the rounding policy.',
+      targetTool: 'claude-cowork',
+      availableTools: [
+        { id: 'claude-cowork', label: 'Claude Cowork', category: 'agent' },
+        { id: 'claude-code', label: 'Claude Code', category: 'agent' },
+      ],
+    },
+  };
+
+  it('shows the concepts before the prompt and navigates in both directions', () => {
+    render(<ObservationBubble bubble={bubble} />);
+
+    expect(screen.getByText('Delegation')).toBeInTheDocument();
+    expect(screen.getByText('Description')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Claude Cowork.*Read the policy and update the spreadsheet/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/You are updating payroll.*Follow the rounding policy/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Stage: You are updating payroll/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Chat with Coco' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show me how →' }));
+
+    expect(
+      screen.getByText(/Stage: You are updating payroll/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Chat with Coco' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Open Claude Cowork' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Open Claude Code' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '← Why' }));
+
+    expect(screen.getByText('Delegation')).toBeInTheDocument();
+  });
+});
 
 describe('ObservationBubble controls', () => {
   afterEach(() => {
@@ -25,13 +89,36 @@ describe('ObservationBubble controls', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Dismiss' }))
-      .toBeInTheDocument();
-    expect(screen.queryByLabelText('Why no suggestion?'))
-      .not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Why no suggestion?'),
+    ).not.toBeInTheDocument();
   });
 
-  it('keeps the help badge on a passive bubble without a suggestion', () => {
+  it('offers View reply and dismiss on an execution completion reminder', () => {
+    const onViewConversation = jest.fn();
+    const onDismiss = jest.fn();
+    render(
+      <ObservationBubble
+        bubble={{
+          status: 'progress',
+          phrase: '',
+          fadingOut: false,
+          tutorMessage: 'Your reply is ready.',
+          agentReply: { sessionId: 'session', requestId: 'request' },
+        }}
+        onViewConversation={onViewConversation}
+        onDismiss={onDismiss}
+      />,
+    );
+    expect(screen.getByText('Reply ready')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View reply →' }));
+    expect(onViewConversation).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show a help badge or tooltip on passive bubbles', () => {
     render(
       <ObservationBubble
         bubble={{
@@ -42,7 +129,10 @@ describe('ObservationBubble controls', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Why no suggestion?')).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Why no suggestion?'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 
   it('allows an accidental suggestion rating to be corrected', () => {
@@ -68,12 +158,12 @@ describe('ObservationBubble controls', () => {
     const good = screen.getByRole('button', { name: 'Good suggestion' });
     const bad = screen.getByRole('button', { name: 'Not helpful' });
     fireEvent.click(good);
-    expect(good).toBeDisabled();
-    expect(bad).toBeEnabled();
+    expect(good).toHaveAttribute('aria-pressed', 'true');
+    expect(bad).toHaveAttribute('aria-pressed', 'false');
 
     fireEvent.click(bad);
-    expect(good).toBeEnabled();
-    expect(bad).toBeDisabled();
+    expect(good).toHaveAttribute('aria-pressed', 'false');
+    expect(bad).toHaveAttribute('aria-pressed', 'true');
     expect(sendMessage).toHaveBeenCalledWith(
       'training-feedback',
       expect.objectContaining({
@@ -84,10 +174,12 @@ describe('ObservationBubble controls', () => {
     );
   });
 
-  it('always offers Coco Chat first for a delegation prompt', () => {
-    const onOpenCocoChat = jest.fn();
+  it('offers only Run with Coco for delegation', () => {
+    const onRun = jest.fn();
     render(
       <ObservationBubble
+        onRunSuggestion={onRun}
+        onChatAboutSuggestion={jest.fn()}
         bubble={{
           status: 'inefficient',
           phrase: 'Delegate this task',
@@ -103,18 +195,19 @@ describe('ObservationBubble controls', () => {
             ],
           },
         }}
-        onOpenCocoChat={onOpenCocoChat}
       />,
     );
 
     const actions = screen
       .getAllByRole('button')
       .map((button) => button.textContent);
-    expect(actions.indexOf('Open Coco Chat')).toBeLessThan(
-      actions.indexOf('Open ChatGPT'),
-    );
-    expect(actions).toContain('Open Claude');
-    fireEvent.click(screen.getByRole('button', { name: 'Open Coco Chat' }));
-    expect(onOpenCocoChat).toHaveBeenCalledTimes(1);
+    expect(actions).toContain('Run with Coco');
+    expect(actions).not.toContain('Chat with Coco');
+    expect(actions).not.toContain('Copy prompt');
+    expect(actions).not.toContain('Open ChatGPT');
+    fireEvent.click(screen.getByRole('button', { name: 'Run with Coco' }));
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(actions).not.toContain('Open Claude');
+    expect(actions).not.toContain('Open Coco Chat');
   });
 });

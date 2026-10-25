@@ -1,0 +1,120 @@
+.context-dialog {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  box-sizing: border-box;
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 16px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  font: var(--coco-text-secondary) var(--coco-font-family);
+  box-shadow: 0 20px 80px #0003;
+}
+.context-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.context-dialog::backdrop {
+  background: #18213055;
+}
+.context-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  flex-shrink: 0;
+}
+.context-dialog header {
+  border-bottom: 1px solid var(--coco-color-border);
+}
+.context-dialog h2 {
+  margin: 0;
+  font-size: var(--coco-text-section);
+}
+.context-dialog button {
+  cursor: pointer;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  background: var(--coco-color-surface-subtle);
+  color: inherit;
+  padding: 6px 12px;
+  font: inherit;
+}
+.context-dialog button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.context-body {
+  overflow: auto;
+  padding: 20px;
+  min-height: 0;
+}
+.context-note {
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-caption);
+  line-height: 1.5;
+}
+.context-usage-bar {
+  margin-top: 16px;
+  display: flex;
+  height: 18px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--coco-color-surface-subtle);
+}
+.context-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 12px 0 20px;
+  font-size: var(--coco-text-caption);
+}
+.context-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+.context-category {
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.context-category summary {
+  padding: 10px 12px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.context-category summary span {
+  float: right;
+  margin-left: 8px;
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-caption);
+}
+.context-category .context-category {
+  margin: 8px;
+}
+.context-entry {
+  padding: 10px 12px;
+  border-top: 1px solid var(--coco-color-border);
+}
+.context-dialog pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 300px;
+  overflow: auto;
+  padding: 12px;
+  margin: 0;
+  font: var(--coco-text-caption) var(--coco-font-mono);
+}
+.context-dialog :focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 2px;
+}

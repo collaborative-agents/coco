@@ -1,0 +1,78 @@
+.agent-workspace {
+  margin-bottom: var(--coco-space-2, 8px);
+}
+.agent-workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.agent-folder,
+.agent-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: var(--coco-text-caption);
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text-muted);
+  cursor: pointer;
+}
+.agent-folder {
+  max-width: 55%;
+}
+.agent-folder span:first-of-type {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agent-folder svg {
+  flex-shrink: 0;
+}
+.agent-folder:hover,
+.agent-stop:hover {
+  color: var(--coco-color-text);
+  background: var(--coco-color-surface-subtle);
+}
+.agent-folder:focus-visible,
+.agent-stop:focus-visible {
+  outline: 2px solid var(--coco-color-accent);
+  outline-offset: 2px;
+}
+.agent-folder:disabled,
+.agent-stop:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.agent-stop {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.agent-workspace-hint {
+  font-size: var(--coco-text-caption);
+  color: var(--coco-color-text-subtle);
+}
+.agent-workspace-error {
+  margin-top: 6px;
+  color: var(--coco-color-danger, #b91c1c);
+  font-size: var(--coco-text-caption);
+}
+.agent-tool-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 280px;
+  overflow: auto;
+  font-family: var(--coco-font-mono, monospace);
+  font-size: var(--coco-text-caption);
+}
+@media (max-width: 430px) {
+  .agent-workspace-hint {
+    display: none;
+  }
+  .agent-folder {
+    max-width: 75%;
+  }
+}

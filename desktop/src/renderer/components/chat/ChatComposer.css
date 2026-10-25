@@ -1,0 +1,97 @@
+.chat-composer-surface textarea:focus,
+.chat-composer-surface textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.chat-composer-surface button:not(:disabled):hover {
+  filter: brightness(0.95);
+}
+
+/* Size against the composer, including zoom and the expanded workspace rails. */
+.chat-composer-surface {
+  container-type: inline-size;
+  container-name: composer;
+}
+
+.chat-composer-actions,
+.chat-composer-tools,
+.chat-composer-send-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-composer-actions {
+  margin-top: 8px;
+}
+
+.chat-composer-tools {
+  flex-shrink: 0;
+}
+
+.chat-composer-send-actions {
+  margin-left: auto;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.chat-composer-context-icon {
+  display: none;
+}
+
+.chat-composer-send-actions .tutor-model-picker {
+  flex: 0 1 200px;
+  min-width: 0;
+}
+
+.chat-composer-send-actions .tutor-model-picker select {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+@container composer (max-width: 640px) {
+  .chat-composer-actions,
+  .chat-composer-tools,
+  .chat-composer-send-actions {
+    gap: 4px;
+  }
+
+  .chat-composer-send-actions {
+    flex: 1;
+  }
+
+  .chat-composer-action-label {
+    display: none;
+  }
+
+  .chat-composer-context-icon {
+    display: block;
+  }
+
+  /* Override the shared pill styles only in the compact toolbar. */
+  .chat-composer-actions button {
+    width: 36px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 0 !important;
+    flex-shrink: 0;
+  }
+
+  .chat-composer-understanding,
+  .chat-composer-context {
+    background: transparent !important;
+    color: var(--coco-color-text-secondary) !important;
+  }
+
+  .chat-composer-send-actions .tutor-model-picker select {
+    border-color: transparent;
+    background: transparent;
+    padding: 6px 2px;
+  }
+
+  .chat-composer-send-actions .tutor-model-picker select:focus-visible {
+    border-color: var(--coco-color-text-secondary);
+  }
+}

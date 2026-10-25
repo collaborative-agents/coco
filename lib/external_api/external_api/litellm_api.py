@@ -43,6 +43,8 @@ class LiteLLMMessage(BaseModel):
     content: list[ContentBlock] = Field(default_factory=list)
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
+    # Preserve provider signatures across Pi tool-result round trips.
+    pi_message: dict[str, Any] | None = Field(default=None, exclude=True)
 
 
 def get_litellm_completion(
@@ -64,6 +66,11 @@ def get_litellm_completion(
 
     Doc: https://docs.litellm.ai/docs
     """
+    # Gemini 3 accepts sampling parameters for now, but its provider warns that
+    # they are deprecated and will be removed. Let the model use its defaults;
+    # behavioral guidance belongs in the system prompt for this model family.
+    model_name = model.rsplit("/", 1)[-1].lower()
+    uses_prompt_only_sampling = model_name.startswith("gemini-3")
     kwargs: dict = {
         "model": model,
         "messages": [
@@ -77,7 +84,7 @@ def get_litellm_completion(
         ],
         "stream": stream,
     }
-    if temperature is not None:
+    if not uses_prompt_only_sampling and temperature is not None:
         kwargs["temperature"] = temperature
     # max_tokens is required by some providers (e.g. Anthropic); only include
     # it when explicitly provided so providers with built-in defaults aren't
@@ -88,7 +95,7 @@ def get_litellm_completion(
     # avoid passing unsupported parameters to providers that don't accept them.
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
-    if top_p is not None:
+    if top_p is not None and not uses_prompt_only_sampling:
         kwargs["top_p"] = top_p
     if extra_body is not None:
         kwargs["extra_body"] = extra_body

@@ -3,6 +3,7 @@ import path from 'path';
 import { app } from 'electron';
 
 export type ProviderId =
+  | 'pi'
   | 'gemini'
   | 'openai'
   | 'anthropic'
@@ -22,15 +23,17 @@ export interface ModelConnection {
 
 export interface ModelConfiguration {
   version: 1;
-  sensing: ModelConnection;
+  sensing: ModelConnection | null;
   tutors: ModelConnection[];
   defaultTutorId: string;
+  instantSuggestionModelId?: string;
 }
 
 export interface ModelConfigurationInput {
-  sensing: ModelConnection;
+  sensing: ModelConnection | null;
   tutors: ModelConnection[];
   defaultTutorId: string;
+  instantSuggestionModelId?: string;
   credentials?: Record<string, string>;
 }
 
@@ -53,6 +56,7 @@ export const PROVIDERS: Record<
   ProviderId,
   { label: string; requiresKey: boolean; privacy: string }
 > = {
+  pi: { label: 'Connected through Pi', requiresKey: false, privacy: 'cloud' },
   gemini: { label: 'Google Gemini', requiresKey: true, privacy: 'cloud' },
   openai: { label: 'OpenAI', requiresKey: true, privacy: 'cloud' },
   anthropic: { label: 'Anthropic', requiresKey: true, privacy: 'cloud' },
@@ -80,10 +84,8 @@ const configPath = () =>
 const credentialsPath = () =>
   path.join(app.getPath('userData'), 'coco-model-credentials.json');
 
-export const credentialId = (
-  role: 'sensing' | 'tutor',
-  provider: ProviderId,
-) => `${role}:${provider}`;
+export const credentialId = (role: 'sensing' | 'tutor', provider: ProviderId) =>
+  `${role}:${provider}`;
 
 function isProvider(value: unknown): value is ProviderId {
   return typeof value === 'string' && value in PROVIDERS;
@@ -113,6 +115,8 @@ function normalizeConnection(value: unknown): ModelConnection | null {
     normalizedModel = `${expectedPrefix}${normalizedModel}`;
   }
   if (!normalizedModel.startsWith(expectedPrefix)) return null;
+  if (item.provider === 'pi' && !/^pi\/[^/]+\/.+/.test(normalizedModel))
+    return null;
   return {
     id: item.id.trim(),
     label: item.label.trim(),
@@ -133,7 +137,8 @@ export function validateModelConfiguration(
         .map(normalizeConnection)
         .filter((item): item is ModelConnection => item !== null)
     : [];
-  if (!sensing) throw new Error('A sensing provider and vision model are required.');
+  if (input?.sensing != null && !sensing)
+    throw new Error('A sensing provider and vision model are required.');
   if (tutors.length === 0) throw new Error('Add at least one tutor model.');
   if (new Set(tutors.map((item) => item.id)).size !== tutors.length) {
     throw new Error('Tutor model IDs must be unique.');
@@ -141,7 +146,16 @@ export function validateModelConfiguration(
   if (!tutors.some((item) => item.id === input.defaultTutorId)) {
     throw new Error('Choose a default tutor model.');
   }
+  if (
+    input.instantSuggestionModelId &&
+    !tutors.some((item) => item.id === input.instantSuggestionModelId)
+  ) {
+    throw new Error('Choose an available instant suggestion model.');
+  }
   return {
+    ...(input.instantSuggestionModelId
+      ? { instantSuggestionModelId: input.instantSuggestionModelId }
+      : {}),
     version: 1,
     sensing,
     tutors,
@@ -151,7 +165,9 @@ export function validateModelConfiguration(
 
 function readCredentials(): CredentialMap {
   try {
-    return JSON.parse(fs.readFileSync(credentialsPath(), 'utf8')) as CredentialMap;
+    return JSON.parse(
+      fs.readFileSync(credentialsPath(), 'utf8'),
+    ) as CredentialMap;
   } catch {
     return {};
   }
@@ -174,7 +190,36 @@ export function readModelConfiguration(): ModelConfiguration | null {
     const parsed = JSON.parse(fs.readFileSync(configPath(), 'utf8')) as
       | ModelConfiguration
       | undefined;
-    return parsed ? validateModelConfiguration(parsed) : null;
+    if (!parsed) return null;
+    const config = validateModelConfiguration(parsed);
+    // Configs written by unified setup no longer consult the old chat override.
+    if (
+      !(parsed as ModelConfiguration & { unifiedRouting?: boolean })
+        .unifiedRouting
+    ) {
+      try {
+        const legacy = JSON.parse(
+          fs.readFileSync(
+            path.join(app.getPath('userData'), 'pi-connection.json'),
+            'utf8',
+          ),
+        );
+        if (legacy.mode === 'native' && legacy.provider && legacy.model) {
+          const id = 'legacy-pi-chat';
+          config.instantSuggestionModelId ??= config.defaultTutorId;
+          config.tutors.push({
+            id,
+            label: `Pi · ${legacy.model}`,
+            provider: 'pi',
+            model: `pi/${legacy.provider}/${legacy.model}`,
+          });
+          config.defaultTutorId = id;
+        }
+      } catch {
+        /* No legacy Pi selection. */
+      }
+    }
+    return config;
   } catch {
     return null;
   }
@@ -185,7 +230,9 @@ export function getModelConfigurationView(): ModelConfigurationView | null {
   if (!config) return null;
   const credentials = readCredentials();
   const ids = new Set<string>([
-    credentialId('sensing', config.sensing.provider),
+    ...(config.sensing
+      ? [credentialId('sensing', config.sensing.provider)]
+      : []),
     ...config.tutors.map((item) => credentialId('tutor', item.provider)),
   ]);
   return {
@@ -207,7 +254,9 @@ export function saveModelConfiguration(
   });
 
   const allowedCredentialIds = new Set([
-    credentialId('sensing', config.sensing.provider),
+    ...(config.sensing
+      ? [credentialId('sensing', config.sensing.provider)]
+      : []),
     ...config.tutors.map((item) => credentialId('tutor', item.provider)),
   ]);
   Object.keys(credentials).forEach((id) => {
@@ -215,10 +264,13 @@ export function saveModelConfiguration(
   });
 
   const required: Array<['sensing' | 'tutor', ProviderId]> = [
-    ['sensing', config.sensing.provider],
-    ...config.tutors.map(
-      (item): ['tutor', ProviderId] => ['tutor', item.provider],
-    ),
+    ...(config.sensing
+      ? [['sensing', config.sensing.provider] as ['sensing', ProviderId]]
+      : []),
+    ...config.tutors.map((item): ['tutor', ProviderId] => [
+      'tutor',
+      item.provider,
+    ]),
   ];
   required.forEach(([role, provider]) => {
     const envName = PROVIDER_KEY_ENV[provider];
@@ -231,13 +283,13 @@ export function saveModelConfiguration(
     }
   });
 
-  if (
-    Object.keys(credentials).length > 0 ||
-    fs.existsSync(credentialsPath())
-  ) {
+  if (Object.keys(credentials).length > 0 || fs.existsSync(credentialsPath())) {
     writeCredentials(credentials);
   }
-  atomicWrite(configPath(), `${JSON.stringify(config, null, 2)}\n`);
+  atomicWrite(
+    configPath(),
+    `${JSON.stringify({ ...config, unifiedRouting: true }, null, 2)}\n`,
+  );
   return getModelConfigurationView() as ModelConfigurationView;
 }
 
@@ -271,12 +323,20 @@ export function buildRoleModelEnvironments(
   fallbackEnv: NodeJS.ProcessEnv = {},
 ): { sensingEnv: Record<string, string>; tutorEnv: Record<string, string> } {
   return {
-    sensingEnv: {
-      ...connectionEnv(config.sensing, 'sensing', credentials, fallbackEnv),
-      MEMORY_MODEL: config.sensing.model,
-    },
+    sensingEnv: config.sensing
+      ? {
+          ...connectionEnv(config.sensing, 'sensing', credentials, fallbackEnv),
+          MEMORY_MODEL: config.sensing.model,
+        }
+      : {},
     tutorEnv: Object.assign(
-      {},
+      {
+        COCO_INSTANT_SUGGESTION_MODEL: config.tutors.find(
+          (item) =>
+            item.id ===
+            (config.instantSuggestionModelId || config.defaultTutorId),
+        )!.model,
+      },
       ...config.tutors.map((item) =>
         connectionEnv(item, 'tutor', credentials, fallbackEnv),
       ),
@@ -318,13 +378,15 @@ export function prepareModelConnectionTest(
   }
   const env = connectionEnv(connection, role, credentials, process.env);
   const keyName = PROVIDER_KEY_ENV[connection.provider];
-  if (PROVIDERS[connection.provider].requiresKey && (!keyName || !env[keyName])) {
-    throw new Error(`${PROVIDERS[connection.provider].label} requires an API key.`);
-  }
   if (
-    connection.provider === 'hosted_vllm' &&
-    !env.HOSTED_VLLM_API_BASE
+    PROVIDERS[connection.provider].requiresKey &&
+    (!keyName || !env[keyName])
   ) {
+    throw new Error(
+      `${PROVIDERS[connection.provider].label} requires an API key.`,
+    );
+  }
+  if (connection.provider === 'hosted_vllm' && !env.HOSTED_VLLM_API_BASE) {
     throw new Error('Enter the OpenAI-compatible endpoint base URL.');
   }
   return { connection, env };
@@ -335,4 +397,18 @@ export function defaultTutor(config: ModelConfiguration): ModelConnection {
     config.tutors.find((item) => item.id === config.defaultTutorId) ??
     config.tutors[0]
   );
+}
+
+/** Managed absence is intentional; only unmanaged installs use legacy env IDs. */
+export function resolveModelIds(
+  config: ModelConfiguration | null,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return {
+    tutor: (config ? defaultTutor(config).model : env.TUTOR_MODEL || '').trim(),
+    observer: (config
+      ? (config.sensing?.model ?? '')
+      : env.OBSERVER_MODEL || ''
+    ).trim(),
+  };
 }

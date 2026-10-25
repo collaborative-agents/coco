@@ -8,8 +8,10 @@ uv run python -m pytest proactive_tutor/tutor_system_test.py
 """
 
 import base64
+import io
 import json
 import os
+import wave
 
 import pytest
 from proactive_tutor.tutor_system import TutorSystem
@@ -303,8 +305,13 @@ def test_audio_prompt_joins_chat_history_without_retaining_audio(monkeypatch, tm
         "tool_calls": [],
     }
     captured = {}
-    wav_header = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + bytes(36)
-    audio_data = base64.b64encode(wav_header).decode("ascii")
+    recording = io.BytesIO()
+    with wave.open(recording, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16_000)
+        wav.writeframes(b"\x00\x10" * 1600)
+    audio_data = base64.b64encode(recording.getvalue()).decode("ascii")
 
     def fake_chat(messages, image_paths=None, on_event=None):
         captured["messages"] = messages

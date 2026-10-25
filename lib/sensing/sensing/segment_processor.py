@@ -192,14 +192,12 @@ def _observe(
         "max_tokens": max_tokens,
         "operation": "observer",
     }
-    hosted_model = model.removeprefix("hosted_vllm/").lower()
-    # Disable reasoning for sensing model
-    if hosted_model.startswith("thinkingmachines/inkling"):
+    if (
+        model.removeprefix("hosted_vllm/")
+        .lower()
+        .startswith("thinkingmachines/inkling")
+    ):
         completion_kwargs["reasoning_effort"] = "none"
-    if "qwen" in hosted_model:
-        completion_kwargs["extra_body"] = {
-            "chat_template_kwargs": {"enable_thinking": False}
-        }
 
     result, metrics = chat_completion(**completion_kwargs)
 
@@ -930,7 +928,7 @@ class AiTutoringProcessor(SegmentProcessor):
         self._log(f"[{type.upper()} OBSERVATION (generate_observation)] {obs}\n")
         return obs, metrics
 
-    async def configure_session(self) -> None:
+    async def configure_session(self, *, preserve_tutor_context: bool = False) -> None:
         """Reset per-session observer state for a new tutor session.
 
         Called by ``Streamer.configure_session`` when the tutor-worker (or any
@@ -961,6 +959,10 @@ class AiTutoringProcessor(SegmentProcessor):
             f"configure_session: retained {len(self._observation_history)} recent "
             "observation(s) from pre-session window for judge context"
         )
+
+        # Waking the observer resumes the same conversation without resetting it.
+        if preserve_tutor_context:
+            return
 
         # Tell the tutor server to wipe its per-session state so conversation
         # history and curriculum state don't carry over from the previous session.

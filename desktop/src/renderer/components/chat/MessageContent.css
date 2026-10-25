@@ -1,0 +1,323 @@
+/* Markdown inside the session chat.
+   Keep the hierarchy readable at chat-bubble scale instead of inheriting the
+   browser's document-sized heading and block margins. */
+.chat-markdown {
+  min-width: 0;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p {
+  margin: 0 0 7px;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: var(--coco-space-3) 0 5px;
+  color: var(--coco-color-text);
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.chat-markdown h1 {
+  font-size: var(--coco-text-title);
+}
+
+.chat-markdown h2 {
+  font-size: var(--coco-text-section);
+}
+
+.chat-markdown h3 {
+  font-size: var(--coco-text-lead);
+}
+
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: var(--coco-text-body);
+}
+
+.chat-markdown strong {
+  color: var(--coco-color-text);
+  font-weight: 700;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: var(--coco-space-1) 0 var(--coco-space-2);
+  padding-left: 20px;
+}
+
+.chat-markdown li {
+  margin: 3px 0;
+  padding-left: 1px;
+}
+
+.chat-markdown li > p {
+  margin-bottom: 3px;
+}
+
+.chat-markdown li > ul,
+.chat-markdown li > ol {
+  margin: 2px 0 3px;
+}
+
+.chat-markdown .task-list-item {
+  list-style: none;
+}
+
+.chat-markdown .task-list-item input {
+  margin: 0 6px 0 -19px;
+  vertical-align: -1px;
+  accent-color: var(--coco-color-primary);
+}
+
+.chat-markdown hr {
+  height: 1px;
+  margin: 9px 0;
+  border: 0;
+  background: var(--coco-color-border);
+}
+
+.chat-markdown blockquote {
+  margin: 7px 0;
+  padding: 3px 0 3px 10px;
+  border-left: 3px solid var(--coco-color-accent-border);
+  color: var(--coco-color-text-secondary);
+}
+
+.chat-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown a {
+  color: var(--coco-color-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--coco-color-accent-border);
+  text-underline-offset: 2px;
+}
+
+.chat-markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+.chat-markdown code {
+  padding: 1px var(--coco-space-1);
+  border: 1px solid var(--coco-color-border);
+  border-radius: 4px;
+  background: var(--coco-color-surface);
+  color: #1e3a5f;
+  font-family: var(--coco-font-mono);
+  font-size: var(--coco-text-control);
+}
+
+.chat-markdown pre {
+  max-width: 100%;
+  margin: 7px 0;
+  padding: 9px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+  line-height: var(--coco-leading-body);
+  white-space: pre;
+}
+
+.chat-markdown pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--coco-color-text);
+}
+
+.chat-markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 7px 0;
+  overflow-x: auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+  font-size: var(--coco-text-caption);
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  padding: 5px 7px;
+  border: 1px solid var(--coco-color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-markdown th {
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-text);
+  font-weight: 700;
+}
+
+.chat-markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 7px 0;
+  border-radius: var(--coco-radius-control);
+}
+
+.chat-markdown .katex-display {
+  max-width: 100%;
+  margin: var(--coco-space-2) 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Parsed responses share the chat's typography; only actionable extras get a card. */
+.tutor-response {
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.6;
+}
+
+.tutor-response > .chat-markdown p + p {
+  margin-top: var(--coco-space-3);
+}
+
+.tutor-response .chat-markdown li + li {
+  margin-top: 6px;
+}
+
+.tutor-prompt-card {
+  margin-top: var(--coco-space-4);
+  padding: var(--coco-space-3) var(--coco-space-4);
+  border: 1px solid var(--coco-color-accent-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+}
+
+.tutor-prompt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--coco-space-2);
+  margin-bottom: var(--coco-space-2);
+}
+
+.tutor-section-label {
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-caption);
+  font-weight: 600;
+}
+
+.tutor-prompt-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  color: var(--coco-color-text);
+}
+
+.tutor-copy-prompt {
+  border: 1px solid var(--coco-color-border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  background: var(--coco-color-surface-subtle);
+  color: var(--coco-color-primary);
+  font: inherit;
+  font-size: var(--coco-text-caption);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tutor-copy-prompt:hover {
+  background: var(--coco-color-accent-soft);
+}
+.tutor-copy-prompt:focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 3px;
+}
+.tutor-copy-error {
+  color: var(--coco-color-danger);
+  font-size: var(--coco-text-caption);
+}
+.tutor-copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.tutor-visualization {
+  margin: var(--coco-space-4) 0 0;
+}
+.tutor-visualization figcaption {
+  margin-bottom: var(--coco-space-2);
+}
+.tutor-visualization iframe {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 300px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+}
+
+/* Coaching is a distinct, secondary reading surface beneath the answer. */
+.tutor-literacy-card {
+  margin-top: var(--coco-space-4);
+  padding: var(--coco-space-4);
+  border: 1px solid var(--coco-color-accent-border);
+  border-left: 3px solid var(--coco-color-accent);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-control);
+  line-height: 1.65;
+}
+
+.tutor-literacy-card:first-child {
+  margin-top: 0;
+}
+
+.tutor-literacy-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--coco-space-2);
+  margin-bottom: var(--coco-space-3);
+}
+
+.tutor-literacy-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--coco-color-primary);
+  font-size: var(--coco-text-caption);
+  font-weight: 600;
+}
+
+.tutor-literacy-title svg {
+  flex-shrink: 0;
+}
+
+.tutor-literacy-skill {
+  padding: 2px 8px;
+  border-radius: var(--coco-radius-pill);
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-primary);
+  font-size: var(--coco-text-caption);
+  line-height: var(--coco-leading-body);
+}

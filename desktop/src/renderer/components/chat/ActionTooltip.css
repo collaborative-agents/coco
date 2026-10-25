@@ -1,0 +1,20 @@
+.composer-tooltip-trigger {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.composer-action-tooltip {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  max-width: min(240px, calc(100vw - 16px));
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--coco-color-text);
+  color: var(--coco-color-surface);
+  font: 500 var(--coco-text-caption)/1.4 var(--coco-font-family);
+  text-align: center;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.18);
+}

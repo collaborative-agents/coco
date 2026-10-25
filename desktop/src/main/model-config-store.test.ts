@@ -1,6 +1,7 @@
 import {
   buildRoleModelEnvironments,
   credentialId,
+  resolveModelIds,
   validateModelConfiguration,
 } from './model-config-store';
 
@@ -104,9 +105,7 @@ describe('model configuration', () => {
       defaultTutorId: 'fast',
     });
 
-    expect(config.sensing.model).toBe(
-      'hosted_vllm/thinkingmachines/inkling',
-    );
+    expect(config.sensing?.model).toBe('hosted_vllm/thinkingmachines/inkling');
   });
 
   it('routes an Inkling tutor through Tinker with a tutor-scoped key', () => {
@@ -132,4 +131,74 @@ describe('model configuration', () => {
     expect(tutorEnv.TINKER_API_KEY).toBe('tinker-secret');
     expect(sensingEnv).not.toHaveProperty('TINKER_API_KEY');
   });
+});
+
+describe('shared Pi model assignments', () => {
+  const pi = {
+    id: 'pi-chat',
+    label: 'Connected model',
+    provider: 'pi' as const,
+    model: 'pi/test/vendor/model',
+  };
+  const other = { ...pi, id: 'pi-fast', model: 'pi/test/fast' };
+  it('routes sensing and suggestions independently without exporting provider credentials', () => {
+    const config = validateModelConfiguration({
+      sensing: pi,
+      tutors: [pi, other],
+      defaultTutorId: pi.id,
+      instantSuggestionModelId: other.id,
+    });
+    const env = buildRoleModelEnvironments(config, {});
+    expect(env.sensingEnv).toEqual({ MEMORY_MODEL: pi.model });
+    expect(env.tutorEnv).toEqual({
+      COCO_INSTANT_SUGGESTION_MODEL: other.model,
+    });
+    const inherited = buildRoleModelEnvironments(
+      { ...config, instantSuggestionModelId: undefined },
+      {},
+    );
+    expect(inherited.tutorEnv.COCO_INSTANT_SUGGESTION_MODEL).toBe(pi.model);
+  });
+  it('rejects a removed suggestion model and incomplete Pi IDs', () => {
+    expect(() =>
+      validateModelConfiguration({
+        sensing: pi,
+        tutors: [pi],
+        defaultTutorId: pi.id,
+        instantSuggestionModelId: 'missing',
+      }),
+    ).toThrow('instant suggestion');
+    expect(() =>
+      validateModelConfiguration({
+        sensing: { ...pi, model: 'pi/provider' },
+        tutors: [pi],
+        defaultTutorId: pi.id,
+      }),
+    ).toThrow('sensing');
+  });
+});
+
+it('allows chat without sensing and never inherits a legacy observer model', () => {
+  const config = validateModelConfiguration({
+    sensing: null,
+    tutors: [
+      { id: 'chat', label: 'Chat', provider: 'pi', model: 'pi/test/chat' },
+    ],
+    defaultTutorId: 'chat',
+  });
+  expect(config.sensing).toBeNull();
+  expect(resolveModelIds(config, { OBSERVER_MODEL: 'gemini/legacy' })).toEqual({
+    tutor: 'pi/test/chat',
+    observer: '',
+  });
+  expect(
+    buildRoleModelEnvironments(config, { 'sensing:gemini': 'old-secret' })
+      .sensingEnv,
+  ).toEqual({});
+  expect(
+    resolveModelIds(null, {
+      TUTOR_MODEL: 'openai/chat',
+      OBSERVER_MODEL: 'gemini/legacy',
+    }).observer,
+  ).toBe('gemini/legacy');
 });

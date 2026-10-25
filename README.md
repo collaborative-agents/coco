@@ -104,7 +104,7 @@ See [lib/external_api/README.md](lib/external_api/README.md) for model provider 
 
 ## Acknowledgement
 
-We thank Long Lin for designing the avatar. The screen-capture and observation-storage core builds on the [GUM (General User Models) project](https://github.com/GeneralUserModels/gum).
+We thank Long Lin for designing the avatar. The screen-capture and observation-storage core builds on the [GUM (General User Models) project](https://github.com/GeneralUserModels/gum). The execution agent builts on [pi](https://github.com/earendil-works/pi) which is an amazing open-source agent harness.
 
 
 ## Citation

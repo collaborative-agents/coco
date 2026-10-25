@@ -492,7 +492,7 @@ class Streamer:
             "Add an AiTutoringProcessor to segment_processors."
         )
 
-    async def configure_session(self) -> None:
+    async def configure_session(self, *, preserve_tutor_context: bool = False) -> None:
         """Delegate session-reset to every processor that supports it.
 
         Called by the sensing server's ``/session`` endpoint when a new tutor
@@ -502,7 +502,9 @@ class Streamer:
         """
         for proc in self._segment_processors:
             if hasattr(proc, "configure_session"):
-                await cast(AiTutoringProcessor, proc).configure_session()
+                await cast(AiTutoringProcessor, proc).configure_session(
+                    preserve_tutor_context=preserve_tutor_context
+                )
 
     async def set_problem_statement(self, problem_statement: str) -> None:
         """Delegate to the first processor that supports ``set_problem_statement``."""

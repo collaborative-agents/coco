@@ -11,10 +11,15 @@ import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
 import checkNodeEnv from '../scripts/check-node-env';
 import deleteSourceMaps from '../scripts/delete-source-maps';
+import { readHarnessVersion } from '../../src/main/services/harness-version';
 
 checkNodeEnv('production');
 deleteSourceMaps();
 
+// Capture Git provenance while the checkout is available. Packaged apps do not
+// include `.git`, so the production bundle must carry this immutable snapshot.
+// This config is evaluated anew for every production build/package invocation.
+const buildHarnessVersion = readHarnessVersion();
 const configuration: webpack.Configuration = {
   devtool: 'source-map',
 
@@ -66,6 +71,7 @@ const configuration: webpack.Configuration = {
 
     new webpack.DefinePlugin({
       'process.type': '"browser"',
+      __COCO_BUILD_HARNESS_VERSION__: JSON.stringify(buildHarnessVersion),
     }),
   ],
 

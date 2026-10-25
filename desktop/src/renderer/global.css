@@ -1,0 +1,66 @@
+@import url('https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap');
+
+@import './theme/tokens.css';
+@import './theme/controls.css';
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: var(--coco-font-family);
+}
+
+body {
+  font-size: var(--coco-text-body);
+  line-height: var(--coco-leading-body);
+  color: var(--coco-color-text);
+}
+
+::selection {
+  background: rgba(var(--coco-color-primary-rgb), 0.18);
+}
+
+button,
+input,
+select,
+textarea {
+  font-size: var(--coco-text-control);
+  line-height: var(--coco-leading-control);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  line-height: var(--coco-leading-heading);
+}
+
+:where(button, input, select, textarea, summary, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 2px;
+  box-shadow: var(--coco-focus-ring);
+}
+
+::placeholder {
+  color: var(--coco-color-text-muted);
+  opacity: 1;
+}

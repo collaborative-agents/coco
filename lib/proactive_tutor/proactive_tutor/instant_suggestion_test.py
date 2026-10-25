@@ -153,3 +153,40 @@ def test_instant_suggestion_skips_memory_when_not_needed(monkeypatch) -> None:
 
     assert result["copyText"] == "Sounds good—thank you!"
     assert metrics["tool_calls"] == []
+
+
+def test_endpoint_uses_assigned_suggestion_model_and_legacy_fallback(monkeypatch):
+    from fastapi.testclient import TestClient
+    from proactive_tutor import tutor_server
+
+    models = []
+
+    def generate(*args):
+        models.append(args[4])
+        return {
+            "kind": "content",
+            "title": "Suggestion",
+            "body": "Done",
+            "copyText": "Done",
+        }, {}
+
+    monkeypatch.setattr(
+        instant_suggestion, "generate_instant_suggestion_with_metrics", generate
+    )
+    monkeypatch.setattr(tutor_server, "tutor", None)
+    monkeypatch.setattr(tutor_server, "configured_model_name", "original-model")
+    monkeypatch.setattr(
+        tutor_server.TutorSystem, "_load_memory", staticmethod(lambda: "")
+    )
+    client = TestClient(tutor_server.app)
+    monkeypatch.setenv("COCO_INSTANT_SUGGESTION_MODEL", "pi/test/fast")
+    assert (
+        client.post("/suggestion/instant", json={"observation": "Writing"}).status_code
+        == 200
+    )
+    monkeypatch.delenv("COCO_INSTANT_SUGGESTION_MODEL")
+    assert (
+        client.post("/suggestion/instant", json={"observation": "Writing"}).status_code
+        == 200
+    )
+    assert models == ["pi/test/fast", "original-model"]

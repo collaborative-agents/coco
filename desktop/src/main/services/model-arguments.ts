@@ -9,9 +9,19 @@ export function configureServiceModelArguments(
 ): void {
   const tutor = tutorModel.trim();
   const sensing = sensingModel.trim();
-  if (!tutor || !sensing) {
-    throw new Error('Both tutor and sensing model IDs are required.');
+  if (!tutor) {
+    throw new Error('A tutor model ID is required.');
   }
   manager.configureServiceArg('tutor-server', 'model_name', tutor);
-  manager.configureServiceArg('sensing-server', 'observer_model', sensing);
+  if (sensing)
+    manager.configureServiceArg('sensing-server', 'observer_model', sensing);
+}
+
+export function startModelServices(
+  manager: { startService(id: string): void },
+  sensingModel: string,
+  sleeping: boolean,
+): void {
+  manager.startService('tutor-server');
+  if (sensingModel.trim() && !sleeping) manager.startService('sensing-server');
 }

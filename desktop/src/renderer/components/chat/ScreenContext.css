@@ -1,0 +1,97 @@
+/* Observer text sent alongside a message: a removable chip above the composer
+   before sending, a small expandable tag under the user's bubble after. */
+.screen-context {
+  font-family: var(--coco-font-family);
+  font-size: var(--coco-text-secondary);
+  color: var(--coco-color-primary);
+}
+
+.screen-context--pending {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--coco-color-accent-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-accent-soft);
+}
+
+.screen-context__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.screen-context__toggle {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.screen-context svg {
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+
+.screen-context__label {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.screen-context__summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--coco-color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screen-context__remove {
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.screen-context__text {
+  max-height: 160px;
+  margin-top: 6px;
+  overflow-y: auto;
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-caption);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.screen-context--sent {
+  align-self: flex-end;
+  max-width: 100%;
+  margin-top: 4px;
+  color: var(--coco-color-text-subtle);
+  font-size: var(--coco-text-caption);
+}
+
+.screen-context--sent .screen-context__toggle {
+  justify-content: flex-end;
+}
+
+.screen-context--sent .screen-context__text {
+  padding: 6px 8px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+}

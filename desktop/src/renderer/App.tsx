@@ -1,31 +1,22 @@
-import { useEffect, useRef, useState } from 'react';
+import subscribeCocoSleepMode from './services/coco-sleep-mode';
+import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import './App.css';
-import ObservationBubble, {
-  BubbleState,
-} from './components/ObservationBubble';
+import type { BubbleState } from './components/ObservationBubble';
 import PetSprite from './components/PetSprite';
+import usePetPointer from './components/usePetPointer';
 import {
-  ActivityRecord,
   InstantSuggestion,
-  LANE_LABEL,
   ObservationEvent,
   ObservationStatus,
   PetMood,
   STATUS_LABEL,
   STATUS_TO_MOOD,
   cleanObservation,
-  formatClockTime,
-  formatDuration,
-  laneOf,
   pickPhrase,
 } from './components/observation-types';
-import {
-  DaySummary,
-  dailyBuckets,
-  dayStartOf,
-  summarizeDay,
-} from './components/activity-rollup';
+import type { AvatarMenuAction } from './components/AvatarMenuView';
+import type { AvatarBubbleEvent } from './components/AvatarBubbleView';
 
 // How long the bubble (and the active pet mood) stay up after the latest event.
 const HOLD_MS = 20_000;
@@ -36,57 +27,7 @@ const FADE_MS = 400;
 // Pulse ring is shown for one second per new event.
 const PULSE_MS = 1_000;
 
-// Avatar window sizing. The window starts at the base footprint (just the
-// pet) and is grown by main.ts whenever the bubble or history panel becomes
-// visible, then shrunk back when they go away — keeps the transparent
-// overlay from stealing clicks on the rest of the desktop.
-const WIN_BASE_W = 180;
-const WIN_BASE_H = 180;
-const WIN_BUBBLE_W = 420;   // Tier 3 bubble max-width 240 + 168 offset + slack
-const WIN_BUBBLE_H = 320;   // bubble (label + wrapped text + action button)
-// Revealed instant suggestion shows a scrollable body — taller footprint.
-const WIN_SUGGESTION_H = 520;
-const WIN_HISTORY_W = 440;  // activity panel ~260 + 168 offset + slack
-const WIN_HISTORY_H = 540;  // strip + summary + timeline + counts + feed
-const WIN_ACTION_MENU_W = 200;
-const WIN_ACTION_MENU_H = 315;
 
-function PetMenuIcon({
-  name,
-}: {
-  name: 'sleep' | 'wake' | 'history' | 'settings';
-}) {
-  if (name === 'sleep') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path d="M20 15.2A8.6 8.6 0 0 1 8.8 4a8.7 8.7 0 1 0 11.2 11.2Z" />
-      </svg>
-    );
-  }
-  if (name === 'wake') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <circle cx="12" cy="12" r="4" />
-        <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" />
-      </svg>
-    );
-  }
-  if (name === 'history') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path d="M4.5 8.5H1.8V5.8" />
-        <path d="M3 8a9 9 0 1 1-.2 7.5" />
-        <path d="M12 7.2V12l3.2 2" />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden>
-      <path d="M9.6 3.2h4.8l.6 2.2 1.5.9 2.2-.6 2.4 4.1-1.6 1.6v1.7l1.6 1.6-2.4 4.1-2.2-.6-1.5.9-.6 2.2H9.6L9 19.1l-1.5-.9-2.2.6-2.4-4.1 1.6-1.6v-1.7L2.9 9.8l2.4-4.1 2.2.6L9 5.4l.6-2.2Z" />
-      <circle cx="12" cy="12.2" r="3" />
-    </svg>
-  );
-}
 
 /**
  * Statuses that represent mid-friction observations (Tier 2).
@@ -95,6 +36,7 @@ function PetMenuIcon({
  * Tutor guidance arrives via the tutor-notification IPC channel (Tier 3).
  */
 const TIER2_STATUSES = new Set<ObservationStatus>([
+  'support_needed',
   'stuck',
   'mistake',
   'inefficient',
@@ -102,395 +44,30 @@ const TIER2_STATUSES = new Set<ObservationStatus>([
   'discernment_opportunity',
 ]);
 
-// ── Activity Panel ─────────────────────────────────────────────────────────
-// Hybrid layout: a 14-day contribution strip on top, then the selected day's
-// summary + flow timeline, then that day's observation feed. Everything is
-// derived from the raw ActivityRecord[] via the pure rollup helpers, so the
-// strip, timeline, and counts can never disagree.
-
-function dayHeading(dayStartTs: number, todayStart: number): string {
-  if (dayStartTs === todayStart) return 'Today';
-  if (dayStartTs === todayStart - 24 * 3600) return 'Yesterday';
-  return new Date(dayStartTs * 1000).toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
-function formatMetricTokens(n?: number): string {
-  if (typeof n !== 'number') return '0';
-  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
-  return String(n);
-}
-
-function formatMetricLatency(ms?: number): string {
-  if (typeof ms !== 'number') return '0s';
-  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s`;
-  return `${Math.round(ms)}ms`;
-}
-
-function LlmMetricChips({ record }: { record: ActivityRecord }) {
-  const m = record.llm_metrics;
-  if (!m) return null;
-  return (
-    <div className="obs-history-metrics">
-      <span>{formatMetricTokens(m.input_tokens ?? m.prompt_tokens)} in</span>
-      <span>{formatMetricTokens(m.output_tokens ?? m.completion_tokens)} out</span>
-      <span>{formatMetricLatency(m.duration_ms)}</span>
-    </div>
-  );
-}
-
-function SupportControls({
-  record,
-  isOpen,
-  onToggle,
-  onRate,
-}: {
-  record: ActivityRecord;
-  isOpen: boolean;
-  onToggle: () => void;
-  onRate: (rating: 'up' | 'down') => void;
-}) {
-  const support = record.proactive_support;
-  if (!support) return null;
-  const canView = support.suggestion != null || support.available === true;
-  const ratingLabels = {
-    up: 'Good suggestion',
-    down: 'Not helpful',
-  } as const;
-  return (
-    <div className="obs-support-controls">
-      {canView && (
-        <button
-          type="button"
-          className="obs-support-view"
-          onClick={onToggle}
-          aria-expanded={isOpen}
-        >
-          {isOpen ? 'Hide' : 'View support'}
-        </button>
-      )}
-      {(['up', 'down'] as const).map((rating) => (
-        <button
-          key={rating}
-          type="button"
-          className={`obs-support-rating${
-            support.rating === rating ? ' is-rated' : ''
-          }`}
-          aria-label={ratingLabels[rating]}
-          title={
-            support.rating && support.rating !== rating
-              ? `Change rating to ${ratingLabels[rating].toLowerCase()}`
-              : ratingLabels[rating]
-          }
-          disabled={support.rating === rating}
-          onClick={() => onRate(rating)}
-        >
-          {rating === 'up' ? '👍' : '👎'}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function HistoricalSupport({
-  record,
-  onViewConversation,
-  loading,
-  error,
-}: {
-  record: ActivityRecord;
-  onViewConversation: () => void;
-  loading: boolean;
-  error: boolean;
-}) {
-  const support = record.proactive_support;
-  if (!support) return null;
-  const { suggestion } = support;
-  if (loading) {
-    return <div className="obs-support-content">Preparing suggestion…</div>;
-  }
-  if (!suggestion) {
-    return (
-      <div className="obs-support-content obs-support-content--conversation">
-        <p>
-          {error
-            ? 'The suggestion could not be loaded.'
-            : 'This support continued in the conversation.'}
-        </p>
-        {support.engaged && (
-          <button type="button" onClick={onViewConversation}>
-            View conversation →
-          </button>
-        )}
-      </div>
-    );
-  }
-  return (
-    <div className="obs-support-content">
-      <strong>{suggestion.title}</strong>
-      <p>
-        {suggestion.kind === 'delegate' ? suggestion.prompt : suggestion.body}
-      </p>
-    </div>
-  );
-}
-
-function FlowTimeline({ summary }: { summary: DaySummary }) {
-  const { segments, windowStartTs, windowEndTs } = summary;
-  const winDur = Math.max(1, windowEndTs - windowStartTs);
-
-  if (segments.length === 0) {
-    return <div className="obs-timeline obs-timeline--empty">No activity</div>;
-  }
-
-  return (
-    <div className="obs-timeline">
-      <div className="obs-timeline-track">
-        {segments.map((seg, i) => {
-          const left = ((seg.startTs - windowStartTs) / winDur) * 100;
-          const width = ((seg.endTs - seg.startTs) / winDur) * 100;
-          return (
-            <span
-              // eslint-disable-next-line react/no-array-index-key
-              key={i}
-              className={`obs-timeline-seg obs-lane--${seg.lane}`}
-              style={{ left: `${left}%`, width: `${Math.max(width, 0.6)}%` }}
-              title={`${LANE_LABEL[seg.lane]} · ${formatClockTime(seg.startTs)}`}
-            />
-          );
-        })}
-      </div>
-      <div className="obs-timeline-axis">
-        <span>{formatClockTime(windowStartTs)}</span>
-        <span>{formatClockTime(windowEndTs)}</span>
-      </div>
-    </div>
-  );
-}
-
-function ActivityPanel({
-  records,
-  onClose,
-  onViewConversation,
-  onLoadSuggestion,
-  onRateSupport,
-}: {
-  records: ActivityRecord[];
-  onClose: () => void;
-  onViewConversation: () => void;
-  onLoadSuggestion: (
-    record: ActivityRecord,
-  ) => Promise<InstantSuggestion | null>;
-  onRateSupport: (record: ActivityRecord, rating: 'up' | 'down') => void;
-}) {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const todayStart = dayStartOf(nowSec);
-  const [selectedDay, setSelectedDay] = useState(todayStart);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const [openSupport, setOpenSupport] = useState<Set<number>>(new Set());
-  const [loadingSupport, setLoadingSupport] = useState<Set<string>>(new Set());
-  const [supportErrors, setSupportErrors] = useState<Set<string>>(new Set());
-
-  const buckets = dailyBuckets(records, 14, nowSec);
-  const summary = summarizeDay(records, selectedDay, nowSec);
-  const dayEnd = selectedDay + 24 * 3600;
-  // Day's observations, newest-first, for the feed.
-  const dayRecords = records
-    .filter((r) => r.ts >= selectedDay && r.ts < dayEnd)
-    .sort((a, b) => b.ts - a.ts);
-
-  function toggle(i: number) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
-      return next;
-    });
-  }
-
-  function selectDay(ts: number) {
-    setSelectedDay(ts);
-    setExpanded(new Set());
-    setOpenSupport(new Set());
-  }
-
-  async function toggleSupport(i: number, record: ActivityRecord) {
-    const opening = !openSupport.has(i);
-    setOpenSupport((prev) => {
-      const next = new Set(prev);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
-      return next;
-    });
-    if (!opening || record.proactive_support?.suggestion) return;
-    const key = record.observation_id ?? `${record.ts}-${i}`;
-    setLoadingSupport((prev) => new Set(prev).add(key));
-    setSupportErrors((prev) => {
-      const next = new Set(prev);
-      next.delete(key);
-      return next;
-    });
-    const suggestion = await onLoadSuggestion(record);
-    setLoadingSupport((prev) => {
-      const next = new Set(prev);
-      next.delete(key);
-      return next;
-    });
-    if (!suggestion) setSupportErrors((prev) => new Set(prev).add(key));
-  }
-
-  return (
-    <div className="obs-history-panel">
-      <div className="obs-history-header">
-        <span className="obs-history-title">Activity</span>
-        <button
-          type="button"
-          className="obs-history-close"
-          onClick={onClose}
-          title="Close"
-        >
-          ×
-        </button>
-      </div>
-
-      {/* 14-day contribution strip — fill intensity tracks flow time. */}
-      <div className="obs-strip" role="group" aria-label="Last 14 days">
-        {buckets.map((b) => (
-          <button
-            key={b.dayStartTs}
-            type="button"
-            className={`obs-strip-cell obs-level--${b.level}${
-              b.dayStartTs === selectedDay ? ' is-selected' : ''
-            }${b.isToday ? ' is-today' : ''}`}
-            title={`${dayHeading(b.dayStartTs, todayStart)} · ${formatDuration(
-              b.flowSec,
-            )} in flow`}
-            onClick={() => selectDay(b.dayStartTs)}
-          />
-        ))}
-      </div>
-
-      {/* Selected-day summary. */}
-      <div className="obs-summary">
-        <span className="obs-summary-day">
-          {dayHeading(selectedDay, todayStart)}
-        </span>
-        <span className="obs-summary-stat">
-          {formatDuration(summary.activeSec)} active
-        </span>
-        <span className="obs-summary-stat obs-lane-text--flow">
-          {summary.flowPct}% flow
-        </span>
-      </div>
-
-      <FlowTimeline summary={summary} />
-
-      <div className="obs-summary-counts">
-        <span className="obs-count">
-          <i className="obs-dot obs-lane--focus" /> {summary.focusCount} focus
-        </span>
-        <span className="obs-count">
-          <i className="obs-dot obs-lane--assist" /> {summary.assistCount} AI
-          assist
-        </span>
-      </div>
-
-      {/* Day's observation feed. */}
-      {dayRecords.length === 0 ? (
-        <p className="obs-history-empty">No observations this day.</p>
-      ) : (
-        <ul className="obs-history-list">
-          {dayRecords.map((e, i) => {
-            const isOpen = expanded.has(i);
-            const lane = laneOf(e.status);
-            const label = STATUS_LABEL[e.status] ?? STATUS_LABEL.observing;
-            const supportOpen = openSupport.has(i);
-            const supportKey = e.observation_id ?? `${e.ts}-${i}`;
-            return (
-              // eslint-disable-next-line react/no-array-index-key
-              <li key={i} className="obs-history-entry">
-                <span
-                  className={`obs-history-dot obs-lane--${lane}`}
-                  title={LANE_LABEL[lane]}
-                />
-                <div className="obs-history-body">
-                  <div className="obs-history-meta">
-                    <span className="obs-history-label">{label}</span>
-                    <span className="obs-history-time">
-                      {formatClockTime(e.ts)}
-                    </span>
-                  </div>
-                  {e.proactive_support &&
-                    (e.proactive_support.suggestion ||
-                      e.proactive_support.available) && (
-                      <div className="obs-support-status">
-                        <span>Proactive support</span>
-                        <SupportControls
-                          record={e}
-                          isOpen={supportOpen}
-                          onToggle={() => toggleSupport(i, e)}
-                          onRate={(rating) => onRateSupport(e, rating)}
-                        />
-                      </div>
-                    )}
-                  <LlmMetricChips record={e} />
-                  <button
-                    type="button"
-                    className="obs-history-row"
-                    onClick={() => toggle(i)}
-                    aria-expanded={isOpen}
-                  >
-                    <p className={`obs-history-text${isOpen ? ' is-open' : ''}`}>
-                      {e.observation}
-                    </p>
-                    <span
-                      className={`obs-history-chevron${isOpen ? ' is-open' : ''}`}
-                      aria-hidden
-                    >
-                      ›
-                    </span>
-                  </button>
-                  {supportOpen && (
-                    <HistoricalSupport
-                      record={e}
-                      onViewConversation={onViewConversation}
-                      loading={loadingSupport.has(supportKey)}
-                      error={supportErrors.has(supportKey)}
-                    />
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 // ── Pet View ──────────────────────────────────────────────────────────────────
 
 function PetView() {
+  usePetPointer();
   // Start in `dormant` (static sleep1.png, no animation) until the first
   // observation event arrives. After that the state machine takes over and
   // dormant is never re-entered for the lifetime of the window.
   const [mood, setMood] = useState<PetMood>('dormant');
   const [bubble, setBubble] = useState<BubbleState | null>(null);
+  const bubbleRef = useRef(bubble);
+  bubbleRef.current = bubble;
   const [pulse, setPulse] = useState<{
     status: ObservationStatus;
     key: number;
   } | null>(null);
 
-  // Persisted activity history (newest-first). Hydrated from the main process
-  // on mount, then appended to live as observation events arrive.
-  const [records, setRecords] = useState<ActivityRecord[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
   const [cocoSleeping, setCocoSleeping] = useState(false);
+  // Mirrors whether the ••• menu window is open, for the trigger's styling.
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
-  const petActionsRef = useRef<HTMLDivElement | null>(null);
+  const menuActionRef = useRef<(action: AvatarMenuAction) => void>(() => {});
+  // While Coco is dragged the pointer stays over it, so its hover controls
+  // are hidden until the drag ends.
+  const [dragging, setDragging] = useState(false);
+  const bubbleEventRef = useRef<(type: AvatarBubbleEvent) => void>(() => {});
 
   // Use refs so listener captures the latest cleanup targets without
   // re-subscribing every render.
@@ -527,6 +104,7 @@ function PetView() {
   };
 
   const handleBubbleEnter = () => {
+    if (bubble?.agentReply || bubble?.agentWorking) return;
     bubbleHoverRef.current = true;
     // Cancel any pending hide / in-flight fade and bring it fully back.
     if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -535,48 +113,62 @@ function PetView() {
   };
 
   const handleBubbleLeave = () => {
+    if (bubble?.agentReply || bubble?.agentWorking) return;
     bubbleHoverRef.current = false;
     if (bubblePinnedRef.current) return; // pinned suggestion — never re-arm hide
     if (bubble) scheduleBubbleHide(holdMsRef.current);
   };
 
-  // Cmd/Ctrl+Shift+H toggles the history panel from anywhere on the system.
+  // The menu has its own window; main places it next to Coco and toggles it.
+  const openActionsMenu = () =>
+    window.electron?.ipcRenderer.sendMessage('open-avatar-menu');
+
   useEffect(() => {
-    const cleanupToggle = window.electron?.ipcRenderer.on(
-      'toggle-observation-history',
-      () => setShowHistory((v) => !v),
+    const cleanupMenuVisibility = window.electron?.ipcRenderer.on(
+      'avatar-menu-visibility',
+      (value: unknown) => {
+        setActionsMenuOpen(
+          (value as { open?: boolean } | undefined)?.open === true,
+        );
+      },
     );
-    const cleanupOpen = window.electron?.ipcRenderer.on(
-      'open-observation-history',
-      () => setShowHistory(true),
+    const cleanupMenuAction = window.electron?.ipcRenderer.on(
+      'avatar-menu-action',
+      (action: unknown) => menuActionRef.current(action as AvatarMenuAction),
     );
-    window.electron?.ipcRenderer.sendMessage('avatar-renderer-ready');
+    const cleanupBubbleEvent = window.electron?.ipcRenderer.on(
+      'avatar-bubble-event',
+      (type: unknown) => bubbleEventRef.current(type as AvatarBubbleEvent),
+    );
+    const cleanupDragging = window.electron?.ipcRenderer.on(
+      'avatar-dragging',
+      (value: unknown) =>
+        setDragging((value as { dragging?: boolean })?.dragging === true),
+    );
     return () => {
-      if (typeof cleanupToggle === 'function') cleanupToggle();
-      if (typeof cleanupOpen === 'function') cleanupOpen();
+      if (typeof cleanupMenuVisibility === 'function') cleanupMenuVisibility();
+      if (typeof cleanupMenuAction === 'function') cleanupMenuAction();
+      if (typeof cleanupBubbleEvent === 'function') cleanupBubbleEvent();
+      if (typeof cleanupDragging === 'function') cleanupDragging();
     };
   }, []);
 
-  useEffect(() => {
-    window.electron?.ipcRenderer
-      .invoke('get-coco-sleep-mode')
-      .then((result) => {
-        const state = result as { sleeping?: boolean } | undefined;
-        setCocoSleeping(state?.sleeping === true);
-        return undefined;
-      })
-      .catch(() => undefined);
-    const cleanup = window.electron?.ipcRenderer.on(
-      'coco-sleep-mode-changed',
-      (result) => {
-        const state = result as { sleeping?: boolean } | undefined;
-        setCocoSleeping(state?.sleeping === true);
-      },
-    );
-    return () => {
-      if (typeof cleanup === 'function') cleanup();
-    };
+  const sleepingRef = useRef(false);
+  const applySleepMode = useCallback((sleeping: boolean) => {
+    sleepingRef.current = sleeping;
+    setCocoSleeping(sleeping);
+    if (!sleeping || bubbleRef.current?.agentReply || bubbleRef.current?.agentWorking) return;
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    if (pulseTimer.current) clearTimeout(pulseTimer.current);
+    bubbleHoverRef.current = false;
+    bubblePinnedRef.current = false;
+    setBubble(null);
+    setPulse(null);
+    setMood('idle');
   }, []);
+
+  useEffect(() => subscribeCocoSleepMode(applySleepMode), [applySleepMode]);
 
   const setCocoSleepMode = async (sleeping: boolean) => {
     const result = (await window.electron?.ipcRenderer.invoke(
@@ -584,57 +176,10 @@ function PetView() {
       { sleeping },
     )) as { success?: boolean; sleeping?: boolean } | undefined;
     if (result?.success) {
-      setCocoSleeping(result.sleeping === true);
-      setBubble(null);
-      setMood(result.sleeping ? 'sleep' : 'idle');
+      applySleepMode(result.sleeping === true);
     }
   };
 
-  useEffect(() => {
-    if (!actionsMenuOpen) return undefined;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setActionsMenuOpen(false);
-    };
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!petActionsRef.current?.contains(event.target as Node)) {
-        setActionsMenuOpen(false);
-      }
-    };
-    const closeOnWindowBlur = () => setActionsMenuOpen(false);
-    document.addEventListener('keydown', closeOnEscape);
-    document.addEventListener('pointerdown', closeOnOutsidePointer);
-    window.addEventListener('blur', closeOnWindowBlur);
-    return () => {
-      document.removeEventListener('keydown', closeOnEscape);
-      document.removeEventListener('pointerdown', closeOnOutsidePointer);
-      window.removeEventListener('blur', closeOnWindowBlur);
-    };
-  }, [actionsMenuOpen]);
-
-  useEffect(() => {
-    window.electron?.ipcRenderer.sendMessage('activity-history-visibility', {
-      visible: showHistory,
-    });
-  }, [showHistory]);
-
-  // Refresh from persisted activity whenever History opens. Engagement is
-  // written by the main process after the original observation, so a one-time
-  // mount snapshot can otherwise remain stale even though the disk record is
-  // correct. The file is chronological; renderer state is newest-first.
-  useEffect(() => {
-    if (!showHistory) return undefined;
-    let cancelled = false;
-    window.electron?.ipcRenderer
-      .invoke('get-activity-history')
-      .then((rows) => {
-        if (cancelled || !Array.isArray(rows)) return;
-        setRecords((rows as ActivityRecord[]).slice().reverse());
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [showHistory]);
 
   useEffect(() => {
     const cleanupSuspend = window.electron?.ipcRenderer.on(
@@ -654,6 +199,7 @@ function PetView() {
     const cleanup = window.electron?.ipcRenderer.on(
       'observation-update',
       (data: any) => {
+        if (sleepingRef.current) return;
         const event = data as ObservationEvent;
         // Skip the SSE handshake event ({type: "ready"}) and any payload
         // missing an actual observation string.
@@ -666,6 +212,10 @@ function PetView() {
         // notification flow — they are not avatar states. Skip them here so
         // PetSprite never receives an unknown mood.
         if (!(incomingStatus in STATUS_TO_MOOD)) return;
+        // A revealed suggestion is pinned until the user closes it. Continue
+        // recording new observations in main, but do not replace the accepted
+        // suggestion on the avatar surface.
+        if (bubblePinnedRef.current) return;
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
         const phrase = pickPhrase(incomingStatus, seed);
@@ -694,14 +244,6 @@ function PetView() {
 
         // Log that an actionable suggestion was actually shown, so the training
         // stage can derive "ignore" (shown with no engage/dismiss) precisely.
-        if (showHelpButton) {
-          window.electron?.ipcRenderer.sendMessage('training-feedback', {
-            kind: 'shown',
-            surface: 'bubble',
-            observation_id: event.observation_id ?? null,
-            status: incomingStatus,
-          });
-        }
 
         // Pulse ring around the pet — incrementing the key restarts the CSS
         // animation even if it's the same status as before.
@@ -712,34 +254,6 @@ function PetView() {
         // After HOLD_MS: fade the bubble out and drop the pet back to idle.
         // (Paused while the pointer is over the bubble.)
         scheduleBubbleHide(HOLD_MS);
-
-        // ── Accumulate activity history ────────────────────────────────────
-        // Main has already persisted this event to disk; we mirror it into
-        // local state so the open panel updates live without a re-fetch.
-        const record: ActivityRecord = {
-          status: incomingStatus,
-          observation: cleanObservation(event.observation),
-          ts: event.ts ?? Math.floor(Date.now() / 1000),
-          observation_id: event.observation_id,
-          proactive_support: showHelpButton
-            ? { engaged: false, available: true }
-            : undefined,
-          llm_metrics: event.llm_metrics,
-        };
-        // Prepend so the list is newest-first.
-        // Deduplicate: if the most recent record has the same text and
-        // status, skip it (handles SSE reconnect replays and server
-        // double-emits from the progress detector).
-        setRecords((prev) => {
-          if (
-            prev.length > 0 &&
-            prev[0].observation === record.observation &&
-            prev[0].status === record.status
-          ) {
-            return prev;
-          }
-          return [record, ...prev];
-        });
       },
     );
 
@@ -752,6 +266,67 @@ function PetView() {
     };
   }, []);
 
+  useEffect(() => {
+    const ipc = window.electron?.ipcRenderer;
+    const cleanup = ipc?.on('agent-working', (data: any) => {
+      if (!data?.sessionId || !data?.requestId || !data?.text) return;
+      // Do not replace a suggestion the user is reading or a completion reminder.
+      if (bubblePinnedRef.current || bubbleHoverRef.current) return;
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      if (fadeTimer.current) clearTimeout(fadeTimer.current);
+      if (pulseTimer.current) clearTimeout(pulseTimer.current);
+      bubblePinnedRef.current = true;
+      setPulse(null);
+      setBubble({ status: 'observing', phrase: '', fadingOut: false,
+        tutorMessage: data.text,
+        agentWorking: { sessionId: data.sessionId, requestId: data.requestId } });
+      setMood('write');
+      hideTimer.current = setTimeout(() => {
+        bubblePinnedRef.current = false;
+        setBubble(null);
+        setMood('idle');
+      }, 6000);
+    });
+    const cleanupEnd = ipc?.on('agent-work-ended', (data: any) => {
+      if (bubbleRef.current?.agentWorking?.requestId !== data?.requestId) return;
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      if (fadeTimer.current) clearTimeout(fadeTimer.current);
+      bubblePinnedRef.current = false;
+      setBubble(null);
+      setMood('idle');
+    });
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+      if (typeof cleanupEnd === 'function') cleanupEnd();
+    };
+  }, []);
+
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on('agent-reply-ready', (data: any) => {
+      if (!data?.sessionId || !data?.requestId) return;
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      if (fadeTimer.current) clearTimeout(fadeTimer.current);
+      if (pulseTimer.current) clearTimeout(pulseTimer.current);
+      bubbleHoverRef.current = false;
+      bubblePinnedRef.current = true; // Keep observations from replacing the reminder.
+      setPulse(null);
+      setBubble({
+        status: 'progress', phrase: '', fadingOut: false,
+        tutorMessage: 'Your reply is ready.', agentReply: data,
+      });
+      setMood('write');
+      // Animate for the reminder's full lifetime; opening, dismissal, or expiry
+      // returns Coco to idle. No repeat reminders.
+      holdMsRef.current = 8000;
+      hideTimer.current = setTimeout(() => {
+        bubblePinnedRef.current = false;
+        setBubble(null);
+        setMood('idle');
+      }, 8000);
+    });
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
   // ── Tier 3: tutor notification routed from main when webapp is hidden ────────
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -759,6 +334,7 @@ function PetView() {
       (data: any) => {
         const message = String((data as { message?: unknown })?.message ?? '');
         if (!message) return;
+        if (bubblePinnedRef.current) return;
 
         // Tier 3 replaces any in-flight observation, including Tier 2.
         if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -787,20 +363,71 @@ function PetView() {
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
-  // Clicking the pet opens the chat. If a Tier-1 ("progress"/"observing") bubble
-  // is showing — i.e. the system offered no proactive suggestion — a pet click
-  // is an explicit "I need help anyway": a false-negative signal.
-  const handleClick = (e?: React.SyntheticEvent) => {
-    e?.stopPropagation?.();
-    if (bubble && !bubble.tutorMessage && !bubble.showHelpButton) {
-      window.electron?.ipcRenderer.sendMessage('training-feedback', {
-        kind: 'need_help',
-        surface: 'bubble',
-        observation_id: bubble.observationId ?? null,
-        status: bubble.status,
-        text: bubble.rawObservation ?? null,
+  // ── Session invite: Coco offers a session for the task it detected ──────────
+  // It previews a suggestion's title, or shows the task when there is none.
+  // The invite is pinned so observations don't replace it. Main clears it when
+  // it is ignored or a session starts another way.
+  useEffect(() => {
+    const ipc = window.electron?.ipcRenderer;
+    const cleanupInvite = ipc?.on('session-invite', (data: any) => {
+      const {
+        inviteId,
+        taskLabel,
+        observationId,
+        rawObservation,
+        suggestionTitle,
+      } = (data ?? {}) as {
+        inviteId?: string;
+        taskLabel?: string;
+        observationId?: string;
+        rawObservation?: string;
+        suggestionTitle?: string;
+      };
+      if (!inviteId || !taskLabel) return;
+      // Don't replace a suggestion the user opened; main shows the invite as
+      // a pop-up instead.
+      if (bubblePinnedRef.current) {
+        ipc?.sendMessage('session-invite-busy', { inviteId });
+        return;
+      }
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      if (fadeTimer.current) clearTimeout(fadeTimer.current);
+      if (pulseTimer.current) clearTimeout(pulseTimer.current);
+      bubbleHoverRef.current = false;
+      bubblePinnedRef.current = true;
+      setBubble({
+        status: 'inefficient',
+        phrase: suggestionTitle || taskLabel,
+        fadingOut: false,
+        showHelpButton: true,
+        rawObservation,
+        observationId,
+        invite: { inviteId, hasPreview: Boolean(suggestionTitle) },
       });
-    }
+      setMood(STATUS_TO_MOOD.inefficient);
+      pulseKeyRef.current += 1;
+      setPulse({ status: 'inefficient', key: pulseKeyRef.current });
+      pulseTimer.current = setTimeout(() => setPulse(null), PULSE_MS);
+      ipc?.sendMessage('session-invite-shown', { inviteId });
+    });
+    const cleanupClear = ipc?.on('session-invite-clear', (data: any) => {
+      const { inviteId } = (data ?? {}) as { inviteId?: string };
+      if (bubbleRef.current?.invite?.inviteId !== inviteId) return;
+      bubblePinnedRef.current = false;
+      setBubble(null);
+      setMood('idle');
+    });
+    return () => {
+      if (typeof cleanupInvite === 'function') cleanupInvite();
+      if (typeof cleanupClear === 'function') cleanupClear();
+    };
+  }, []);
+
+  // Opening chat is an explicit menu action. If a Tier-1
+  // ("progress"/"observing") bubble is showing — i.e. the system offered no
+  // proactive suggestion — record the action as a false-negative signal.
+  const handleOpenChat = (e?: SyntheticEvent) => {
+    e?.stopPropagation?.();
     window.electron?.ipcRenderer.sendMessage('open-main-window');
   };
 
@@ -810,27 +437,47 @@ function PetView() {
   const handleHelpMe = async () => {
     if (!bubble) return;
     const current = bubble;
+    if (current.invite) {
+      const { inviteId } = current.invite;
+      // A preview opens in place; starting the session waits for "Chat with
+      // Coco". Without one, or if it can't be loaded, this accepts the invite.
+      if (current.invite.hasPreview) {
+        const res = await window.electron?.ipcRenderer.invoke(
+          'get-instant-suggestion',
+          { observationId: current.observationId ?? null },
+        );
+        if (res?.status === 'ready' && res.suggestion) {
+          window.electron?.ipcRenderer.sendMessage('session-invite-revealed', {
+            inviteId,
+          });
+          setBubble((b) =>
+            b
+              ? {
+                  ...b,
+                  suggestion: res.suggestion,
+                  scenario: res.scenario,
+                  fadingOut: false,
+                }
+              : null,
+          );
+          return;
+        }
+      }
+      window.electron?.ipcRenderer.sendMessage('session-invite-response', {
+        inviteId,
+        outcome: 'accepted',
+      });
+      bubblePinnedRef.current = false;
+      setBubble(null);
+      setMood('idle');
+      return;
+    }
     const engagedAt = Math.floor(Date.now() / 1000);
     const recordEngagement = (
       suggestion: InstantSuggestion | undefined,
       destination: 'inline' | 'conversation',
     ) => {
       if (!current.observationId) return;
-      setRecords((prev) =>
-        prev.map((record) =>
-          record.observation_id === current.observationId
-            ? {
-                ...record,
-                proactive_support: {
-                  engaged: true,
-                  engaged_at: engagedAt,
-                  suggestion,
-                  destination,
-                },
-              }
-            : record,
-        ),
-      );
       window.electron?.ipcRenderer.sendMessage('activity-support-engaged', {
         observationId: current.observationId,
         engagedAt,
@@ -839,16 +486,9 @@ function PetView() {
       });
     };
 
-    // Reflect the click immediately. If the precomputed content is available,
+    // Record the click right away. If the precomputed content is available,
     // the same record is enriched below so History can reopen it verbatim.
     recordEngagement(undefined, 'conversation');
-    window.electron?.ipcRenderer.sendMessage('training-feedback', {
-      kind: 'engage',
-      surface: 'bubble',
-      observation_id: current.observationId ?? null,
-      status: current.status,
-      text: current.rawObservation ?? null,
-    });
 
     // Try to reveal the instant suggestion that was precomputed when the bubble
     // appeared. If it's ready, show it in place (no waiting, no chat round-trip).
@@ -863,7 +503,16 @@ function PetView() {
       bubblePinnedRef.current = true;
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
-      setBubble((b) => (b ? { ...b, suggestion: res.suggestion, fadingOut: false } : null));
+      setBubble((b) =>
+        b
+          ? {
+              ...b,
+              suggestion: res.suggestion,
+              scenario: res.scenario,
+              fadingOut: false,
+            }
+          : null,
+      );
       return;
     }
 
@@ -888,13 +537,12 @@ function PetView() {
   const handleDismiss = () => {
     if (!bubble) return;
     bubblePinnedRef.current = false;
-    window.electron?.ipcRenderer.sendMessage('training-feedback', {
-      kind: 'dismiss',
-      surface: 'bubble',
-      observation_id: bubble.observationId ?? null,
-      status: bubble.status,
-      text: bubble.rawObservation ?? null,
-    });
+    if (bubble.invite) {
+      window.electron?.ipcRenderer.sendMessage('session-invite-response', {
+        inviteId: bubble.invite.inviteId,
+        outcome: 'dismissed',
+      });
+    } else
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
     setBubble((b) => (b ? { ...b, fadingOut: true } : null));
@@ -904,33 +552,17 @@ function PetView() {
     }, FADE_MS);
   };
 
-  const handleChatAboutSuggestion = () => {
+  const handleChatAboutSuggestion = (execute = false) => {
     if (!bubble?.suggestion) return;
     const current = bubble;
     window.electron?.ipcRenderer.sendMessage('chat-about-suggestion', {
+      execute,
       observationId: current.observationId,
       status: current.status,
       rawObservation: current.rawObservation ?? '',
       suggestion: current.suggestion,
       surface: 'bubble',
-    });
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    if (fadeTimer.current) clearTimeout(fadeTimer.current);
-    bubblePinnedRef.current = false;
-    setBubble(null);
-    setMood('idle');
-  };
-
-  const handleOpenCocoChat = () => {
-    if (!bubble?.suggestion) return;
-    const current = bubble;
-    window.electron?.ipcRenderer.sendMessage('chat-about-suggestion', {
-      observationId: current.observationId,
-      status: current.status,
-      rawObservation: current.rawObservation ?? '',
-      suggestion: current.suggestion,
-      surface: 'bubble',
-      copyPromptToInput: true,
+      sessionInviteId: current.invite?.inviteId,
     });
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
@@ -941,133 +573,50 @@ function PetView() {
 
   // Tier 3: user wants to read the full tutor guidance — open main window.
   const handleViewConversation = () => {
-    window.electron?.ipcRenderer.sendMessage('open-main-window');
+    const target = bubble?.agentReply ?? bubble?.agentWorking;
+    if (target) {
+      window.electron?.ipcRenderer.sendMessage('view-agent-reply', target);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      if (fadeTimer.current) clearTimeout(fadeTimer.current);
+      if (pulseTimer.current) clearTimeout(pulseTimer.current);
+      bubblePinnedRef.current = false;
+      setBubble(null);
+      setMood('idle');
+    } else window.electron?.ipcRenderer.sendMessage('open-main-window');
   };
 
-  const loadHistoricalSuggestion = async (
-    record: ActivityRecord,
-  ): Promise<InstantSuggestion | null> => {
-    let res;
-    try {
-      res = await window.electron?.ipcRenderer.invoke(
-        'get-instant-suggestion',
-        {
-          observationId: record.observation_id ?? null,
-        },
-      );
-    } catch {
-      return null;
-    }
-    const suggestion = res?.status === 'ready' ? res.suggestion : null;
-    if (!suggestion) return null;
-    setRecords((prev) =>
-      prev.map((item) =>
-        item.observation_id === record.observation_id
-          ? {
-              ...item,
-              proactive_support: {
-                engaged: item.proactive_support?.engaged ?? false,
-                ...item.proactive_support,
-                suggestion,
-                available: true,
-              },
-            }
-          : item,
-      ),
-    );
-    return suggestion;
+  // Menu items chosen in the ••• menu window run here, where the current bubble
+  // and Coco's mood live. Refreshed every render so the listener sees both.
+  menuActionRef.current = (action: AvatarMenuAction) => {
+    if (action === 'open-main-window') handleOpenChat();
+    else if (action === 'toggle-sleep')
+      setCocoSleepMode(!cocoSleeping).catch(() => undefined);
+    else if (action === 'quit')
+      window.electron?.ipcRenderer.sendMessage('quit-from-avatar');
+    else window.electron?.ipcRenderer.sendMessage(action);
   };
 
-  const rateHistoricalSupport = (
-    record: ActivityRecord,
-    rating: 'up' | 'down',
-  ) => {
-    const previousRating = record.proactive_support?.rating;
-    if (!record.observation_id || previousRating === rating) return;
-    const ratedAt = Math.floor(Date.now() / 1000);
-    setRecords((prev) =>
-      prev.map((item) =>
-        item.observation_id === record.observation_id
-          ? {
-              ...item,
-              proactive_support: {
-                engaged: item.proactive_support?.engaged ?? false,
-                ...item.proactive_support,
-                rating,
-                rated_at: ratedAt,
-              },
-            }
-          : item,
-      ),
-    );
-    window.electron?.ipcRenderer.sendMessage('training-feedback', {
-      kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
-      previous_kind: previousRating ? `thumbs_${previousRating}` : null,
-      surface: 'history',
-      observation_id: record.observation_id,
-      status: record.status,
-      text:
-        record.proactive_support?.suggestion?.copyText ?? record.observation,
-    });
-    window.electron?.ipcRenderer.sendMessage('activity-support-rated', {
-      observationId: record.observation_id,
-      rating,
-      ratedAt,
-    });
+  // Clicks and hovers on the bubble, which is drawn in its own window. Also
+  // refreshed every render so handlers see the current bubble.
+  bubbleEventRef.current = (type: AvatarBubbleEvent) => {
+    if (type === 'help') handleHelpMe();
+    else if (type === 'dismiss') handleDismiss();
+    else if (type === 'view-conversation') handleViewConversation();
+    else if (type === 'chat') handleChatAboutSuggestion();
+    else if (type === 'run') handleChatAboutSuggestion(true);
+    else if (type === 'enter') handleBubbleEnter();
+    else if (type === 'leave') handleBubbleLeave();
   };
 
-  const bubbleVisible = bubble != null;
-  const suggestionVisible = bubble?.suggestion != null;
-  const historyVisible = showHistory;
-  const actionsMenuVisible = actionsMenuOpen;
-
-  // Resize the avatar window to fit whatever is currently on stage. Runs on
-  // mount (shrinks from any leftover default size to the base footprint) and
-  // whenever the bubble or history visibility flips.
+  // The bubble window draws whatever bubble is current here.
   useEffect(() => {
-    let width = WIN_BASE_W;
-    let height = WIN_BASE_H;
-    if (bubbleVisible) {
-      width = Math.max(width, WIN_BUBBLE_W);
-      height = Math.max(height, suggestionVisible ? WIN_SUGGESTION_H : WIN_BUBBLE_H);
-    }
-    if (historyVisible) {
-      width = Math.max(width, WIN_HISTORY_W);
-      height = Math.max(height, WIN_HISTORY_H);
-    }
-    if (actionsMenuVisible) {
-      width = Math.max(width, WIN_ACTION_MENU_W);
-      height = Math.max(height, WIN_ACTION_MENU_H);
-    }
-    window.electron?.ipcRenderer.sendMessage('resize-avatar-window', {
-      width,
-      height,
+    window.electron?.ipcRenderer.sendMessage('avatar-bubble-state', {
+      bubble,
     });
-  }, [bubbleVisible, suggestionVisible, historyVisible, actionsMenuVisible]);
+  }, [bubble]);
 
   return (
     <div className="pet-stage">
-      {/* Activity panel */}
-      {showHistory && (
-        <ActivityPanel
-          records={records}
-          onClose={() => setShowHistory(false)}
-          onViewConversation={handleViewConversation}
-          onLoadSuggestion={loadHistoricalSuggestion}
-          onRateSupport={rateHistoricalSupport}
-        />
-      )}
-
-      <ObservationBubble
-        bubble={bubble}
-        onHelpMe={handleHelpMe}
-        onDismiss={handleDismiss}
-        onViewConversation={handleViewConversation}
-        onChatAboutSuggestion={handleChatAboutSuggestion}
-        onOpenCocoChat={handleOpenCocoChat}
-        onMouseEnter={handleBubbleEnter}
-        onMouseLeave={handleBubbleLeave}
-      />
       {pulse && (
         <span
           key={pulse.key}
@@ -1075,25 +624,26 @@ function PetView() {
           aria-hidden
         />
       )}
-      <div ref={petActionsRef} className="pet-container">
-        <PetSprite mood={cocoSleeping ? 'sleep' : mood} />
-        <button
-          type="button"
-          className="open-button"
-          onClick={handleClick}
-          title="Open the chat"
-          aria-label="Open the chat"
-        >
-          <span aria-hidden>Open Coco</span>
-        </button>
+      <div
+        className={`pet-container${actionsMenuOpen ? ' has-open-actions' : ''}${
+          dragging ? ' is-dragging' : ''
+        }`}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          openActionsMenu();
+        }}
+      >
+        <PetSprite mood={cocoSleeping && !bubble?.agentReply && !bubble?.agentWorking ? 'sleep' : mood} />
+        <span className="pet-drag-hint" aria-hidden>
+          Right-click for menu
+        </span>
 
         <button
           type="button"
           className={`pet-actions-trigger${actionsMenuOpen ? ' is-open' : ''}`}
           onClick={(e) => {
             e.stopPropagation();
-            setShowHistory(false);
-            setActionsMenuOpen((open) => !open);
+            openActionsMenu();
           }}
           title="More actions"
           aria-label="More actions"
@@ -1103,51 +653,6 @@ function PetView() {
           •••
         </button>
 
-        {actionsMenuVisible && (
-          <div
-            className="pet-actions-menu"
-            role="menu"
-            aria-label="Coco actions"
-          >
-            <button
-              type="button"
-              role="menuitem"
-              onClick={(event) => {
-                event.stopPropagation();
-                setActionsMenuOpen(false);
-                setCocoSleepMode(!cocoSleeping).catch(() => undefined);
-              }}
-            >
-              <PetMenuIcon name={cocoSleeping ? 'wake' : 'sleep'} />
-              <span>{cocoSleeping ? 'Wake Coco' : 'Sleep'}</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={(event) => {
-                event.stopPropagation();
-                setActionsMenuOpen(false);
-                setShowHistory(true);
-              }}
-            >
-              <PetMenuIcon name="history" />
-              <span>History</span>
-            </button>
-            <div className="pet-actions-divider" role="separator" />
-            <button
-              type="button"
-              role="menuitem"
-              onClick={(event) => {
-                event.stopPropagation();
-                setActionsMenuOpen(false);
-                window.electron?.ipcRenderer.sendMessage('open-chat-settings');
-              }}
-            >
-              <PetMenuIcon name="settings" />
-              <span>Settings</span>
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

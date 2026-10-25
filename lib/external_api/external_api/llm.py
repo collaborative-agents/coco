@@ -111,6 +111,8 @@ TINKER_PREFIX = "tinker/"
 
 
 def _provider_for_model(model: str) -> str:
+    if model.startswith("pi/"):
+        return "pi"
     if model.startswith(LM_STUDIO_PREFIX):
         return "lm_studio"
     if model.startswith(NV_INFERENCE_PREFIX):
@@ -415,6 +417,20 @@ def _chat_completion_provider(
 ) -> tuple[LiteLLMMessage, TokenUsage]:
     """Run a completion, dispatching by ``model`` prefix (LM Studio, NV, OA,
     Tinfoil, LiteLLM)."""
+    if model.startswith("pi/"):
+        from external_api.pi_api import get_pi_completion
+
+        return get_pi_completion(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+            tool_choice=tool_choice,
+            on_chunk=on_chunk,
+        )
     if model.startswith(LM_STUDIO_PREFIX):
         if tools:
             raise ValueError("native function calling is not supported by LM Studio")

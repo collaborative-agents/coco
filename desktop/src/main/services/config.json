@@ -10,7 +10,10 @@
       "type": "python",
       "command": "uv",
       "args": [
-        "run", "python", "-m", "proactive_tutor.tutor_server",
+        "run",
+        "python",
+        "-m",
+        "proactive_tutor.tutor_server",
         "--port=8081",
         "--model_name=${TUTOR_MODEL}"
       ],
@@ -29,7 +32,10 @@
       "type": "python",
       "command": "uv",
       "args": [
-        "run", "python", "-m", "lib.sensing.sensing.sensing_server",
+        "run",
+        "python",
+        "-m",
+        "lib.sensing.sensing.sensing_server",
         "--port=8080",
         "--ai_tutoring=True",
         "--tutor_url=http://localhost:8081",
@@ -44,5 +50,9 @@
         "GEMINI_API_KEY": ""
       }
     }
+  ],
+  "supportedModes": [
+    "everyday_support",
+    "custom"
   ]
 }

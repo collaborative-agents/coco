@@ -1,4 +1,7 @@
-import { configureServiceModelArguments } from './model-arguments';
+import {
+  configureServiceModelArguments,
+  startModelServices,
+} from './model-arguments';
 
 describe('configureServiceModelArguments', () => {
   it('applies saved model IDs after an early service-config load', () => {
@@ -27,8 +30,29 @@ describe('configureServiceModelArguments', () => {
   it('refuses to configure services with an empty model ID', () => {
     const manager = { configureServiceArg: jest.fn() };
 
-    expect(() => configureServiceModelArguments(manager, '', 'vision'))
-      .toThrow('Both tutor and sensing model IDs are required.');
+    expect(() => configureServiceModelArguments(manager, '', 'vision')).toThrow(
+      'A tutor model ID is required.',
+    );
     expect(manager.configureServiceArg).not.toHaveBeenCalled();
   });
+});
+
+it('starts chat without sensing, and keeps sensing off while sleeping', () => {
+  const manager = { configureServiceArg: jest.fn(), startService: jest.fn() };
+  configureServiceModelArguments(manager, 'pi/test/chat', '');
+  expect(manager.configureServiceArg).toHaveBeenCalledTimes(1);
+  for (const [model, sleeping] of [
+    ['', false],
+    ['pi/test/vision', true],
+  ] as const) {
+    manager.startService.mockClear();
+    startModelServices(manager, model, sleeping);
+    expect(manager.startService.mock.calls).toEqual([['tutor-server']]);
+  }
+  manager.startService.mockClear();
+  startModelServices(manager, 'pi/test/vision', false);
+  expect(manager.startService.mock.calls).toEqual([
+    ['tutor-server'],
+    ['sensing-server'],
+  ]);
 });
