@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { LLMCallMetrics } from '../../renderer/components/observation-types';
 import {
   readConversations,
   saveConversation,
@@ -116,11 +117,15 @@ export default class ChatStreamStore {
           ? (event.error ?? 'The run failed.')
           : (event.guidance ?? message.text),
       );
-      if (event.llm_metrics)
-        message.tutorMetrics =
-          event.llm_metrics as StoredChatMessage['tutorMetrics'];
       message.isStreaming = false;
       message.isError = event.type === 'error';
+      message.tutorMetrics =
+        (event.llm_metrics as LLMCallMetrics | undefined) ??
+        message.tutorMetrics;
+      message.observerMetrics =
+        ((event.observer_metrics ?? event.observerMetrics) as
+          | LLMCallMetrics
+          | undefined) ?? message.observerMetrics;
       message.stopped = event.stopped === true;
       message.activity = parseAgentActivity(event.activity) ?? message.activity;
       message.id = randomUUID();

@@ -117,3 +117,48 @@ test('a coaching-only response has a card without an empty main answer', () => {
   ).toBeInTheDocument();
   expect(container.querySelector('.tutor-main-answer')).toBeNull();
 });
+
+test('copies a code block without its trailing newline', async () => {
+  const writeText = jest.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  });
+  const path =
+    '/Users/alex/Library/Application Support/coco-learn-development/workspace/proactive';
+  render(
+    <TutorMessage
+      text={`The full path is:\n\n\`\`\`\n${path}\n\`\`\`\n\nThe \`workspace/\` folder.`}
+    />,
+  );
+  expect(screen.getAllByRole('button', { name: 'Copy code' })).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Copy code' }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(path));
+  expect(
+    await screen.findByRole('button', { name: 'Copied ✓' }),
+  ).toBeInTheDocument();
+});
+
+test('copies the complete code while its preview remains collapsed', async () => {
+  const writeText = jest.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  });
+  const source = Array.from(
+    { length: 12 },
+    (_, i) => `const value${i} = ${i};`,
+  ).join('\n');
+  const { container } = render(
+    <TutorMessage text={`\`\`\`javascript\n${source}\n\`\`\``} />,
+  );
+  expect(container).not.toHaveTextContent('value11');
+  expect(
+    screen.getByRole('button', { name: 'Show full code block' }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Copy code' }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(source));
+  expect(
+    await screen.findByRole('button', { name: 'Copied ✓' }),
+  ).toBeInTheDocument();
+});

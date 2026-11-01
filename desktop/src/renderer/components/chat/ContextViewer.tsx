@@ -1,3 +1,4 @@
+import ContextComposition from './ContextComposition';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type {
@@ -8,14 +9,6 @@ import { S } from './styles';
 import './ContextViewer.css';
 import ActionTooltip from './ActionTooltip';
 
-const colors = [
-  '#668bd1',
-  '#8d78bf',
-  '#53a59b',
-  '#c49b52',
-  '#c47c8b',
-  '#7893a6',
-];
 const number = (value: number) => Math.round(value).toLocaleString();
 
 function Category({ category }: { category: ContextCategory }) {
@@ -79,9 +72,6 @@ function ContextDialog({
       disposed = true;
     };
   }, [sessionId]);
-  const total = snapshot?.estimatedTokens ?? 0;
-  const capacity = snapshot?.reported?.contextWindow;
-  const scale = Math.max(total, capacity ?? 0, 1);
   return createPortal(
     <dialog
       ref={dialog}
@@ -101,33 +91,7 @@ function ContextDialog({
         {!error && loading && <p role="status">Reading context…</p>}
         {!error && !loading && snapshot && (
           <>
-            <div className="context-total">
-              <strong>≈ {number(total)} tokens</strong>
-              {capacity ? ` / ${number(capacity)} configured capacity` : ''}
-            </div>
-            <div
-              className="context-usage-bar"
-              aria-label="Estimated context composition"
-            >
-              {snapshot.categories.map((category, index) => (
-                <span
-                  key={category.id}
-                  title={`${category.label}: ≈ ${number(category.tokens)} tokens`}
-                  style={{
-                    width: `${(category.tokens / scale) * 100}%`,
-                    background: colors[index % colors.length],
-                  }}
-                />
-              ))}
-            </div>
-            <div className="context-legend">
-              {snapshot.categories.map((category, index) => (
-                <span key={category.id}>
-                  <i style={{ background: colors[index % colors.length] }} />
-                  {category.label}
-                </span>
-              ))}
-            </div>
+            <ContextComposition snapshot={snapshot} />
             {snapshot.categories.map((category) => (
               <Category key={category.id} category={category} />
             ))}

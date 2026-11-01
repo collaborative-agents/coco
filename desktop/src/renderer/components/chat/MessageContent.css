@@ -135,6 +135,38 @@
   white-space: pre;
 }
 
+/* Fenced code with its Copy button; the button sits outside the scrolling
+   <pre> so it stays visible. */
+.chat-code-block {
+  position: relative;
+  margin: 7px 0;
+}
+
+.chat-markdown .chat-code-block pre {
+  margin: 0;
+  padding-right: 76px;
+}
+
+.chat-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text-secondary);
+  font-family: var(--coco-font-family);
+  font-size: var(--coco-text-caption);
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.chat-code-copy:hover {
+  color: var(--coco-color-primary);
+  border-color: var(--coco-color-accent-border);
+}
+
 .chat-markdown pre code {
   padding: 0;
   border: 0;
@@ -283,7 +315,8 @@
   border-radius: var(--coco-radius-control);
   background: var(--coco-color-surface);
   color: var(--coco-color-text-secondary);
-  font-size: var(--coco-text-control);
+  /* Same size as the answer around it, so the lesson reads as part of it. */
+  font-size: var(--coco-text-body);
   line-height: 1.65;
 }
 
@@ -305,7 +338,7 @@
   align-items: center;
   gap: 7px;
   color: var(--coco-color-primary);
-  font-size: var(--coco-text-caption);
+  font-size: var(--coco-text-secondary);
   font-weight: 600;
 }
 
@@ -318,6 +351,6 @@
   border-radius: var(--coco-radius-pill);
   background: var(--coco-color-accent-soft);
   color: var(--coco-color-primary);
-  font-size: var(--coco-text-caption);
+  font-size: var(--coco-text-secondary);
   line-height: var(--coco-leading-body);
 }

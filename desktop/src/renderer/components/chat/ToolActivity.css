@@ -63,3 +63,177 @@
 .tool-activity-group > summary {
   cursor: pointer;
 }
+
+.tool-activity-locked-hint {
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--coco-radius-control);
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-caption);
+}
+
+.tool-detail-field {
+  margin-top: 8px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.tool-detail-field-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: var(--coco-text-caption);
+  background: var(--coco-color-surface);
+}
+.tool-detail-field pre {
+  margin: 0;
+  padding: 10px;
+  line-height: 1.6;
+  color: var(--coco-color-text-secondary);
+}
+.tool-detail-field button {
+  font: inherit;
+  color: var(--coco-color-primary);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+}
+.tool-detail-expand {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-top: 1px solid var(--coco-color-border) !important;
+}
+.tool-detail-field button:hover {
+  background: var(--coco-color-accent-soft);
+}
+.tool-code-window {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  padding: 0;
+  width: min(960px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  box-sizing: border-box;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 14px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  font: var(--coco-text-secondary) var(--coco-font-family);
+  box-shadow: 0 20px 80px #0003;
+}
+.tool-code-window[open] {
+  display: flex;
+  flex-direction: column;
+}
+.tool-code-window::backdrop {
+  background: #18213066;
+}
+.tool-code-window header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--coco-color-border);
+}
+.tool-code-window header > div {
+  flex: 1;
+  min-width: 0;
+}
+.tool-code-window h2 {
+  margin: 0 0 4px;
+  font-size: var(--coco-text-section);
+  overflow-wrap: anywhere;
+}
+.tool-code-window header span {
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-caption);
+}
+.tool-code-window button {
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  background: var(--coco-color-surface-subtle);
+  color: inherit;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.tool-code-window pre {
+  margin: 0;
+  padding: 20px;
+  overflow: auto;
+  min-height: 0;
+  tab-size: 4;
+  white-space: pre;
+  background: #f8fafc;
+  color: #24292f;
+  font: 13px/1.7 var(--coco-font-mono);
+}
+.tool-code-window code {
+  font: inherit;
+}
+.tool-code-copy-status {
+  padding: 8px 20px;
+}
+.tool-code-window :focus-visible,
+.tool-detail-field button:focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: -2px;
+}
+.tool-code-window .hljs-keyword,
+.tool-code-window .hljs-selector-tag {
+  color: #a626a4;
+}
+.tool-code-window .hljs-string,
+.tool-code-window .hljs-attr {
+  color: #24723b;
+}
+.tool-code-window .hljs-number,
+.tool-code-window .hljs-literal {
+  color: #986000;
+}
+.tool-code-window .hljs-title,
+.tool-code-window .hljs-built_in {
+  color: #075bb5;
+}
+.tool-code-window .hljs-comment {
+  color: #63717e;
+  font-style: italic;
+}
+.tool-code-window .hljs-variable,
+.tool-code-window .hljs-meta {
+  color: #a13b19;
+}
+
+.tool-detail-field-header {
+  flex-wrap: wrap;
+}
+.tool-command-explanation {
+  flex-basis: 100%;
+  padding: 10px 12px;
+  background: var(--coco-color-accent-soft);
+  border-radius: 6px;
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-secondary);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.tool-detail-field button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.tool-activity-locked-hint a {
+  color: var(--coco-color-primary);
+  text-underline-offset: 3px;
+}
+.tool-activity-locked-hint a:focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 3px;
+}

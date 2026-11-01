@@ -1,0 +1,42 @@
+.skill-workshop-banner {
+  margin: 8px 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 12px;
+  background: var(--coco-color-surface-subtle);
+  font-size: var(--coco-text-caption);
+}
+.skill-workshop-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.skill-workshop-banner ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+.skill-workshop-banner li[aria-current='step'] {
+  color: var(--coco-color-primary);
+  font-weight: 600;
+}
+.skill-workshop-banner p {
+  margin: 8px 0;
+}
+.skill-workshop-banner button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: var(--coco-color-text);
+  background: var(--coco-color-surface);
+}
+.skill-workshop-banner button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

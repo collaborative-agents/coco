@@ -1,4 +1,5 @@
 import type React from 'react';
+import './Settings.css';
 import { S } from './styles';
 
 interface Props {
@@ -18,7 +19,7 @@ export default function MemorySettings({
 }: Props) {
   return (
     <section
-      className="workspace-settings-section"
+      className="workspace-settings-section memory-settings"
       aria-labelledby="memory-heading"
     >
       <h2 id="memory-heading" className="settings-heading">
@@ -29,7 +30,8 @@ export default function MemorySettings({
       </div>
       <textarea
         aria-label="Memory"
-        style={S.memoryArea}
+        className="settings-memory-editor"
+        style={{ ...S.memoryArea, resize: 'none' }}
         placeholder="e.g. Prefers concise answers. Works mostly in Google Docs and Slides. Comfortable with Claude; new to agents."
         value={memoryDraft}
         onChange={(e) => setMemoryDraft(e.target.value)}

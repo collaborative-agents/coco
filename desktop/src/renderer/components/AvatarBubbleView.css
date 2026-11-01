@@ -18,6 +18,12 @@
   width: max-content;
 }
 
+/* Until the pointer moves over a new bubble, its controls can't match a hover
+   left over from the previous bubble (see pointerLive). */
+.avatar-bubble-view:not(.is-pointer-live) .observation-bubble * {
+  pointer-events: none;
+}
+
 .avatar-bubble-view .observation-bubble.has-suggestion {
   max-height: var(--bubble-max-height, 520px);
 }

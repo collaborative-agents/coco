@@ -91,6 +91,7 @@ it('keeps the local agent available without accounts, training, or personalizati
     screen.queryByRole('button', { name: /Training|Personalization|Sign in/i }),
   ).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Models' }));
   expect(
     await screen.findByRole('heading', { name: 'Models & providers' }),
   ).toBeVisible();
@@ -128,4 +129,27 @@ it('synchronizes the expand control with the window mode before the first click'
   expect(sendMessage).toHaveBeenLastCalledWith('toggle-float-window', {
     expanded: false,
   });
+});
+
+it('groups settings by category and retains memory edits when switching sections', async () => {
+  render(<SessionChatView />);
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  expect(
+    screen.getByRole('region', { name: 'General settings' }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole('heading', { name: 'Models & providers' }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Memory' }));
+  const memory = screen.getByRole('textbox', { name: 'Memory' });
+  fireEvent.change(memory, { target: { value: 'Keep replies concise.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Models' }));
+  expect(
+    screen.getByRole('heading', { name: 'Models & providers' }),
+  ).toBeVisible();
+  expect(memory).not.toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Memory' }));
+  expect(memory).toBeVisible();
+  expect(memory).toHaveValue('Keep replies concise.');
+  await act(async () => {});
 });

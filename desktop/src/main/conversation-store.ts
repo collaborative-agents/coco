@@ -143,8 +143,9 @@ function sameMessage(
   return (
     left.role === right.role &&
     ((left.requestId && left.requestId === right.requestId) ||
-      left.text === right.text) &&
-    JSON.stringify(left.images ?? []) === JSON.stringify(right.images ?? [])
+      (left.text === right.text &&
+        JSON.stringify(left.images ?? []) ===
+          JSON.stringify(right.images ?? [])))
   );
 }
 

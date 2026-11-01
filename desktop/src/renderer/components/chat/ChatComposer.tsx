@@ -1,3 +1,4 @@
+import SkillPicker from './SkillPicker';
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import { S } from './styles';
@@ -250,6 +251,18 @@ export default function ChatComposer({
           onKeyDown={onKeyDown}
         />
         <ChatComposerActions
+          skillPicker={
+            <SkillPicker
+              disabled={attachmentDisabled}
+              onSelect={(name) => {
+                setInput(
+                  (previous) =>
+                    `/skill:${name} ${previous.replace(/^\/skill:[a-z0-9-]+\s*/, '')}`,
+                );
+                textareaRef.current?.focus();
+              }}
+            />
+          }
           onAttachFiles={attachFiles}
           attachmentDisabled={attachmentDisabled}
           modelPicker={modelPicker}

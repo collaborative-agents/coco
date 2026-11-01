@@ -61,3 +61,27 @@ def test_inkling_observer_disables_reasoning_effort(monkeypatch):
 
     assert captured["reasoning_effort"] == "none"
     assert "extra_body" not in captured
+
+
+def test_custom_observer_preserves_reporting_contract(monkeypatch, tmp_path):
+    monkeypatch.setenv("COCO_USER_DATA_DIR", str(tmp_path))
+    custom = "Look for writing mistakes. Respond in plain text."
+    effective = segment_processor._install_custom_observer_prompt(custom)
+
+    # Only user instructions are persisted; the current contract is attached
+    # each time, including when an older saved prompt is reloaded.
+    assert segment_processor._custom_observer_prompt_path().read_text() == custom
+    assert effective.startswith(custom)
+    schema = json.loads(effective.split("Output in JSON format:", 1)[1])
+    assert set(schema) == {
+        "observation",
+        "user_intent",
+        "inefficiency_patterns",
+        "mistake_made_by_human",
+        "task_complete",
+        "applying_ai_output",
+        "status",
+    }
+    assert "always applies" in effective
+    assert "single JSON object" in effective
+    assert segment_processor._install_custom_observer_prompt(custom) == effective

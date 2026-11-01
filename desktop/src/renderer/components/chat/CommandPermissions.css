@@ -1,0 +1,77 @@
+.command-permissions {
+  font-size: var(--coco-text-control);
+  line-height: 1.5;
+}
+.command-permissions-directory {
+  color: var(--coco-color-text-muted);
+  overflow-wrap: anywhere;
+}
+.command-permissions-rule {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--coco-color-border);
+}
+.command-permissions-rule code {
+  overflow-wrap: anywhere;
+}
+.command-permissions-rule button {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  cursor: pointer;
+}
+.command-permissions-note {
+  color: var(--coco-color-text-muted);
+}
+.workspace-access-dialog {
+  width: min(540px, 100%);
+}
+.workspace-access-dialog .workspace-dialog-header h2 {
+  font-size: var(--coco-text-lead);
+}
+.workspace-access-section {
+  padding: 18px 0;
+  border-top: 1px solid var(--coco-color-border);
+}
+.workspace-access-section h3 {
+  font-size: var(--coco-text-control);
+  margin: 0;
+  font-weight: 600;
+}
+.workspace-access-section p {
+  margin: 8px 0 12px;
+  color: var(--coco-color-text-muted);
+}
+.workspace-access-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.workspace-access-heading span {
+  color: var(--coco-color-primary);
+  font-size: var(--coco-text-caption);
+}
+.workspace-access-section > button {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  cursor: pointer;
+}
+.workspace-access-section button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.workspace-access-section button:focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 2px;
+}

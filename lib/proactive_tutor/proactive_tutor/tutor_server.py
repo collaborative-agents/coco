@@ -37,6 +37,15 @@ configured_model_name: str = ""
 # ---------------------------------------------------------------------------
 
 
+class ToolCommandExplanationRequest(BaseModel):
+    tool: str = Field(min_length=1, max_length=200)
+    source: str = Field(min_length=1, max_length=10000)
+
+
+class ToolCommandExplanationResponse(BaseModel):
+    explanation: str
+
+
 class EventRequest(BaseModel):
     observation: str
     image_paths: list[str] | None = (
@@ -823,6 +832,23 @@ def _run_viz_fixer(code: str, error: dict, problem_statement: str | None) -> dic
     if not obj or "fixed_code" not in obj:
         raise ValueError(f"Fixer LLM did not return valid JSON: {raw[:300]}")
     return obj
+
+
+@app.post("/explain-tool-command", response_model=ToolCommandExplanationResponse)
+async def explain_tool_command(req: ToolCommandExplanationRequest):
+    """Explain source text without executing tools or updating the conversation."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    try:
+        explanation, _metrics = await asyncio.to_thread(
+            tutor.explain_tool_command, req.tool, req.source
+        )
+        return ToolCommandExplanationResponse(explanation=explanation)
+    except Exception as exc:
+        logger.error("Command explanation failed", exc_info=True)
+        raise HTTPException(
+            status_code=502, detail="Could not explain command"
+        ) from exc
 
 
 @app.post("/viz/retry", response_model=VizRetryResponse)

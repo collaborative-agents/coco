@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AgentWorkspace as Workspace } from '../../../shared/agent-execution';
 import './AgentWorkspace.css';
+import CommandPermissions from './CommandPermissions';
 
 export default function AgentWorkspace({
   sessionId,
@@ -13,7 +14,9 @@ export default function AgentWorkspace({
   running: boolean;
   onStop: () => Promise<void>;
 }) {
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [directory, setDirectory] = useState('');
+  const [accessGranted, setAccessGranted] = useState(false);
   const [error, setError] = useState('');
   const [choosing, setChoosing] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -22,7 +25,10 @@ export default function AgentWorkspace({
     window.electron?.ipcRenderer
       .invoke('get-agent-workspace', { sessionId })
       .then((value) => {
-        if (active) setDirectory((value as Workspace)?.directory ?? '');
+        if (active) {
+          setDirectory((value as Workspace)?.directory ?? '');
+          setAccessGranted((value as Workspace)?.accessGranted === true);
+        }
         return undefined;
       })
       .catch(() => {
@@ -31,7 +37,7 @@ export default function AgentWorkspace({
     return () => {
       active = false;
     };
-  }, [sessionId]);
+  }, [sessionId, running]);
   useEffect(() => {
     if (!running) setStopping(false);
   }, [running]);
@@ -43,7 +49,10 @@ export default function AgentWorkspace({
         'choose-agent-workspace',
         { sessionId },
       )) as Workspace | null;
-      if (value) setDirectory(value.directory);
+      if (value) {
+        setDirectory(value.directory);
+        setAccessGranted(value.accessGranted);
+      }
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Could not choose a folder.',
@@ -82,9 +91,32 @@ export default function AgentWorkspace({
           </span>
           <span aria-hidden="true">⌄</span>
         </button>
-        <span className="agent-workspace-hint">
-          {running ? 'Coco is working' : 'Files & commands run here'}
-        </span>
+        <button
+          type="button"
+          className="agent-access"
+          aria-label="Workspace access"
+          aria-haspopup="dialog"
+          title={
+            accessGranted
+              ? 'Workspace access granted'
+              : 'Workspace access requires approval'
+          }
+          onClick={() => setPermissionsOpen(true)}
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            aria-hidden="true"
+          >
+            <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z" />
+            {accessGranted && <path d="m8 12 3 3 5-6" />}
+          </svg>
+          Access <span aria-hidden="true">⌄</span>
+        </button>
         {running && (
           <button
             type="button"
@@ -104,6 +136,25 @@ export default function AgentWorkspace({
           </button>
         )}
       </div>
+      {permissionsOpen && (
+        <CommandPermissions
+          key={sessionId}
+          sessionId={sessionId}
+          workspaceAccess={{
+            granted: accessGranted,
+            canRevoke: Boolean(sessionId) && !running && !disabled && !choosing,
+            running,
+            onRevoke: async () => {
+              await window.electron.ipcRenderer.invoke(
+                'revoke-agent-workspace',
+                sessionId,
+              );
+              setAccessGranted(false);
+            },
+          }}
+          onClose={() => setPermissionsOpen(false)}
+        />
+      )}
       {error && (
         <div className="agent-workspace-error" role="alert">
           {error}

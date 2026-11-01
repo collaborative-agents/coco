@@ -17,6 +17,7 @@
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import NotificationView, {
+  fittedCardHeight,
   NotificationBubble,
 } from '../renderer/components/NotificationView';
 import type { InstantSuggestion } from '../renderer/components/observation-types';
@@ -173,7 +174,8 @@ describe('LaTeX inside JSON guidance', () => {
 
   it('handles LLM-style unescaped LaTeX in JSON (repairJsonEscapes path)', () => {
     // Simulate what an LLM emits: \frac is not doubled in the JSON string
-    const raw = '{"guidance": "Minimize $\\frac{1}{N}\\sum_i L_i$ at each step."}';
+    const raw =
+      '{"guidance": "Minimize $\\frac{1}{N}\\sum_i L_i$ at each step."}';
     const { container } = render(<NotificationBubble message={raw} />);
     // Should still render — either via repaired JSON or fallback
     expect(container).toBeTruthy();
@@ -281,7 +283,9 @@ describe('instant suggestion actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Chat with Coco' }));
     expect(onChat).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: /Run with Coco|Copy|Got it/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Run with Coco|Copy|Got it/ }),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps the opposite rating available for a correction', () => {
@@ -320,7 +324,9 @@ describe('instant suggestion actions', () => {
           prompt: 'Explain this error.',
           copyText: 'Explain this error.',
           targetTool: 'chatgpt',
-          availableTools: [{ id: 'chatgpt', label: 'ChatGPT', category: 'chatbot' }],
+          availableTools: [
+            { id: 'chatgpt', label: 'ChatGPT', category: 'chatbot' },
+          ],
         }}
         onChatAboutSuggestion={onChat}
         onRunSuggestion={onRun}
@@ -329,7 +335,45 @@ describe('instant suggestion actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run with Coco' }));
     expect(onRun).toHaveBeenCalledTimes(1);
     expect(onChat).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: /Chat with Coco|Open |Copy/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Chat with Coco|Open |Copy/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('puts "← Why" and the action in one row on the action page', () => {
+    const onPageChange = jest.fn();
+    const onRun = jest.fn();
+    render(
+      <NotificationBubble
+        message="Ask an AI tool"
+        notifType="instant-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Paste this prompt to batch-review cards',
+          prompt: 'Stage: You are reviewing annotation cards.',
+          copyText: 'Stage: You are reviewing annotation cards.',
+          targetTool: 'chatgpt',
+          availableTools: [
+            { id: 'chatgpt', label: 'ChatGPT', category: 'chatbot' },
+          ],
+        }}
+        showFrameworkIntro
+        frameworkPage={1}
+        onFrameworkPageChange={onPageChange}
+        onRunSuggestion={onRun}
+      />,
+    );
+
+    const why = screen.getByRole('button', { name: '← Why' });
+    const run = screen.getByRole('button', { name: 'Run with Coco' });
+    const row = screen.getByLabelText('Suggestion pages');
+    expect(row).toContainElement(why);
+    expect(row).toContainElement(run);
+    expect(document.querySelector('.toast-footer')).toBeNull();
+    fireEvent.click(why);
+    expect(onPageChange).toHaveBeenCalledWith(0);
+    fireEvent.click(run);
+    expect(onRun).toHaveBeenCalledTimes(1);
   });
 
   it('shows the 4D overview before an AI-upskilling suggestion', () => {
@@ -774,5 +818,48 @@ describe('session invite pop-up with a suggestion preview', () => {
       'chat-about-suggestion',
       expect.objectContaining({ sessionInvite: true, suggestion }),
     );
+  });
+});
+
+describe('suggestion pop-up height', () => {
+  const sized = (
+    element: HTMLElement,
+    sizes: {
+      offsetHeight?: number;
+      scrollHeight?: number;
+      clientHeight?: number;
+    },
+  ) => {
+    Object.entries(sizes).forEach(([key, value]) =>
+      Object.defineProperty(element, key, { configurable: true, value }),
+    );
+    return element;
+  };
+
+  it('counts message text hidden inside the body scroll area', () => {
+    const card = document.createElement('div');
+    const header = sized(document.createElement('div'), {
+      offsetHeight: 40,
+      scrollHeight: 40,
+    });
+    const body = sized(document.createElement('div'), {
+      offsetHeight: 120,
+      scrollHeight: 120,
+    });
+    body.className = 'toast-body';
+    const message = sized(document.createElement('div'), {
+      scrollHeight: 150,
+      clientHeight: 90,
+    });
+    message.className = 'toast-message toast-markdown';
+    body.appendChild(message);
+    const footer = sized(document.createElement('div'), {
+      offsetHeight: 50,
+      scrollHeight: 50,
+    });
+    card.append(header, body, footer);
+
+    // 40 + 120 + 50 for the rows, plus 60px of hidden message text.
+    expect(fittedCardHeight(card)).toBe(270);
   });
 });

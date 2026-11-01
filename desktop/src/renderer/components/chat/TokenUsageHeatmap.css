@@ -1,0 +1,168 @@
+.token-calendar-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--coco-color-text);
+}
+.token-calendar-frame {
+  padding: 16px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 10px;
+}
+.token-calendar-scroll {
+  overflow-x: auto;
+  padding: 3px 2px 8px;
+}
+.token-calendar-chart {
+  display: grid;
+  min-width: 740px;
+  grid-template-rows: 20px repeat(7, 12px);
+  gap: 3px;
+}
+.token-calendar-month,
+.token-calendar-weekday {
+  color: var(--coco-color-text-secondary);
+  font-size: 11px;
+  line-height: 12px;
+}
+.token-calendar-month {
+  white-space: nowrap;
+}
+:is(.workspace-settings, .token-unlock-preview) .token-calendar-day,
+.token-calendar-legend i {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  height: 12px;
+  padding: 0;
+  border: 1px solid rgb(27 31 35 / 7%);
+  border-radius: 3px;
+  background: var(--coco-color-surface-subtle);
+  box-shadow: none;
+}
+:is(.workspace-settings, .token-unlock-preview)
+  .token-calendar-day[data-level='1'],
+.token-calendar-legend [data-level='1'] {
+  background: #9be9a8;
+}
+:is(.workspace-settings, .token-unlock-preview)
+  .token-calendar-day[data-level='2'],
+.token-calendar-legend [data-level='2'] {
+  background: #40c463;
+}
+:is(.workspace-settings, .token-unlock-preview)
+  .token-calendar-day[data-level='3'],
+.token-calendar-legend [data-level='3'] {
+  background: #30a14e;
+}
+:is(.workspace-settings, .token-unlock-preview)
+  .token-calendar-day[data-level='4'],
+.token-calendar-legend [data-level='4'] {
+  background: #216e39;
+}
+:is(.workspace-settings, .token-unlock-preview) .token-calendar-day {
+  cursor: pointer;
+}
+:is(.workspace-settings, .token-unlock-preview) .token-calendar-day:hover,
+:is(.workspace-settings, .token-unlock-preview)
+  .token-calendar-day:focus-visible,
+:is(.workspace-settings, .token-unlock-preview)
+  .token-calendar-day[aria-pressed='true'] {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 1px;
+}
+.token-calendar-footer,
+.token-calendar-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--coco-color-text-muted);
+}
+.token-calendar-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.token-calendar-legend i {
+  width: 12px;
+}
+.token-calendar-selection button {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--coco-color-primary);
+  cursor: pointer;
+}
+
+.settings-token-usage {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--coco-color-border);
+}
+
+.token-usage-locked {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.token-usage-locked-preview {
+  filter: blur(3px);
+  opacity: 0.45;
+  pointer-events: none;
+  user-select: none;
+}
+.token-usage-lock-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  text-align: center;
+  color: var(--coco-color-text);
+  background: color-mix(in srgb, var(--coco-color-surface) 65%, transparent);
+}
+.token-usage-lock-mask span {
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-caption);
+}
+
+.token-usage-lock-mask a {
+  color: var(--coco-color-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.token-usage-lock-mask a:focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.token-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: var(--coco-text-caption);
+}
+.token-usage-table th,
+.token-usage-table td {
+  text-align: left;
+  padding: 6px;
+  border-bottom: 1px solid var(--coco-color-border);
+  overflow-wrap: anywhere;
+}
+.token-usage-table caption {
+  text-align: left;
+  color: var(--coco-color-text-muted);
+}
+.settings-token-usage .token-usage-table caption,
+.settings-token-usage .token-usage-table th,
+.settings-token-usage .token-usage-table td {
+  font-size: var(--coco-text-caption);
+  color: var(--coco-color-text-muted);
+}

@@ -1,0 +1,101 @@
+.agent-permission-log {
+  padding: 4px 0;
+  color: var(--coco-color-text);
+  font-size: var(--coco-text-secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.agent-permission-log .agent-permission-directory {
+  margin-top: 2px;
+}
+.agent-permission-outcome {
+  margin-top: 6px;
+  color: var(--coco-color-text-muted);
+}
+.agent-permission-outcome.denied {
+  color: var(--coco-color-warning, #b7791f);
+}
+.agent-permission-outcome.allowed {
+  color: var(--coco-color-success, #27804a);
+}
+.agent-permission-request {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+  font: inherit;
+  font-family: var(--coco-font-mono, monospace);
+}
+
+.agent-permission-card {
+  width: min(620px, 100%);
+  box-sizing: border-box;
+  padding: 14px;
+  border: 1px solid var(--coco-color-border);
+  border-left: 3px solid var(--coco-color-primary);
+  border-radius: 10px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  font-size: var(--coco-text-secondary);
+  overflow-wrap: anywhere;
+}
+.agent-permission-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.agent-permission-heading span {
+  color: var(--coco-color-text-muted);
+  text-transform: capitalize;
+}
+.agent-permission-directory {
+  margin-top: 8px;
+  font-family: var(--coco-font-mono, monospace);
+}
+.agent-permission-command {
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--coco-color-surface-subtle);
+}
+.agent-permission-card p {
+  margin: 10px 0;
+  line-height: 1.5;
+}
+.agent-permission-note {
+  color: var(--coco-color-text-muted);
+}
+.agent-permission-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.agent-permission-actions button {
+  font: inherit;
+  padding: 7px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--coco-color-border);
+  background: var(--coco-color-surface);
+  color: inherit;
+  cursor: pointer;
+}
+.agent-permission-actions .agent-permission-allow {
+  border-color: var(--coco-color-primary);
+  background: var(--coco-color-accent-soft);
+}
+.agent-permission-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.agent-permission-card :focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 3px;
+}
+.agent-permission-card [role='alert'] {
+  color: var(--coco-color-danger, #b91c1c);
+}

@@ -8,6 +8,21 @@ import {
 } from 'electron';
 
 export type Channels =
+  | 'answer-agent-permission'
+  | 'revoke-agent-workspace'
+  | 'list-command-approvals'
+  | 'revoke-command-approval'
+  | 'explain-tool-command'
+  | 'curated-skills-changed'
+  | 'skill-workshop-start'
+  | 'skill-workshop-session'
+  | 'skill-workshop-save'
+  | 'skill-workshop-changed'
+  | 'curated-skills-list'
+  | 'curated-skills-reveal'
+  | 'curated-skills-import'
+  | 'token-usage'
+  | 'token-usage-changed'
   | 'session-invite-accepted'
   | 'notification-response'
   | 'reveal-agent-reply'

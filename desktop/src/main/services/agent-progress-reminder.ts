@@ -29,6 +29,13 @@ export default class AgentProgressReminder {
     this.assistantText = '';
     const last = parseAgentActivity(event.activity)?.at(-1);
     if (!last) return;
+    if (last.kind === 'permission') {
+      this.latest =
+        last.request.status === 'pending'
+          ? 'Waiting for your permission in chat.'
+          : `Permission ${last.request.status}; continuing…`;
+      return;
+    }
     const text =
       last.kind === 'message'
         ? last.text

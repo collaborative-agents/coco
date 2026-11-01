@@ -1,12 +1,14 @@
-import fs from 'fs';
 import { readPiConnection } from './pi-provider';
+import { retryOperation } from './retry-operation';
+import type CommandApprovalRules from './command-approval-rules';
+import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { app } from 'electron';
 import type { AgentContextSnapshot } from '../../shared/agent-context';
 import PiEventTranslator from './pi-events';
-import { retryOperation } from './retry-operation';
 import type { TutorStreamEvent } from './tutor-stream';
+import AgentPermissions, { type ActionApproval } from './agent-permissions';
 
 export interface SessionContextInput {
   model: string;
@@ -40,10 +42,33 @@ export default class PiHarness {
 
   private key = '';
 
+  private workspaceGrant?: string;
+
+  private revokingWorkspace = false;
+
+  hasWorkspaceAccess(directory: string) {
+    try {
+      return this.workspaceGrant === fs.realpathSync(directory);
+    } catch {
+      return false;
+    }
+  }
+
+  async revokeWorkspaceAccess() {
+    this.revokingWorkspace = true;
+    try {
+      this.workspaceGrant = undefined;
+      await this.dispose();
+    } finally {
+      this.revokingWorkspace = false;
+    }
+  }
+
   private active?: {
     requestId: string;
     stopped: boolean;
     controller: AbortController;
+    permissions: AgentPermissions;
   };
 
   getContextSnapshot(sessionId: string) {
@@ -62,6 +87,12 @@ export default class PiHarness {
     this.runtime?.answerQuestion(toolCallId, response);
   }
 
+  answerPermission(id: string, allow: unknown) {
+    if (!this.active || this.active.stopped)
+      throw new Error('This run is no longer active.');
+    this.active.permissions.answer(id, allow);
+  }
+
   async abort(requestId?: string) {
     if (!this.active || (requestId && requestId !== this.active.requestId))
       return;
@@ -71,6 +102,7 @@ export default class PiHarness {
   }
 
   async dispose() {
+    this.workspaceGrant = undefined;
     await this.abort();
     this.runtime?.dispose();
     this.runtime = undefined;
@@ -86,19 +118,30 @@ export default class PiHarness {
     text: string;
     images: string[];
     audioData?: string;
+    authoringInstructions?: string;
+    approvalRules?: CommandApprovalRules;
+    curatedSkills?: { paths: string[]; revision: string };
     context: SessionContextInput;
     emit: (event: TutorStreamEvent) => void;
   }) {
+    if (this.revokingWorkspace)
+      throw new Error('Workspace access is changing. Please try again.');
     if (this.active)
       throw new Error('Coco is already working. Stop the current run first.');
+    const translator = new PiEventTranslator(options.emit);
     const active = {
       requestId: options.requestId,
       stopped: false,
       controller: new AbortController(),
+      permissions: new AgentPermissions(
+        (request) => translator.permission(request),
+        options.approvalRules,
+      ),
     };
     this.active = active;
-    const translator = new PiEventTranslator(options.emit);
     let unsubscribe: (() => void) | undefined;
+    let usageModel = 'Unknown model';
+    let localContext = false;
     const timer = setTimeout(() => this.abort(options.requestId), 30 * 60_000);
     const request = async (route: string, body?: unknown, timeout?: number) => {
       const response = await fetch(`${options.tutorUrl}/agent/${route}`, {
@@ -123,12 +166,36 @@ export default class PiHarness {
       return response.json();
     };
     try {
+      const cwd = fs.realpathSync(options.directory);
+      if (!fs.statSync(cwd).isDirectory())
+        throw new Error('Choose an existing working folder.');
+      if (!options.authoringInstructions && this.workspaceGrant !== cwd) {
+        this.workspaceGrant = undefined;
+        if (
+          !(await active.permissions.request(
+            { kind: 'workspace', directory: cwd },
+            active.controller.signal,
+          ))
+        ) {
+          options.emit({
+            type: 'done',
+            guidance: '',
+            stopped: active.stopped,
+            tool_calls: [],
+            activity: translator.activity,
+          });
+          return;
+        }
+        if (active.stopped) throw new Error('Operation aborted');
+        this.workspaceGrant = cwd;
+      }
       const selectedModel = options.context.model;
       const [, provider, ...modelParts] = selectedModel.split('/');
       const connection = selectedModel.startsWith('pi/')
         ? { mode: 'native' as const, provider, model: modelParts.join('/') }
-        : selectedModel ? { mode: 'coco' as const } : readPiConnection();
-      let localContext = false;
+        : selectedModel
+          ? { mode: 'coco' as const }
+          : readPiConnection();
       const prepare = async () => {
         const value = await request(
           `sessions/${encodeURIComponent(options.sessionId)}`,
@@ -156,29 +223,33 @@ export default class PiHarness {
             });
       if (connection.mode === 'native')
         context.model = `${connection.provider}/${connection.model}`;
+      if (options.authoringInstructions) {
+        context.instructions = options.authoringInstructions;
+        context.profile = '';
+        context.history = [];
+        context.tools = [];
+      }
+      usageModel = context.model;
       let userText = options.text;
       if (options.audioData) {
         if (!localContext)
-          throw new Error(
-            'Voice transcription needs the local Coco service. Type a message or configure Coco models.',
-          );
+          throw new Error('Voice transcription needs the local Coco service.');
         const transcription = await request('transcribe', {
           audio_data: options.audioData,
         });
         userText = transcription.text;
         options.emit({ type: 'transcription', text: userText });
       }
-      const cwd = fs.realpathSync(options.directory);
-      if (!fs.statSync(cwd).isDirectory())
-        throw new Error('Choose an existing working folder.');
       const key = JSON.stringify([
         options.sessionId,
         cwd,
         context.model,
-        connection,
         context.instructions,
         context.tools,
         options.tutorUrl,
+        connection,
+        options.curatedSkills,
+        options.authoringInstructions,
       ]);
       if (!this.runtime || key !== this.key) {
         this.runtime?.dispose();
@@ -203,6 +274,36 @@ export default class PiHarness {
           token: options.token,
           context,
           connection,
+          authoring: Boolean(options.authoringInstructions),
+          skillPaths: options.curatedSkills?.paths ?? [],
+          requestApproval: async (
+            action: ActionApproval,
+            signal?: AbortSignal,
+          ) => {
+            // Runtime instances survive turns: always bind approval to the
+            // currently active run, never the run that created the runtime.
+            const run = this.active;
+            if (!run || run.stopped || this.workspaceGrant !== cwd)
+              return false;
+            const approvalSignal = signal
+              ? AbortSignal.any([signal, run.controller.signal])
+              : run.controller.signal;
+            const allowed = await run.permissions.request(
+              {
+                kind: 'action',
+                directory: action.directory,
+                tool: action.tool,
+                arguments: action.arguments,
+              },
+              approvalSignal,
+            );
+            return (
+              allowed &&
+              this.active === run &&
+              !run.stopped &&
+              !approvalSignal.aborted
+            );
+          },
         });
         this.key = key;
       }
@@ -211,7 +312,7 @@ export default class PiHarness {
       if (!active.stopped)
         await runtime.prompt(userText, options.images, context);
       const guidance = translator.finish(active.stopped);
-      if (!active.stopped && localContext) {
+      if (!active.stopped && localContext && !options.authoringInstructions) {
         const recorded = await request('turn', {
           user_text: userText,
           text: guidance,
@@ -228,7 +329,7 @@ export default class PiHarness {
         stopped: active.stopped,
         tool_calls: [...translator.calls.values()],
         activity: translator.activity,
-        llm_metrics: translator.metrics(context.model),
+        llm_metrics: translator.metrics(usageModel),
       });
     } catch (error) {
       if (active.stopped) {
@@ -236,6 +337,7 @@ export default class PiHarness {
           type: 'done',
           guidance: translator.finish(true),
           stopped: true,
+          llm_metrics: translator.metrics(usageModel),
           tool_calls: [...translator.calls.values()],
           activity: translator.activity,
         });
@@ -246,18 +348,23 @@ export default class PiHarness {
         } catch {
           /* original error below */
         }
+        if (error instanceof Error)
+          Object.assign(error, { llm_metrics: translator.metrics(usageModel) });
         throw error;
       }
     } finally {
+      active.permissions.cancel();
       clearTimeout(timer);
-      await fetch(
-        `${options.tutorUrl}/agent/sessions/${encodeURIComponent(options.sessionId)}`,
-        {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${options.token}` },
-          signal: AbortSignal.timeout(1500),
-        },
-      ).catch(() => {});
+      if (localContext)
+        await fetch(
+          `${options.tutorUrl}/agent/sessions/${encodeURIComponent(options.sessionId)}`,
+          {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${options.token}` },
+            signal: AbortSignal.timeout(1500),
+          },
+        ).catch(() => {});
+
       unsubscribe?.();
       if (this.active === active) this.active = undefined;
     }

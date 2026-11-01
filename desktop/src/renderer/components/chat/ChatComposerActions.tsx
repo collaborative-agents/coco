@@ -7,6 +7,7 @@ interface Props {
   onAttachFiles: () => Promise<void>;
   attachmentDisabled: boolean;
   modelPicker?: ReactNode;
+  skillPicker?: ReactNode;
   sessionId: string | null;
   voiceActive: boolean;
   voiceDisabled: boolean;
@@ -19,6 +20,7 @@ export default function ChatComposerActions({
   onAttachFiles,
   attachmentDisabled,
   modelPicker,
+  skillPicker,
   sessionId,
   voiceActive,
   voiceDisabled,
@@ -57,6 +59,7 @@ export default function ChatComposerActions({
           </button>
         </ActionTooltip>
 
+        {skillPicker}
         <ContextViewer key={sessionId} sessionId={sessionId} />
       </div>
       <div className="chat-composer-send-actions">

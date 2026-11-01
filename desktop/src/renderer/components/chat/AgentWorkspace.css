@@ -8,6 +8,7 @@
   min-width: 0;
 }
 .agent-folder,
+.agent-access,
 .agent-stop {
   display: inline-flex;
   align-items: center;
@@ -32,11 +33,13 @@
 .agent-folder svg {
   flex-shrink: 0;
 }
+.agent-access:hover,
 .agent-folder:hover,
 .agent-stop:hover {
   color: var(--coco-color-text);
   background: var(--coco-color-surface-subtle);
 }
+.agent-access:focus-visible,
 .agent-folder:focus-visible,
 .agent-stop:focus-visible {
   outline: 2px solid var(--coco-color-accent);
@@ -75,4 +78,11 @@
   .agent-folder {
     max-width: 75%;
   }
+}
+
+.agent-access {
+  flex-shrink: 0;
+}
+.agent-access svg {
+  flex-shrink: 0;
 }
