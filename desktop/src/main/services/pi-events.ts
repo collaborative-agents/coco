@@ -1,4 +1,7 @@
-import type { AgentActivity } from '../../shared/agent-execution';
+import type {
+  AgentActivity,
+  PermissionRequest,
+} from '../../shared/agent-execution';
 import type { TutorToolCall } from '../../renderer/components/observation-types';
 import type { TutorStreamEvent } from './tutor-stream';
 
@@ -18,14 +21,22 @@ export default class PiEventTranslator {
 
   private outputTokens = 0;
 
+  private usageSeen = false;
+
+  private usageMissing = false;
+
   metrics(model: string) {
     return {
       model,
       operation: 'pi_agent',
       success: !this.error,
-      prompt_tokens: this.inputTokens,
-      completion_tokens: this.outputTokens,
-      total_tokens: this.inputTokens + this.outputTokens,
+      ...(this.usageSeen && !this.usageMissing
+        ? {
+            prompt_tokens: this.inputTokens,
+            completion_tokens: this.outputTokens,
+            total_tokens: this.inputTokens + this.outputTokens,
+          }
+        : {}),
       duration_ms: Date.now() - this.startedAt,
     };
   }
@@ -44,6 +55,16 @@ export default class PiEventTranslator {
     });
   }
 
+  permission(request: PermissionRequest) {
+    const index = this.activity.findIndex(
+      (item) => item.kind === 'permission' && item.request.id === request.id,
+    );
+    const item: AgentActivity = { kind: 'permission', request };
+    if (index < 0) this.activity.push(item);
+    else this.activity[index] = item;
+    this.publish();
+  }
+
   handle(event: any) {
     if (
       event.type === 'message_update' &&
@@ -57,6 +78,13 @@ export default class PiEventTranslator {
       event.message?.role === 'assistant'
     ) {
       const { usage } = event.message;
+      this.usageSeen = true;
+      if (
+        !usage ||
+        !Number.isFinite(usage.input) ||
+        !Number.isFinite(usage.output)
+      )
+        this.usageMissing = true;
       this.inputTokens +=
         (usage?.input ?? 0) +
         (usage?.cacheRead ?? 0) +

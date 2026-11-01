@@ -1,3 +1,6 @@
+import SettingsPanel from './chat/SettingsPanel';
+import SkillWorkshopBanner from './chat/SkillWorkshopBanner';
+import TokenUsageSettings from './chat/TokenUsageSettings';
 import subscribeCocoSleepMode from '../services/coco-sleep-mode';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -37,6 +40,8 @@ import LocalModelPicker from './chat/LocalModelPicker';
 import MemorySettings from './chat/MemorySettings';
 
 export { ToolCallCard } from './chat/ToolCallCard';
+
+const FOLLOW_THRESHOLD_PX = 48;
 
 export default function SessionChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -342,12 +347,35 @@ export default function SessionChatView() {
     });
   };
 
+  // New text follows the bottom of the transcript only while the user is
+  // there; scrolling up to read stops it until they return or jump back.
+  const followingRef = useRef(true);
+  const [following, setFollowing] = useState(true);
+  const setFollowingLatest = useCallback((value: boolean) => {
+    if (followingRef.current === value) return;
+    followingRef.current = value;
+    setFollowing(value);
+  }, []);
+  const handleTranscriptScroll = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    setFollowingLatest(
+      list.scrollHeight - list.scrollTop - list.clientHeight <=
+        FOLLOW_THRESHOLD_PX,
+    );
+  }, [setFollowingLatest]);
+  // Jump to the latest message, e.g. after the user sends one.
   const scrollToBottom = useCallback(() => {
+    setFollowingLatest(true);
     requestAnimationFrame(() => {
-      if (listRef.current)
+      // The user may have scrolled up again before this frame.
+      if (followingRef.current && listRef.current)
         listRef.current.scrollTop = listRef.current.scrollHeight;
     });
-  }, []);
+  }, [setFollowingLatest]);
+  const followLatest = useCallback(() => {
+    if (followingRef.current) scrollToBottom();
+  }, [scrollToBottom]);
 
   // Main relays SSE events from the tutor service. Keep one pending tutor
   // message and update it in place so text and tool activity appear in order.
@@ -369,11 +397,33 @@ export default function SessionChatView() {
           llm_metrics?: LLMCallMetrics | null;
           tool_calls?: TutorToolCall[];
         };
-        if (
-          !event.requestId ||
-          (event.sessionId && event.sessionId !== sessionIdRef.current)
-        )
+        if (!event.requestId) return;
+        if (event.sessionId && event.sessionId !== sessionIdRef.current) {
+          if (event.type === 'done' || event.type === 'error') {
+            setConversations((saved) =>
+              saved.map((conversation) =>
+                conversation.sessionId !== event.sessionId
+                  ? conversation
+                  : {
+                      ...conversation,
+                      messages: conversation.messages.map((message) =>
+                        message.requestId !== event.requestId
+                          ? message
+                          : {
+                              ...message,
+                              isStreaming: false,
+                              text:
+                                event.guidance ?? event.error ?? message.text,
+                              tutorMetrics:
+                                event.llm_metrics ?? message.tutorMetrics,
+                            },
+                      ),
+                    },
+              ),
+            );
+          }
           return;
+        }
         setMessages((current) => {
           if (event.type === 'transcription') {
             const tutorIndex = current.findIndex(
@@ -444,6 +494,7 @@ export default function SessionChatView() {
               return {
                 ...message,
                 text: event.error ?? 'The tutor could not generate a response.',
+                tutorMetrics: event.llm_metrics ?? message.tutorMetrics,
                 isError: true,
                 isStreaming: false,
               };
@@ -452,13 +503,13 @@ export default function SessionChatView() {
           });
         });
         if (event.type === 'done' || event.type === 'error') setSending(false);
-        scrollToBottom();
+        followLatest();
       },
     );
     return () => {
       if (typeof cleanup === 'function') cleanup();
     };
-  }, [scrollToBottom]);
+  }, [followLatest]);
 
   const submitTutorRequest = useCallback(
     async (
@@ -520,9 +571,9 @@ export default function SessionChatView() {
         );
         setSending(false);
       }
-      scrollToBottom();
+      followLatest();
     },
-    [scrollToBottom],
+    [scrollToBottom, followLatest],
   );
 
   const submitAudioRequest = useCallback(
@@ -559,9 +610,9 @@ export default function SessionChatView() {
         );
         setSending(false);
       }
-      scrollToBottom();
+      followLatest();
     },
-    [scrollToBottom],
+    [scrollToBottom, followLatest],
   );
 
   const sendVoiceMessage = useCallback(
@@ -569,7 +620,11 @@ export default function SessionChatView() {
       const requestId = makeMessageId();
       setMessages((current) => [
         ...current,
-        { role: 'user', text: '🎤 Voice message' },
+        {
+          role: 'user',
+          text: '🎤 Voice message',
+          requestId: `${requestId}:user`,
+        },
         {
           role: 'tutor',
           text: '',
@@ -598,12 +653,20 @@ export default function SessionChatView() {
       const requestId = makeMessageId();
       const pendingContext = pendingContextRef.current;
       const screenContext = pendingScreenContextRef.current ?? undefined;
+      const skillCommand =
+        /^\/skill:[a-z0-9-]+(?:\s|$)/.exec(trimmed)?.[0] ?? '';
       const userText = pendingContext
-        ? `${pendingContext}\n\nThe user now says:\n${trimmed}`
+        ? `${skillCommand}${pendingContext}\n\nThe user now says:\n${trimmed.slice(skillCommand.length)}`
         : trimmed;
       setMessages((m) => [
         ...m,
-        { role: 'user', text: trimmed, images, screenContext },
+        {
+          role: 'user',
+          text: trimmed,
+          images,
+          screenContext,
+          requestId: `${requestId}:user`,
+        },
         {
           role: 'tutor',
           text: '',
@@ -1099,7 +1162,7 @@ export default function SessionChatView() {
           ? current
           : [...current, suggestionMessage(suggestion, folded === true)],
       );
-      if (!folded) scrollToBottom();
+      if (!folded) followLatest();
     });
     const cleanupReveal = ipc?.on('reveal-chat-suggestion', (data: any) => {
       const { observationId, suggestion } = (data ?? {}) as {
@@ -1477,52 +1540,60 @@ export default function SessionChatView() {
       details={
         <>
           {showSettings && (
-            <div className="workspace-settings">
-              <h1>Settings</h1>
-              <div className="workspace-settings-column">
-                <LocalModelSettings />
-              </div>
-              <div className="workspace-settings-column">
-                <LocalProfileSettings onSaved={(next) => setProfile(next)} />
-                <PreferencesSettings
-                  {...{
-                    editHideAvatar,
-                    avatarSaving,
-                    updateAvatarVisibility,
-                    avatarSaveError,
-                    wakeWordSaving,
-                    wakeWordEnabled,
-                    updateWakeWordEnabled,
-                    wakeWordCaptureError,
-                    wakeWordStatus,
-                    wakeWordDetail,
-                    cocoSleeping,
-                  }}
-                />
-                <MemorySettings
-                  {...{
-                    memoryDraft,
-                    setMemoryDraft,
-                    memoryDirty,
-                    saveMemory,
-                    memoryFlash,
-                  }}
-                />
-                <HealthSettings
-                  {...{
-                    cocoSleeping,
-                    systemPermissionHealth,
-                    permissionOpening,
-                    openSystemPermission,
-                    permissionError,
-                    serviceHealth,
-                    healthLoading,
-                    refreshServiceHealth,
-                    healthError,
-                  }}
-                />
-              </div>
-            </div>
+            <SettingsPanel
+              sections={{
+                general: (
+                  <>
+                    <LocalProfileSettings
+                      onSaved={(next) => setProfile(next)}
+                    />
+                    <PreferencesSettings
+                      {...{
+                        editHideAvatar,
+                        avatarSaving,
+                        updateAvatarVisibility,
+                        avatarSaveError,
+                        wakeWordSaving,
+                        wakeWordEnabled,
+                        updateWakeWordEnabled,
+                        wakeWordCaptureError,
+                        wakeWordStatus,
+                        wakeWordDetail,
+                        cocoSleeping,
+                      }}
+                    />
+                  </>
+                ),
+                models: <LocalModelSettings />,
+                memory: (
+                  <MemorySettings
+                    {...{
+                      memoryDraft,
+                      setMemoryDraft,
+                      memoryDirty,
+                      saveMemory,
+                      memoryFlash,
+                    }}
+                  />
+                ),
+                usage: <TokenUsageSettings />,
+                health: (
+                  <HealthSettings
+                    {...{
+                      cocoSleeping,
+                      systemPermissionHealth,
+                      permissionOpening,
+                      openSystemPermission,
+                      permissionError,
+                      serviceHealth,
+                      healthLoading,
+                      refreshServiceHealth,
+                      healthError,
+                    }}
+                  />
+                ),
+              }}
+            />
           )}
         </>
       }
@@ -1549,6 +1620,15 @@ export default function SessionChatView() {
           }}
         >
           <>
+            <SkillWorkshopBanner
+              sessionId={reviewing?.sessionId ?? sessionIdRef.current}
+              busy={
+                sending ||
+                startingNewSession ||
+                checkingUnderstanding ||
+                voiceState !== 'idle'
+              }
+            />
             <ChatTranscript
               {...{
                 reviewing,
@@ -1566,6 +1646,9 @@ export default function SessionChatView() {
                 ratings,
                 rateMessage,
                 hasRunningTool,
+                following,
+                onScroll: handleTranscriptScroll,
+                onJumpToLatest: scrollToBottom,
               }}
             />{' '}
             <ChatComposer

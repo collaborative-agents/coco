@@ -170,9 +170,79 @@ function parseXmlGuidance(raw: string): Guidance | null {
   };
 }
 
+const METADATA_TAGS = [
+  'four_d_dimension',
+  'teaching_depth',
+  'example_prompt',
+  'visualization',
+  'html_code',
+];
+const METADATA = METADATA_TAGS.join('|');
+const METADATA_OPENING = new RegExp(`<(?:${METADATA})\\s*>`, 'i');
+const METADATA_ELEMENT = new RegExp(
+  `<(${METADATA})\\s*>[\\s\\S]*?<\\/\\1\\s*>`,
+  'gi',
+);
+// A metadata field still streaming in, possibly cut inside its closing tag.
+const UNCLOSED_METADATA = new RegExp(
+  `^<(?:${METADATA})\\s*>[^<]*(?:<\\/?[a-z_]*)?$`,
+  'i',
+);
+
+const isMetadataOpeningPrefix = (fragment: string): boolean =>
+  METADATA_TAGS.some((tag) => `<${tag}>`.startsWith(fragment.toLowerCase()));
+
+// Some replies skip the <guidance> envelope and end with the metadata tags
+// directly. Hide those tags, including a partial one while streaming, but only
+// when nothing except metadata follows the first tag.
+function parseTrailingMetadata(raw: string): Guidance | null {
+  let text = raw;
+  let metadata = '';
+  const start = raw.search(METADATA_OPENING);
+  if (start >= 0) {
+    metadata = raw.slice(start);
+    const rest = metadata.replace(METADATA_ELEMENT, '').trim();
+    if (
+      rest &&
+      !UNCLOSED_METADATA.test(rest) &&
+      !isMetadataOpeningPrefix(rest)
+    ) {
+      return null;
+    }
+    text = raw.slice(0, start);
+  }
+  const tail = text.lastIndexOf('<');
+  if (tail >= 0 && isMetadataOpeningPrefix(text.slice(tail))) {
+    text = text.slice(0, tail);
+  }
+  if (text === raw) return null;
+  const message = text.trim();
+  const competency = parseCompetency(
+    metadata.match(
+      /<four_d_dimension\s*>([\s\S]*?)<\/four_d_dimension\s*>/i,
+    )?.[1],
+  );
+  const example = metadata
+    .match(/<example_prompt\s*>([\s\S]*?)<\/example_prompt\s*>/i)?.[1]
+    .trim();
+  const viz = metadata
+    .match(/<html_code\s*>([\s\S]*?)<\/html_code\s*>/i)?.[1]
+    .trim();
+  return {
+    ...(competency ? { competency } : {}),
+    text: message,
+    ...(message && competency ? { mainText: '', coaching: message } : {}),
+    examplePrompt:
+      example && example.toLowerCase() !== 'not applicable' ? example : null,
+    vizCode: viz || null,
+  };
+}
+
 export function parseGuidance(raw: string): Guidance {
   const xml = parseXmlGuidance(raw);
   if (xml) return xml;
+  const trailing = parseTrailingMetadata(raw);
+  if (trailing) return trailing;
   const tryParse = (s: string): any => {
     try {
       return JSON.parse(s);

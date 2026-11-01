@@ -1,4 +1,8 @@
-import type { AgentActivity } from '../../../shared/agent-execution';
+import type {
+  AgentActivity,
+  PermissionRequest,
+} from '../../../shared/agent-execution';
+import PermissionCard from './PermissionCard';
 import type { TutorToolCall } from '../observation-types';
 import { ToolCallCard } from './ToolCallCard';
 import { TutorMessage } from './MessageContent';
@@ -10,10 +14,13 @@ export function groupActivity(activity: AgentActivity[]) {
     | { kind: 'tools'; calls: TutorToolCall[]; key: string }
     | { kind: 'message'; text: string; key: string }
     | { kind: 'question'; call: TutorToolCall; key: string }
+    | { kind: 'permission'; request: PermissionRequest; key: string }
   )[] = [];
   activity.forEach((item, index) => {
     if (item.kind === 'message') {
       groups.push({ ...item, key: `message-${index}` });
+    } else if (item.kind === 'permission') {
+      groups.push({ ...item, key: item.request.id });
     } else if (item.call.name === 'ask_user_question') {
       groups.push({ kind: 'question', call: item.call, key: item.call.id });
     } else {
@@ -71,6 +78,15 @@ export default function AgentActivityList({
   return (
     <div style={S.toolStack}>
       {groupActivity(activity).map((item) => {
+        if (item.kind === 'permission')
+          return (
+            <PermissionCard
+              key={item.key}
+              request={item.request}
+              requestId={requestId}
+              interactive={interactive}
+            />
+          );
         if (item.kind === 'tools')
           return <ToolGroup key={item.key} calls={item.calls} />;
         if (item.kind === 'question')
@@ -91,3 +107,5 @@ export default function AgentActivityList({
     </div>
   );
 }
+
+AgentActivityList.defaultProps = { requestId: undefined };

@@ -1,7 +1,7 @@
 :root {
   /* Shared desktop design tokens. Keep page styles semantic, not pixel-specific. */
   --coco-font-family:
-    'PT Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
   --coco-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --coco-text-caption: 12px;
@@ -30,6 +30,11 @@
   --coco-color-accent: #467bae;
   --coco-color-accent-soft: #e9efff;
   --coco-color-accent-border: #bcd0fc;
+
+  /* Coco avatar fur (assets/pet1.png), with companion UI shades. */
+  --coco-color-orange: #fc7632;
+  --coco-color-orange-soft: #fff1e9;
+  --coco-color-orange-text: #9a3e12;
 
   --coco-color-surface: #ffffff;
   --coco-color-surface-subtle: #f9fafb;

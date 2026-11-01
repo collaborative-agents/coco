@@ -109,6 +109,9 @@ export default function ObservationBubble({
   // available so an accidental rating can be corrected.
   const [rated, setRated] = useState<'up' | 'down' | null>(null);
   const [suggestionPage, setSuggestionPage] = useState<0 | 1>(0);
+  // The "?" explanation opens inside the card: the bubble window is sized to
+  // the card, so anything drawn outside it would be clipped.
+  const [helpTipOpen, setHelpTipOpen] = useState(false);
   // When the suggestion was revealed — lets latency_s capture time-to-rate.
   const suggestionShownAt = useRef<number>(Date.now());
 
@@ -120,6 +123,7 @@ export default function ObservationBubble({
     setHelpClicked(false);
     setToast(null);
     setRated(null);
+    setHelpTipOpen(false);
   }, [bubble?.status, bubble?.phrase]);
 
   useEffect(() => {
@@ -226,6 +230,20 @@ export default function ObservationBubble({
               : label}
         </div>
 
+        {/* Tier-1 (progress/observing): no suggestion. A passive "?" explains that
+          there's nothing proactive right now and points to clicking the pet. */}
+        {!isTier3 && !showHelpButton && !suggestion && (
+          <button
+            type="button"
+            className="bubble-help-badge"
+            aria-label="Why no suggestion?"
+            aria-expanded={helpTipOpen}
+            onClick={() => setHelpTipOpen((open) => !open)}
+          >
+            ?
+          </button>
+        )}
+
         {onDismiss && (
           <button
             type="button"
@@ -273,6 +291,13 @@ export default function ObservationBubble({
         </div>
       ) : (
         <div className="observation-bubble-text">{phrase}</div>
+      )}
+
+      {helpTipOpen && (
+        <p className="bubble-help-tip">
+          No proactive suggestion right now. If you still need help, click me
+          (the fox) to open the chat.
+        </p>
       )}
 
       {suggestion?.llm_metrics && !isFrameworkOverview && (

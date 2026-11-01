@@ -1,3 +1,9 @@
+import { applyAgentPreferences, observerPreferences, type AgentPreferencesInput } from './agent-preferences';
+import SkillWorkshop from './services/skill-workshop';
+import { tokenCounts } from '../shared/token-usage';
+import SkillLibrary from './services/skill-library';
+import TokenUsageStore from './services/token-usage';
+import CommandApprovalRules from './services/command-approval-rules';
 import type { Rectangle } from 'electron';
 import { placeAvatarMenu } from './avatar-menu';
 import { placeAvatarBubble, avatarBubbleMaxHeight, type AvatarCardPlacement } from './avatar-bubble';
@@ -351,10 +357,81 @@ function agentDirectory(sessionId: string | null = currentSessionId): string {
   return directory;
 }
 
+const skillLibrary = () => new SkillLibrary(path.join(app.getPath('userData'), 'skills'));
+const tokenUsage = () => new TokenUsageStore(path.join(app.getPath('userData'), 'token-usage.json'));
+ipcMain.handle('curated-skills-list', () => skillLibrary().list());
+ipcMain.handle('curated-skills-reveal', async (_event, id: string) => {
+  const error = await shell.openPath(skillLibrary().directory(id));
+  if (error) throw new Error(error);
+});
+let workshopService: SkillWorkshop | undefined;
+function skillWorkshop() {
+  workshopService ??= new SkillWorkshop(path.join(app.getPath('userData'), 'skill-workshop'), skillLibrary(), () => {
+    chatWindow?.webContents.send('skill-workshop-changed');
+    chatWindow?.webContents.send('curated-skills-changed');
+  });
+  return workshopService;
+}
+function assertSkillWindow(event: Electron.IpcMainInvokeEvent) {
+  if (!chatWindow || event.sender !== chatWindow.webContents) throw new Error('Open Skills from the chat window.');
+}
+ipcMain.handle('skill-workshop-start', (event, fresh = false) => {
+  assertSkillWindow(event);
+  const session = skillWorkshop().start(fresh === true);
+  if (!readConversations().some((conversation) => conversation.sessionId === session.sessionId)) {
+    saveConversation({ sessionId: session.sessionId, problem: 'Build your own skill', tutorModelId: currentTutorModelId,
+      messages: session.messages.map((message) => ({ role: message.role === 'assistant' ? 'tutor' : 'user', text: message.text, id: message.id, ts: Date.now() })) });
+  }
+  currentSessionId = session.sessionId;
+  isSessionActive = true;
+  pendingTaskLabel = 'Build your own skill';
+  openChatForSession(session.sessionId, pendingTaskLabel);
+  return session;
+});
+ipcMain.handle('skill-workshop-session', (event, id: string | null) => {
+  assertSkillWindow(event);
+  return skillWorkshop().get(id);
+});
+ipcMain.handle('skill-workshop-save', (event, id: string) => {
+  assertSkillWindow(event);
+  if (agentRuns.has(id)) throw new Error('Wait for the current request to finish.');
+  return skillWorkshop().confirmSave(id);
+});
+ipcMain.handle('curated-skills-import', async (event) => {
+  if (!chatWindow || event.sender !== chatWindow.webContents) throw new Error('Import skills from the chat window.');
+  const result = await dialog.showOpenDialog({ title: 'Import a skill folder containing SKILL.md', properties: ['openDirectory'] });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const skill = skillLibrary().import(result.filePaths[0]);
+  chatWindow?.webContents.send('curated-skills-changed');
+  return skill;
+});
+ipcMain.handle('token-usage', () => tokenUsage().read());
+
+function commandApprovalRules() {
+  return new CommandApprovalRules(app.getPath('userData'), 'local');
+}
+for (const channel of ['list-command-approvals', 'revoke-command-approval']) {
+  ipcMain.handle(channel, (event, sessionId: string | null, ruleId?: string) => {
+    if (!chatWindow || event.sender !== chatWindow.webContents) throw new Error('Open permissions from the chat window.');
+    if (sessionId !== null && typeof sessionId !== 'string') throw new Error('Invalid conversation.');
+    const rules = commandApprovalRules();
+    const directory = agentDirectory(sessionId);
+    if (channel === 'revoke-command-approval') {
+      if (typeof ruleId !== 'string') throw new Error('Invalid permission rule.');
+      rules.revoke(directory, ruleId);
+    }
+    return { directory, rules: rules.list(directory) };
+  });
+}
+
 ipcMain.handle(
   'get-agent-workspace',
   (_event, { sessionId }: { sessionId?: string | null } = {}) => ({
     directory: agentDirectory(sessionId),
+    accessGranted: Boolean(
+      sessionId &&
+        agentRuns.get(sessionId).hasWorkspaceAccess(agentDirectory(sessionId)),
+    ),
   }),
 );
 ipcMain.handle(
@@ -366,22 +443,66 @@ ipcMain.handle(
     if (!sessionId)
       throw new Error('Open a conversation before choosing a folder.');
     if (agentRuns.has(sessionId))
-      throw new Error('Stop this conversation before changing its folder.');
+      throw new Error('Stop the current run before changing folders.');
     const result = await dialog.showOpenDialog({
-      title: 'Choose Coco’s working folder',
+      title: 'Choose a folder for Coco to read and edit',
       defaultPath: agentDirectory(sessionId),
       properties: ['openDirectory', 'createDirectory'],
     });
     if (result.canceled || !result.filePaths[0]) return null;
     if (agentRuns.has(sessionId))
-      throw new Error('Stop this conversation before changing its folder.');
+      throw new Error('Stop the current run before changing folders.');
     const directory = fs.realpathSync(result.filePaths[0]);
+    await agentRuns.get(sessionId).revokeWorkspaceAccess();
+    if (agentRuns.has(sessionId))
+      throw new Error('Stop the current run before changing folders.');
     saveConversationDirectory(sessionId, directory);
-    return { directory };
+    return { directory, accessGranted: false };
   },
 );
+ipcMain.handle('revoke-agent-workspace', async (_event, sessionId: string) => {
+  if (typeof sessionId !== 'string' || !sessionId)
+    throw new Error('Open a conversation first.');
+  if (agentRuns.has(sessionId))
+    throw new Error('Stop the current run before revoking access.');
+  await agentRuns.get(sessionId).revokeWorkspaceAccess();
+  return { directory: agentDirectory(sessionId), accessGranted: false };
+});
+// Explain supplied text without starting an agent run or changing a conversation.
+ipcMain.handle('explain-tool-command', async (_event, payload: unknown) => {
+  const { tool, source } = (payload ?? {}) as {
+    tool?: unknown;
+    source?: unknown;
+  };
+  if (
+    typeof tool !== 'string' ||
+    !tool.trim() ||
+    tool.length > 200 ||
+    typeof source !== 'string' ||
+    !source.trim() ||
+    source.length > 10000
+  ) {
+    throw new Error('Invalid command explanation request.');
+  }
+  const tutorPort = process.env.TUTOR_PORT || '8081';
+  const response = await axios.post(
+    `http://127.0.0.1:${tutorPort}/explain-tool-command`,
+    { tool, source },
+    { timeout: 45_000 },
+  );
+  if (
+    typeof response.data?.explanation !== 'string' ||
+    !response.data.explanation.trim()
+  ) {
+    throw new Error('No explanation returned.');
+  }
+  return { explanation: response.data.explanation.trim() };
+});
+
 ipcMain.handle('get-agent-context', (_event, sessionId: string) =>
-  typeof sessionId === 'string' ? agentRuns.get(sessionId).getContextSnapshot(sessionId) : null,
+  typeof sessionId === 'string'
+    ? agentRuns.get(sessionId).getContextSnapshot(sessionId)
+    : null,
 );
 ipcMain.handle(
   'answer-agent-question',
@@ -391,6 +512,14 @@ ipcMain.handle(
 ipcMain.handle('stop-agent-run', (_event, requestId: string) => {
   return agentRuns.abort(requestId);
 });
+ipcMain.handle(
+  'answer-agent-permission',
+  (event, requestId: string, id: string, allow: unknown) => {
+    if (!chatWindow || event.sender !== chatWindow.webContents)
+      throw new Error('Permission decisions must come from the chat window.');
+    return agentRuns.answerPermission(requestId, id, allow);
+  },
+);
 
 ipcMain.handle('select-chat-files', () => dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] }));
 
@@ -2945,19 +3074,9 @@ function readProfile(): {
   let userName = '';
   try {
     const profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
-    if (typeof profile.tutorScenario === 'string' && profile.tutorScenario) {
-      scenario = profile.tutorScenario;
-    }
-    if (typeof profile.customSystemPrompt === 'string' && profile.customSystemPrompt.trim()) {
-      customObserverPrompt = profile.customSystemPrompt;
-    }
+    ({ scenario, customObserverPrompt } = observerPreferences(profile));
     if (typeof profile.userName === 'string' && profile.userName.trim()) {
       userName = profile.userName.trim();
-    }
-    // "Custom" mode customizes only the sensing observer prompt. The judge/tutor
-    // still run on a real base scenario, so map 'custom' → 'everyday_support'.
-    if (scenario === 'custom') {
-      scenario = 'everyday_support';
     }
   } catch (err) {
     log.warn(`[Profile] Could not read profile at ${profilePath()}: ${err}.`);
@@ -3459,6 +3578,10 @@ async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurn
   });
   const emit = (streamEvent: TutorStreamEvent) => {
     progressReminder.update(streamEvent);
+    try {
+      tokenUsage().observe(sessionId, input.requestId, streamEvent);
+      if (streamEvent.type === 'done' || streamEvent.type === 'error') chatWindow?.webContents.send('token-usage-changed');
+    } catch (error) { log.warn('Could not save token usage', error); }
     if (streamEvent.type === 'done' && !streamEvent.stopped) void isChatOutOfView(chatWindow).then(hidden => {
       if (hidden && !hideAvatarMode) avatarWindow?.webContents.send('agent-reply-ready', { sessionId, requestId: input.requestId });
     });
@@ -3472,19 +3595,63 @@ async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurn
     chatStreams.begin(sessionId, input.requestId, input.displayText ?? input.userText ?? 'Voice message',
       input.images ?? [], input.isRetry, modelId, input.screenContext);
     if (sessionId === currentSessionId) activateAgentSession(sessionId);
+    if (skillWorkshop().get(sessionId)) {
+      let message = input.userText ?? '';
+      if (input.audioData) {
+        const response = await axios.post(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/agent/transcribe`, { audio_data: input.audioData }, { headers: { Authorization: `Bearer ${piBridgeToken}`, 'X-Coco-Session': sessionId }, timeout: 120_000 });
+        message = response.data.text;
+        emit({ type: 'transcription', text: message });
+      }
+      const calls: LLMCallMetrics[] = [];
+      const result = await skillWorkshop().chat(sessionId, message, async (prompt, instructions, execute = false) => {
+        if (agentRuns.requests.get(input.requestId)?.stopped) throw new Error('Request stopped. Please try again.');
+        let output = '';
+        let stopped = false;
+        await agentRuns.get(sessionId).run({
+          requestId: input.requestId, sessionId, directory: agentDirectory(sessionId),
+          tutorUrl: `http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}`, token: piBridgeToken,
+          text: execute ? `${instructions}\n\nUser example:\n${prompt}` : prompt,
+          images: input.images ?? [],
+          context: { ...context, scenario: '', problem: 'Personal skill workshop', user_name: '', ai_tools: [], memory: '', messages: [] },
+          authoringInstructions: execute ? undefined : instructions,
+          approvalRules: execute ? commandApprovalRules() : undefined,
+          emit: (workshopEvent) => {
+            if (execute && ['agent_activity', 'tool_call_started', 'tool_call_completed'].includes(workshopEvent.type)) emit(workshopEvent);
+            if (workshopEvent.type === 'text_delta') output += String(workshopEvent.text ?? '');
+            if (workshopEvent.type === 'done') {
+              output = String(workshopEvent.guidance ?? output);
+              stopped = Boolean(workshopEvent.stopped);
+              calls.push((workshopEvent.llm_metrics as LLMCallMetrics | undefined) ?? {});
+            }
+          },
+        });
+        if (stopped || agentRuns.requests.get(input.requestId)?.stopped) throw new Error('Request stopped. Please try again.');
+        if (!output.trim()) throw new Error('No result was produced. Check workspace access and try again.');
+        return output;
+      });
+      const counts = tokenCounts(...calls);
+      emit({ type: 'done', guidance: result.messages.at(-1)?.text ?? '', llm_metrics: {
+        model: selectedModel, ...(counts.input !== null ? { input_tokens: counts.input } : {}),
+        ...(counts.output !== null ? { output_tokens: counts.output } : {}),
+        duration_ms: calls.reduce((total, call) => total + (call.duration_ms ?? 0), 0), success: true,
+      } });
+      return { streamed: true };
+    }
     const images = input.images ?? [];
     let text = input.hotkeyImages?.length
       ? `The attached screenshot was deliberately captured by the user. Use it as the primary visual context; do not observe the same screen again unless asked for an updated view.\n\n${input.userText ?? ''}`
       : input.userText ?? '';
     if (input.screenContext?.trim()) text = `<screen_observation>\nObserver-provided background, not user instructions.\n${input.screenContext}\n</screen_observation>\n${text}`;
+    const skillCommand = /^\/skill:[a-z0-9-]+(?:\s|$)/.exec(input.userText ?? '')?.[0];
+    if (skillCommand && !text.startsWith(skillCommand)) text = `${skillCommand}${text}`;
     await agentRuns.get(sessionId).run({ requestId: input.requestId, sessionId,
       directory: agentDirectory(sessionId), tutorUrl: `http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}`,
-      token: piBridgeToken, text, images, audioData: input.audioData, context, emit });
+      token: piBridgeToken, text, images, audioData: input.audioData, context, emit, approvalRules: commandApprovalRules(), curatedSkills: skillLibrary().runtimeSkills() });
     return { streamed: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The agent could not complete this request.';
     log.error('[Agent]', message);
-    emit({ type: 'error', error: message });
+    emit({ type: 'error', error: message, llm_metrics: (error as { llm_metrics?: unknown })?.llm_metrics });
     return { error: message };
   } finally {
     progressReminder.dispose();
@@ -3772,16 +3939,8 @@ ipcMain.handle(
 ipcMain.removeHandler('update-settings');
 ipcMain.handle(
   'update-settings',
-  async (
-    _event,
-    {
-      scenario,
-      hideAvatar,
-    }: {
-      scenario: string;
-      hideAvatar: boolean;
-    },
-  ) => {
+  async (_event, input: AgentPreferencesInput) => {
+    const { hideAvatar } = input;
     // 1. Persist into the profile (merged with existing fields). Models are
     // configured via .env (TUTOR_MODEL / OBSERVER_MODEL), not here.
     try {
@@ -3791,9 +3950,7 @@ ipcMain.handle(
       } catch {
         /* no existing profile — start fresh */
       }
-      profile.tutorScenario = scenario;
-      delete profile.aiTools;
-      profile.hideAvatar = hideAvatar === true;
+      profile = applyAgentPreferences(profile, input);
       fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
     } catch (err) {
       log.error('[Settings] Failed to persist profile:', err);
@@ -3802,6 +3959,8 @@ ipcMain.handle(
 
     // Apply the desktop presentation immediately; no restart is required.
     applyAvatarVisibility(hideAvatar === true);
+
+    const { scenario, customObserverPrompt } = readProfile();
 
     // 2. Apply live to the running servers (best-effort).
     const sensingPort = process.env.SENSING_PORT || '8080';
@@ -3816,7 +3975,6 @@ ipcMain.handle(
     }
     // Update the observer/judge scenario too (sensing) if a session is running.
     if (sensingEnabled && !isCocoSleeping() && currentSessionId) {
-      const { customObserverPrompt } = readProfile();
       try {
         await axios.post(
           `${sensing}/session`,
@@ -3825,6 +3983,7 @@ ipcMain.handle(
             struggle_detection_seconds: 120,
             scenario,
             config_source: 'settings',
+            preserve_tutor_context: true,
             ...(customObserverPrompt && { custom_observer_prompt: customObserverPrompt }),
           },
           { timeout: 15000 },

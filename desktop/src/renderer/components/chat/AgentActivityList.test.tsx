@@ -15,7 +15,7 @@ const call = (
   result: { output: 'Exact raw output' },
 });
 
-test('shows a human summary with raw command and output collapsed', () => {
+test('shows a human summary with readable command and output collapsed', () => {
   const { container } = render(
     <AgentActivityList
       activity={[{ kind: 'tool', call: call('1', 'rg token src') }]}
@@ -31,9 +31,13 @@ test('shows a human summary with raw command and output collapsed', () => {
   expect(disclosure.querySelector('pre')).toHaveTextContent('rg token src');
   fireEvent.click(disclosure.querySelector('summary')!);
   expect(disclosure.open).toBe(true);
-  expect(JSON.parse(disclosure.querySelector('pre')!.textContent!)).toEqual(
-    call('1', 'rg token src'),
+  expect(disclosure.querySelectorAll('pre')[0]).toHaveTextContent(
+    'rg token src',
   );
+  expect(disclosure.querySelectorAll('pre')[1]).toHaveTextContent(
+    'Exact raw output',
+  );
+  expect(disclosure).not.toHaveTextContent('"id"');
 });
 
 test('collapses consecutive calls and makes failures visible in the summary', () => {
@@ -53,7 +57,9 @@ test('collapses consecutive calls and makes failures visible in the summary', ()
   actions.forEach((action) => {
     expect(action.open).toBe(false);
     expect(action.querySelector('summary')).toHaveTextContent('bash');
-    expect(action.querySelector('summary')).not.toHaveTextContent('Run a script');
+    expect(action.querySelector('summary')).not.toHaveTextContent(
+      'Run a script',
+    );
   });
   fireEvent.click(group.querySelector('summary')!);
   expect(group).toHaveAttribute('open');
@@ -61,13 +67,9 @@ test('collapses consecutive calls and makes failures visible in the summary', ()
   fireEvent.click(actions[0].querySelector('summary')!);
   expect(actions[0].open).toBe(true);
   expect(actions[1].open).toBe(false);
-  const rawCalls = Array.from(group.querySelectorAll('pre')).map((pre) =>
-    JSON.parse(pre.textContent!),
-  );
-  expect(rawCalls).toEqual([
-    call('1', 'rg token src'),
-    call('2', 'cat README.md', 'error'),
-  ]);
+  expect(actions[0]).toHaveTextContent('rg token src');
+  expect(actions[1]).toHaveTextContent('cat README.md');
+  expect(group.querySelectorAll('.tool-detail-field')).toHaveLength(4);
   expect(group.querySelector('summary')).toHaveTextContent(
     '2 steps · 1 failed',
   );

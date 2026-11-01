@@ -355,3 +355,24 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_explain_tool_command_is_isolated_and_preserves_source(monkeypatch):
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return "Searches Documents for PDFs and shows the first 60 matches.", {}
+
+    monkeypatch.setattr(
+        "proactive_tutor.tutor_system.prompt_to_text_with_metrics", fake_completion
+    )
+    tutor = _make_tutor_system()
+    history = list(tutor.conversation_history)
+    command = 'find ~/Documents -name "*.pdf" | head -60'
+    explanation, _metrics = tutor.explain_tool_command("bash", command)
+    assert "first 60" in explanation
+    assert json.loads(captured["user_prompt"]) == {"tool": "bash", "source": command}
+    assert captured["operation"] == "explain_tool_command"
+    assert "Do not execute anything" in captured["system_prompt"]
+    assert tutor.conversation_history == history

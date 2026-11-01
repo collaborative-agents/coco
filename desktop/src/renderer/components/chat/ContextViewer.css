@@ -118,3 +118,9 @@
   outline: 2px solid var(--coco-color-primary);
   outline-offset: 2px;
 }
+
+.context-viewer-locked-hint {
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-caption);
+  max-width: 240px;
+}

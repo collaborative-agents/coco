@@ -54,7 +54,7 @@
   background: rgba(31, 41, 55, 0.9);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
   color: var(--coco-color-surface);
-  font: 500 var(--coco-text-caption)/1.2 var(--coco-font-family);
+  font: 500 var(--coco-text-caption) / 1.2 var(--coco-font-family);
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
@@ -79,7 +79,7 @@
 
 /* Status palette — accent color overridden per .status-* modifier. */
 .observation-bubble {
-  --bubble-accent: #6366f1;       /* indigo, default / observing */
+  --bubble-accent: #6366f1; /* indigo, default / observing */
   --bubble-accent-soft: rgba(99, 102, 241, 0.18);
   position: absolute;
   bottom: 24px;
@@ -98,7 +98,9 @@
   opacity: 0;
   transform: translateY(4px) scale(0.96);
   animation: obs-pop-in 320ms cubic-bezier(0.21, 1.02, 0.46, 1) forwards;
-  transition: opacity 400ms ease, transform 400ms ease;
+  transition:
+    opacity 400ms ease,
+    transform 400ms ease;
 }
 
 .observation-bubble-header {
@@ -128,27 +130,27 @@
 }
 
 .observation-bubble.status-progress {
-  --bubble-accent: var(--coco-color-success);        /* green */
-  --bubble-accent-soft: rgba(22, 163, 74, 0.20);
+  --bubble-accent: var(--coco-color-success); /* green */
+  --bubble-accent-soft: rgba(22, 163, 74, 0.2);
 }
 .observation-bubble.status-stuck {
-  --bubble-accent: #f97316;        /* orange */
+  --bubble-accent: #f97316; /* orange */
   --bubble-accent-soft: rgba(249, 115, 22, 0.22);
 }
 .observation-bubble.status-mistake {
-  --bubble-accent: #eab308;        /* amber */
+  --bubble-accent: #eab308; /* amber */
   --bubble-accent-soft: rgba(234, 179, 8, 0.25);
 }
 .observation-bubble.status-inefficient {
-  --bubble-accent: #0ea5e9;        /* sky */
+  --bubble-accent: #0ea5e9; /* sky */
   --bubble-accent-soft: rgba(14, 165, 233, 0.22);
 }
 .observation-bubble.status-ai_struggle {
-  --bubble-accent: #a855f7;        /* purple */
+  --bubble-accent: #a855f7; /* purple */
   --bubble-accent-soft: rgba(168, 85, 247, 0.22);
 }
 .observation-bubble.status-observing {
-  --bubble-accent: #6366f1;        /* indigo */
+  --bubble-accent: #6366f1; /* indigo */
   --bubble-accent-soft: rgba(99, 102, 241, 0.18);
 }
 
@@ -307,7 +309,9 @@
   height: 3px;
   border-radius: 999px;
   background: #c7cad5;
-  transition: width 0.15s ease, background 0.15s ease;
+  transition:
+    width 0.15s ease,
+    background 0.15s ease;
 }
 
 .bubble-framework-page-bar.is-active {
@@ -368,7 +372,9 @@
   cursor: pointer;
   text-align: center;
   white-space: nowrap;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
   -webkit-app-region: no-drag;
 }
 
@@ -432,6 +438,38 @@
   display: flex;
 }
 
+/* Tier-1 help opens inside the card, beside the dismiss button. */
+.bubble-help-badge {
+  flex: 0 0 16px;
+  margin-top: 4px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: none;
+  font-family: inherit;
+  line-height: 16px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--coco-color-text-subtle);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 50%;
+  cursor: help;
+  -webkit-app-region: no-drag;
+}
+.bubble-help-badge:hover,
+.bubble-help-badge[aria-expanded='true'] {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--coco-color-text-secondary);
+}
+/* Opened by the "?" inside the card, so the bubble window grows to fit it. */
+.bubble-help-tip {
+  margin: 6px 0 0;
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-caption);
+  line-height: 1.4;
+}
+
 /* Tail pointing toward the pet (right side). Inherits parent's accent border. */
 .observation-bubble-tail {
   position: absolute;
@@ -459,12 +497,24 @@
   pointer-events: none;
   animation: obs-ring-pulse 1s ease-out forwards;
 }
-.pet-pulse-ring.pulse-progress    { border-color: rgba(22, 163, 74, 0.55); }
-.pet-pulse-ring.pulse-stuck       { border-color: rgba(249, 115, 22, 0.65); }
-.pet-pulse-ring.pulse-mistake     { border-color: rgba(234, 179, 8, 0.65); }
-.pet-pulse-ring.pulse-inefficient { border-color: rgba(14, 165, 233, 0.55); }
-.pet-pulse-ring.pulse-ai_struggle { border-color: rgba(168, 85, 247, 0.55); }
-.pet-pulse-ring.pulse-observing   { border-color: rgba(99, 102, 241, 0.45); }
+.pet-pulse-ring.pulse-progress {
+  border-color: rgba(22, 163, 74, 0.55);
+}
+.pet-pulse-ring.pulse-stuck {
+  border-color: rgba(249, 115, 22, 0.65);
+}
+.pet-pulse-ring.pulse-mistake {
+  border-color: rgba(234, 179, 8, 0.65);
+}
+.pet-pulse-ring.pulse-inefficient {
+  border-color: rgba(14, 165, 233, 0.55);
+}
+.pet-pulse-ring.pulse-ai_struggle {
+  border-color: rgba(168, 85, 247, 0.55);
+}
+.pet-pulse-ring.pulse-observing {
+  border-color: rgba(99, 102, 241, 0.45);
+}
 
 @keyframes obs-pop-in {
   0% {
@@ -478,13 +528,26 @@
 }
 
 @keyframes obs-dot-pulse {
-  0%, 100% { opacity: 0.45; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.25); }
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
 }
 
 @keyframes obs-ring-pulse {
-  0% { opacity: 0.7; transform: scale(0.9); }
-  100% { opacity: 0; transform: scale(1.18); }
+  0% {
+    opacity: 0.7;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
 }
 
 /* ── Observation-history pill button ────────────────────────────────────────
@@ -502,13 +565,16 @@
   border-radius: var(--coco-radius-control);
   background: transparent;
   color: rgba(55, 65, 81, 0.82);
-  font: 700 var(--coco-text-control)/20px var(--coco-font-family);
+  font: 700 var(--coco-text-control) / 20px var(--coco-font-family);
   letter-spacing: 1px;
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
   transform: scale(0.96);
-  transition: opacity 160ms ease, background 140ms ease, transform 160ms ease;
+  transition:
+    opacity 160ms ease,
+    background 140ms ease,
+    transform 160ms ease;
   -webkit-app-region: no-drag;
 }
 
@@ -539,7 +605,9 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .pet-actions-trigger { color: rgba(255, 255, 255, 0.78); }
+  .pet-actions-trigger {
+    color: rgba(255, 255, 255, 0.78);
+  }
 
   .pet-actions-trigger:hover,
   .pet-actions-trigger:focus-visible,
@@ -556,7 +624,7 @@
 .obs-history-panel {
   position: absolute;
   bottom: 24px;
-  right: 168px;        /* flush left of the 150px pet + 12px padding + 6px gap */
+  right: 168px; /* flush left of the 150px pet + 12px padding + 6px gap */
   width: 252px;
   max-height: 480px;
   display: flex;
@@ -633,8 +701,12 @@
 }
 
 /* Subtle scrollbar */
-.obs-history-list::-webkit-scrollbar { width: 4px; }
-.obs-history-list::-webkit-scrollbar-track { background: transparent; }
+.obs-history-list::-webkit-scrollbar {
+  width: 4px;
+}
+.obs-history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
 .obs-history-list::-webkit-scrollbar-thumb {
   background: rgba(99, 102, 241, 0.18);
   border-radius: 4px;
@@ -663,13 +735,23 @@
 /* Lane colors — single source shared by history dots, count dots, and the
    flow timeline. Amber (not red) for focus moments: stuck/mistake are normal,
    not failures. Mirrors LANE_COLOR in observation-types.ts. */
-.obs-lane--flow     { background: #22c55e; }  /* green  */
-.obs-lane--watching { background: #94a3b8; }  /* gray   */
-.obs-lane--focus    { background: #f59e0b; }  /* amber  */
-.obs-lane--assist   { background: #6366f1; }  /* violet */
+.obs-lane--flow {
+  background: #22c55e;
+} /* green  */
+.obs-lane--watching {
+  background: #94a3b8;
+} /* gray   */
+.obs-lane--focus {
+  background: #f59e0b;
+} /* amber  */
+.obs-lane--assist {
+  background: #6366f1;
+} /* violet */
 
 /* Lane-tinted text (e.g. the "flow %" stat). */
-.obs-lane-text--flow { color: var(--coco-color-success); }
+.obs-lane-text--flow {
+  color: var(--coco-color-success);
+}
 
 /* ── 14-day contribution strip ──────────────────────────────────────────── */
 .obs-strip {
@@ -688,20 +770,39 @@
   cursor: pointer;
   -webkit-app-region: no-drag;
   background: #eceef3;
-  transition: outline 0.1s ease, transform 0.1s ease;
+  transition:
+    outline 0.1s ease,
+    transform 0.1s ease;
 }
 
-.obs-strip-cell:hover { transform: translateY(-1px); }
+.obs-strip-cell:hover {
+  transform: translateY(-1px);
+}
 
 /* Flow-intensity fill, lightest → darkest green. */
-.obs-level--0 { background: #eceef3; }
-.obs-level--1 { background: #c6e9d0; }
-.obs-level--2 { background: #86d3a0; }
-.obs-level--3 { background: #46b76e; }
-.obs-level--4 { background: #1f9e52; }
+.obs-level--0 {
+  background: #eceef3;
+}
+.obs-level--1 {
+  background: #c6e9d0;
+}
+.obs-level--2 {
+  background: #86d3a0;
+}
+.obs-level--3 {
+  background: #46b76e;
+}
+.obs-level--4 {
+  background: #1f9e52;
+}
 
-.obs-strip-cell.is-today { box-shadow: inset 0 0 0 1px rgba(79, 70, 229, 0.45); }
-.obs-strip-cell.is-selected { outline: 2px solid #6366f1; outline-offset: 1px; }
+.obs-strip-cell.is-today {
+  box-shadow: inset 0 0 0 1px rgba(79, 70, 229, 0.45);
+}
+.obs-strip-cell.is-selected {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+}
 
 /* ── Selected-day summary ──────────────────────────────────────────────── */
 .obs-summary {
@@ -723,7 +824,9 @@
   color: var(--coco-color-text-muted);
 }
 
-.obs-summary-stat.obs-lane-text--flow { font-weight: 700; }
+.obs-summary-stat.obs-lane-text--flow {
+  font-weight: 700;
+}
 
 .obs-summary-counts {
   display: flex;
@@ -916,7 +1019,9 @@
   font-size: var(--coco-text-body);
   color: #c4c8d6;
   line-height: var(--coco-leading-body);
-  transition: transform 0.15s ease, color 0.12s;
+  transition:
+    transform 0.15s ease,
+    color 0.12s;
   display: inline-block;
   margin-top: 1px;
 }
@@ -1001,7 +1106,7 @@
   box-shadow:
     0 0 0 1px rgba(15, 23, 42, 0.08),
     0 2px 6px rgba(0, 0, 0, 0.14);
-  /* Match SessionChatView exactly. PT Sans is the product font; the system
+  /* Match SessionChatView exactly. Noto Sans is the product font; the system
      fallbacks keep every window consistent if the web font is unavailable. */
   font-family: var(--coco-font-family);
   overflow: hidden;
@@ -1117,7 +1222,9 @@
 .toast-markdown p {
   margin: 0 0 6px;
 }
-.toast-markdown p:last-child { margin-bottom: 0; }
+.toast-markdown p:last-child {
+  margin-bottom: 0;
+}
 
 .toast-markdown ul,
 .toast-markdown ol {
@@ -1125,10 +1232,17 @@
   padding-left: 18px;
 }
 
-.toast-markdown li { margin: 2px 0; }
+.toast-markdown li {
+  margin: 2px 0;
+}
 
-.toast-markdown strong { font-weight: 600; color: var(--coco-color-text); }
-.toast-markdown em { font-style: italic; }
+.toast-markdown strong {
+  font-weight: 600;
+  color: var(--coco-color-text);
+}
+.toast-markdown em {
+  font-style: italic;
+}
 
 .toast-markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -1167,7 +1281,9 @@
   color: var(--coco-color-primary);
   text-decoration: none;
 }
-.toast-markdown a:hover { text-decoration: underline; }
+.toast-markdown a:hover {
+  text-decoration: underline;
+}
 
 .toast-markdown blockquote {
   border-left: 3px solid var(--coco-color-accent-border);
@@ -1316,7 +1432,9 @@
   height: 3px;
   border-radius: 999px;
   background: var(--coco-color-accent-border);
-  transition: width 0.15s ease, background 0.15s ease;
+  transition:
+    width 0.15s ease,
+    background 0.15s ease;
 }
 
 .toast-framework-page-bar.is-active {
@@ -1338,7 +1456,9 @@
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .toast-framework-arrow:hover {
@@ -1364,7 +1484,9 @@
   background: var(--coco-color-primary);
   color: var(--coco-color-surface);
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .toast-action:hover {
@@ -1430,7 +1552,9 @@
   background: transparent;
   color: var(--coco-color-text-subtle);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
   -webkit-app-region: no-drag;
 }
 
@@ -1451,8 +1575,14 @@
 }
 
 .toast-footer-rating,
-.toast-pager-rating {
+.toast-pager-start {
   display: flex;
+}
+
+/* Thumbs, then "← Why" on the action page. */
+.toast-pager-start {
+  align-items: center;
+  gap: var(--coco-space-2);
 }
 
 .coco-rating--compact .coco-rating-btn {
@@ -1500,7 +1630,7 @@
   border: 1px solid #e0e0e0;
   box-shadow:
     0 2px 4px rgba(0, 0, 0, 0.06),
-    0 8px 24px rgba(32, 74, 121, 0.10);
+    0 8px 24px rgba(32, 74, 121, 0.1);
   font-family: var(--coco-font-family);
   overflow: hidden;
 }
@@ -1544,7 +1674,9 @@
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .rating-close:hover {
@@ -1589,7 +1721,9 @@
   border-radius: var(--coco-radius-control);
   padding: var(--coco-space-2) var(--coco-space-1);
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 
 .rating-option:hover {
@@ -1606,14 +1740,16 @@
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #F8F8F8;
+  background: #f8f8f8;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: var(--coco-text-control);
   font-weight: 700;
   color: #4f4f4f;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .rating-option--selected .rating-circle {
@@ -1656,7 +1792,9 @@
   font-weight: 600;
   font-family: var(--coco-font-family);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .rating-btn-skip:hover {

@@ -1,0 +1,31 @@
+.response-code-block {
+  margin: 10px 0;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 0;
+}
+.response-code-block > pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.response-code-block > button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid var(--coco-color-border);
+  background: var(--coco-color-surface-subtle);
+  color: var(--coco-color-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.response-code-block > button:hover {
+  background: var(--coco-color-accent-soft);
+}
+.response-code-block > button:focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: -2px;
+}

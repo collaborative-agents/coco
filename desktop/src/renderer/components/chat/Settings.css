@@ -98,7 +98,9 @@
   font-size: var(--coco-text-secondary);
   line-height: var(--coco-leading-body);
 }
-.local-settings > .coco-button { align-self: flex-start; }
+.local-settings > .coco-button {
+  align-self: flex-start;
+}
 .pi-provider-settings.ob-model-card {
   gap: var(--coco-space-3);
   padding: var(--coco-space-4);
@@ -106,7 +108,9 @@
   border-radius: var(--coco-radius-card);
   background: var(--coco-color-surface-subtle);
 }
-.pi-provider-settings h4 { font-size: var(--coco-text-body); }
+.pi-provider-settings h4 {
+  font-size: var(--coco-text-body);
+}
 .pi-provider-settings .coco-actions .coco-button {
   flex: 0 0 auto;
   padding: var(--coco-space-2) var(--coco-space-3);
@@ -119,4 +123,156 @@
 .pi-provider-refresh {
   margin-left: auto;
 }
-.pi-provider-settings [role='alert'] { color: var(--coco-color-danger); }
+.pi-provider-settings [role='alert'] {
+  color: var(--coco-color-danger);
+}
+
+.workspace-settings {
+  display: grid;
+  grid-template-columns: 156px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 24px;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 24px 0 0 24px;
+}
+.workspace-settings > h1 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--coco-text-title);
+  font-weight: 650;
+}
+.settings-navigation {
+  display: flex;
+  flex-direction: column;
+  align-self: start;
+  gap: 4px;
+}
+.settings-navigation button {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--coco-color-text-secondary);
+  text-align: left;
+  font: inherit;
+  font-size: var(--coco-text-control);
+  cursor: pointer;
+}
+.settings-navigation button:hover {
+  background: var(--coco-color-surface);
+}
+.settings-navigation button[aria-current='page'] {
+  background: var(--coco-color-accent-soft);
+  color: var(--coco-color-primary);
+  font-weight: 600;
+}
+.settings-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 24px 24px 0;
+  scrollbar-gutter: stable;
+}
+.settings-category {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  max-width: 880px;
+}
+.settings-category[hidden] {
+  display: none;
+}
+.settings-category > .workspace-settings-section,
+.settings-category > .settings-token-usage {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 12px;
+  background: var(--coco-color-surface);
+}
+.settings-category .settings-heading,
+.settings-category .local-settings > h2 {
+  margin: 0 0 16px;
+  font-size: var(--coco-text-section);
+  font-weight: 600;
+}
+.settings-category .local-settings > h2 {
+  margin-bottom: 0;
+}
+.settings-category .local-settings > p {
+  margin: 0;
+}
+.settings-category .settings-avatar {
+  margin-top: 20px;
+  padding-top: 20px;
+}
+@media (max-width: 760px) {
+  .workspace-settings {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: 16px;
+    padding: 20px 0 0;
+  }
+  .workspace-settings > h1 {
+    padding: 0 20px;
+  }
+  .settings-navigation {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 0 20px 4px;
+  }
+  .settings-navigation button {
+    flex-shrink: 0;
+  }
+  .settings-content {
+    padding: 0 20px 20px;
+  }
+  .settings-category > .workspace-settings-section,
+  .settings-category > .settings-token-usage {
+    padding: 18px;
+  }
+}
+
+.settings-observer-prompt {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 200px;
+  padding: 12px;
+  resize: vertical;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 8px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.6;
+}
+.settings-observer-prompt:focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: 2px;
+}
+
+/* Let the memory card grow with its editor, up to the settings viewport. */
+#settings-page-memory {
+  height: 100%;
+}
+.settings-category > .memory-settings {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  max-height: 100%;
+  min-height: 0;
+}
+.memory-settings > :not(.settings-memory-editor) {
+  flex-shrink: 0;
+}
+.settings-memory-editor {
+  field-sizing: content;
+  flex: 0 1 auto;
+  overflow-y: auto;
+  max-height: 100dvh;
+}

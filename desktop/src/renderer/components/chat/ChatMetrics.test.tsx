@@ -2,7 +2,7 @@ import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
 import ChatMetrics from './ChatMetrics';
 
-test('shows restored usage across both metric formats', () => {
+test('shows restored usage across both metric formats without learning prerequisites', () => {
   render(
     <ChatMetrics
       tutorMetrics={{
@@ -17,5 +17,17 @@ test('shows restored usage across both metric formats', () => {
       }}
     />,
   );
-  expect(screen.getByText('1.4k in / 350 out / 2.5s')).toBeInTheDocument();
+  expect(
+    screen.getByText('Input 1.4k / Output 350 / 2.5s'),
+  ).toBeInTheDocument();
+});
+
+test('missing usage is unavailable, while an actual zero is preserved', () => {
+  render(<ChatMetrics tutorMetrics={{ output_tokens: 0 }} />);
+  expect(screen.getByText(/Input Unavailable \/ Output 0/)).toBeInTheDocument();
+});
+
+test('scripted messages without model calls have no usage label', () => {
+  const { container } = render(<ChatMetrics />);
+  expect(container).toBeEmptyDOMElement();
 });

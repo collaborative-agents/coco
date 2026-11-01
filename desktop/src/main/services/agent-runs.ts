@@ -71,6 +71,20 @@ export default class AgentRuns {
     this.get(request.sessionId).answerQuestion(toolCallId, response);
   }
 
+  answerPermission(requestId: string, id: string, allow: unknown) {
+    const request = this.requests.get(requestId);
+    if (!request || request.stopped)
+      throw new Error('This run is no longer active.');
+    this.get(request.sessionId).answerPermission(id, allow);
+  }
+
+  async release(sessionId: string) {
+    const harness = this.harnesses.get(sessionId);
+    await harness?.dispose();
+    if (this.harnesses.get(sessionId) === harness)
+      this.harnesses.delete(sessionId);
+  }
+
   async dispose() {
     await this.abort();
     await Promise.all(

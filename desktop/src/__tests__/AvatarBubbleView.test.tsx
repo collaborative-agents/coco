@@ -49,6 +49,27 @@ describe('AvatarBubbleView', () => {
     expect(sendMessage).toHaveBeenCalledWith('avatar-bubble-event', 'dismiss');
   });
 
+  it('ignores a hover left over from the last bubble until the mouse moves', () => {
+    const { container, showBubble } = setup();
+    const view = container.querySelector('.avatar-bubble-view')!;
+    showBubble(stuckBubble);
+    expect(view).not.toHaveClass('is-pointer-live');
+
+    fireEvent.mouseMove(view, { screenX: 400, screenY: 300 });
+    expect(view).toHaveClass('is-pointer-live');
+    showBubble({ ...stuckBubble, fadingOut: true });
+    expect(view).toHaveClass('is-pointer-live');
+
+    showBubble(null);
+    showBubble({ ...stuckBubble, observationId: 'obs-2' });
+    expect(view).not.toHaveClass('is-pointer-live');
+    // Chromium's mousemove for the new content under a resting cursor.
+    fireEvent.mouseMove(view, { screenX: 400, screenY: 300 });
+    expect(view).not.toHaveClass('is-pointer-live');
+    fireEvent.mouseMove(view, { screenX: 404, screenY: 301 });
+    expect(view).toHaveClass('is-pointer-live');
+  });
+
   it('catches the mouse only while it is over the card', () => {
     const { sendMessage, container, showBubble } = setup();
     showBubble(stuckBubble);

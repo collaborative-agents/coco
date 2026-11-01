@@ -1,5 +1,11 @@
 import subscribeCocoSleepMode from './services/coco-sleep-mode';
-import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type SyntheticEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import './App.css';
 import type { BubbleState } from './components/ObservationBubble';
@@ -26,8 +32,6 @@ const TUTOR_HOLD_MS = 30_000;
 const FADE_MS = 400;
 // Pulse ring is shown for one second per new event.
 const PULSE_MS = 1_000;
-
-
 
 /**
  * Statuses that represent mid-friction observations (Tier 2).
@@ -83,6 +87,23 @@ function PetView() {
   // Once the user reveals a suggestion ("Help me with this"), the bubble is
   // pinned: it never auto-hides and can only be closed with the × button.
   const bubblePinnedRef = useRef(false);
+
+  // Status of the previous observation, to tell a calm status that just
+  // started from one that repeats on every observer tick.
+  const lastStatusRef = useRef<ObservationStatus | null>(null);
+  // A repeated calm status animates the fox without a bubble, for as long as a
+  // bubble would have stayed up.
+  const calmMoodTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bubbleShownRef = useRef(false);
+  useEffect(() => {
+    bubbleShownRef.current = bubble !== null;
+  }, [bubble]);
+  useEffect(
+    () => () => {
+      if (calmMoodTimer.current) clearTimeout(calmMoodTimer.current);
+    },
+    [],
+  );
 
   // Arm the bubble's auto-hide after `holdMs`. Skipped while the pointer is
   // over the bubble (handleBubbleLeave re-arms it on exit) so a suggestion the
@@ -157,7 +178,12 @@ function PetView() {
   const applySleepMode = useCallback((sleeping: boolean) => {
     sleepingRef.current = sleeping;
     setCocoSleeping(sleeping);
-    if (!sleeping || bubbleRef.current?.agentReply || bubbleRef.current?.agentWorking) return;
+    if (
+      !sleeping ||
+      bubbleRef.current?.agentReply ||
+      bubbleRef.current?.agentWorking
+    )
+      return;
     if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
     if (pulseTimer.current) clearTimeout(pulseTimer.current);
@@ -179,7 +205,6 @@ function PetView() {
       applySleepMode(result.sleeping === true);
     }
   };
-
 
   useEffect(() => {
     const cleanupSuspend = window.electron?.ipcRenderer.on(
@@ -212,10 +237,29 @@ function PetView() {
         // notification flow — they are not avatar states. Skip them here so
         // PetSprite never receives an unknown mood.
         if (!(incomingStatus in STATUS_TO_MOOD)) return;
+        // Calm statuses (progress / observing) arrive on every observer tick.
+        // Show their bubble only when Coco moves into them from another
+        // status; while they repeat, only the fox's animation follows them.
+        const previousStatus = lastStatusRef.current;
+        lastStatusRef.current = incomingStatus;
+        const repeatsCalm =
+          !TIER2_STATUSES.has(incomingStatus) &&
+          previousStatus !== null &&
+          !TIER2_STATUSES.has(previousStatus);
         // A revealed suggestion is pinned until the user closes it. Continue
         // recording new observations in main, but do not replace the accepted
         // suggestion on the avatar surface.
         if (bubblePinnedRef.current) return;
+        if (repeatsCalm) {
+          // Leave the fox alone while another bubble is on screen.
+          if (bubbleShownRef.current) return;
+          setMood(STATUS_TO_MOOD[incomingStatus]);
+          if (calmMoodTimer.current) clearTimeout(calmMoodTimer.current);
+          calmMoodTimer.current = setTimeout(() => {
+            if (!bubbleShownRef.current) setMood('idle');
+          }, HOLD_MS);
+          return;
+        }
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
         const phrase = pickPhrase(incomingStatus, seed);
@@ -239,7 +283,14 @@ function PetView() {
         const showHelpButton = TIER2_STATUSES.has(incomingStatus);
 
         // Show the bubble + matching pet animation.
-        setBubble({ status: incomingStatus, phrase, fadingOut: false, showHelpButton, rawObservation, observationId: event.observation_id });
+        setBubble({
+          status: incomingStatus,
+          phrase,
+          fadingOut: false,
+          showHelpButton,
+          rawObservation,
+          observationId: event.observation_id,
+        });
         setMood(STATUS_TO_MOOD[incomingStatus]);
 
         // Log that an actionable suggestion was actually shown, so the training
@@ -277,9 +328,13 @@ function PetView() {
       if (pulseTimer.current) clearTimeout(pulseTimer.current);
       bubblePinnedRef.current = true;
       setPulse(null);
-      setBubble({ status: 'observing', phrase: '', fadingOut: false,
+      setBubble({
+        status: 'observing',
+        phrase: '',
+        fadingOut: false,
         tutorMessage: data.text,
-        agentWorking: { sessionId: data.sessionId, requestId: data.requestId } });
+        agentWorking: { sessionId: data.sessionId, requestId: data.requestId },
+      });
       setMood('write');
       hideTimer.current = setTimeout(() => {
         bubblePinnedRef.current = false;
@@ -288,7 +343,8 @@ function PetView() {
       }, 6000);
     });
     const cleanupEnd = ipc?.on('agent-work-ended', (data: any) => {
-      if (bubbleRef.current?.agentWorking?.requestId !== data?.requestId) return;
+      if (bubbleRef.current?.agentWorking?.requestId !== data?.requestId)
+        return;
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
       bubblePinnedRef.current = false;
@@ -302,29 +358,37 @@ function PetView() {
   }, []);
 
   useEffect(() => {
-    const cleanup = window.electron?.ipcRenderer.on('agent-reply-ready', (data: any) => {
-      if (!data?.sessionId || !data?.requestId) return;
-      if (hideTimer.current) clearTimeout(hideTimer.current);
-      if (fadeTimer.current) clearTimeout(fadeTimer.current);
-      if (pulseTimer.current) clearTimeout(pulseTimer.current);
-      bubbleHoverRef.current = false;
-      bubblePinnedRef.current = true; // Keep observations from replacing the reminder.
-      setPulse(null);
-      setBubble({
-        status: 'progress', phrase: '', fadingOut: false,
-        tutorMessage: 'Your reply is ready.', agentReply: data,
-      });
-      setMood('write');
-      // Animate for the reminder's full lifetime; opening, dismissal, or expiry
-      // returns Coco to idle. No repeat reminders.
-      holdMsRef.current = 8000;
-      hideTimer.current = setTimeout(() => {
-        bubblePinnedRef.current = false;
-        setBubble(null);
-        setMood('idle');
-      }, 8000);
-    });
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    const cleanup = window.electron?.ipcRenderer.on(
+      'agent-reply-ready',
+      (data: any) => {
+        if (!data?.sessionId || !data?.requestId) return;
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        if (fadeTimer.current) clearTimeout(fadeTimer.current);
+        if (pulseTimer.current) clearTimeout(pulseTimer.current);
+        bubbleHoverRef.current = false;
+        bubblePinnedRef.current = true; // Keep observations from replacing the reminder.
+        setPulse(null);
+        setBubble({
+          status: 'progress',
+          phrase: '',
+          fadingOut: false,
+          tutorMessage: 'Your reply is ready.',
+          agentReply: data,
+        });
+        setMood('write');
+        // Animate for the reminder's full lifetime; opening, dismissal, or expiry
+        // returns Coco to idle. No repeat reminders.
+        holdMsRef.current = 8000;
+        hideTimer.current = setTimeout(() => {
+          bubblePinnedRef.current = false;
+          setBubble(null);
+          setMood('idle');
+        }, 8000);
+      },
+    );
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
   }, []);
 
   // ── Tier 3: tutor notification routed from main when webapp is hidden ────────
@@ -344,7 +408,7 @@ function PetView() {
         bubblePinnedRef.current = false;
 
         setBubble({
-          status: 'ai_struggle',   // purple — tutor attention theme
+          status: 'ai_struggle', // purple — tutor attention theme
           phrase: '',
           fadingOut: false,
           tutorMessage: message,
@@ -360,7 +424,9 @@ function PetView() {
         scheduleBubbleHide(TUTOR_HOLD_MS);
       },
     );
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
   }, []);
 
   // ── Session invite: Coco offers a session for the task it detected ──────────
@@ -492,9 +558,12 @@ function PetView() {
 
     // Try to reveal the instant suggestion that was precomputed when the bubble
     // appeared. If it's ready, show it in place (no waiting, no chat round-trip).
-    const res = await window.electron?.ipcRenderer.invoke('get-instant-suggestion', {
-      observationId: current.observationId ?? null,
-    });
+    const res = await window.electron?.ipcRenderer.invoke(
+      'get-instant-suggestion',
+      {
+        observationId: current.observationId ?? null,
+      },
+    );
 
     if (res?.status === 'ready' && res.suggestion) {
       recordEngagement(res.suggestion, 'inline');
@@ -542,8 +611,7 @@ function PetView() {
         inviteId: bubble.invite.inviteId,
         outcome: 'dismissed',
       });
-    } else
-    if (hideTimer.current) clearTimeout(hideTimer.current);
+    } else if (hideTimer.current) clearTimeout(hideTimer.current);
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
     setBubble((b) => (b ? { ...b, fadingOut: true } : null));
     fadeTimer.current = setTimeout(() => {
@@ -633,7 +701,13 @@ function PetView() {
           openActionsMenu();
         }}
       >
-        <PetSprite mood={cocoSleeping && !bubble?.agentReply && !bubble?.agentWorking ? 'sleep' : mood} />
+        <PetSprite
+          mood={
+            cocoSleeping && !bubble?.agentReply && !bubble?.agentWorking
+              ? 'sleep'
+              : mood
+          }
+        />
         <span className="pet-drag-hint" aria-hidden>
           Right-click for menu
         </span>
@@ -652,7 +726,6 @@ function PetView() {
         >
           •••
         </button>
-
       </div>
     </div>
   );

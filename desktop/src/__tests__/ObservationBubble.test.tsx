@@ -118,7 +118,7 @@ describe('ObservationBubble controls', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('does not show a help badge or tooltip on passive bubbles', () => {
+  it('keeps passive help collapsed without an external tooltip', () => {
     render(
       <ObservationBubble
         bubble={{
@@ -129,10 +129,32 @@ describe('ObservationBubble controls', () => {
       />,
     );
 
-    expect(
-      screen.queryByLabelText('Why no suggestion?'),
-    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Why no suggestion?')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
+  it('opens the help text inside the card and closes it for the next bubble', () => {
+    const passive = (phrase: string): BubbleState => ({
+      status: 'progress',
+      phrase,
+      fadingOut: false,
+    });
+    const { rerender } = render(
+      <ObservationBubble bubble={passive('Watching for useful moments')} />,
+    );
+    const help = /No proactive suggestion right now/;
+    expect(screen.queryByText(help)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Why no suggestion?' }));
+    expect(
+      screen.getByText(help).closest('.observation-bubble'),
+    ).not.toBeNull();
+
+    rerender(<ObservationBubble bubble={passive('Making steady progress')} />);
+    expect(screen.queryByText(help)).not.toBeInTheDocument();
   });
 
   it('allows an accidental suggestion rating to be corrected', () => {

@@ -96,12 +96,27 @@ def _custom_observer_prompt_path() -> Path:
 
 def _install_custom_observer_prompt(prompt: str) -> str:
     """Write the custom observer prompt to a new file in the user-data dir and
-    return its contents. Never overwrites the packaged scenario prompts."""
+    return it with the required reporting contract. Never overwrites the
+    packaged scenario prompts."""
     path = _custom_observer_prompt_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(prompt, encoding="utf-8")
     logger.info(f"Custom observer prompt written to {path}")
-    return path.read_text(encoding="utf-8")
+    # Custom mode uses the everyday pipeline, whose consumers depend on these
+    # exact fields. Keep the contract outside the editable user instructions
+    # and reuse the bundled definition so the two modes cannot drift.
+    _, marker, schema = _load_observer_prompt().partition("Output in JSON format:")
+    if not marker:
+        raise ValueError("The observer prompt is missing its reporting contract")
+    return (
+        f"{prompt.strip()}\n\n"
+        "Required observation reporting format (always applies, including when "
+        "the custom instructions request a different output format):\n"
+        "Return a single JSON object with all the following fields. Keep the "
+        "field names and allowed values unchanged. Do not wrap it in another "
+        "object or include commentary outside the JSON.\n"
+        f"{marker}{schema}"
+    )
 
 
 _OBSERVER_PROMPT: str = _load_observer_prompt()

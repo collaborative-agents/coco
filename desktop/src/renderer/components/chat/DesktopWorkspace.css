@@ -140,44 +140,6 @@
 .workspace-training .training-header h1 {
   font-size: var(--coco-text-title);
 }
-.workspace-settings {
-  height: 100%;
-  overflow-y: auto;
-  box-sizing: border-box;
-  padding: 18px 24px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 28px;
-  align-content: start;
-}
-.workspace-settings h1 {
-  grid-column: 1 / -1;
-  margin: 0;
-  font-size: var(--coco-text-title);
-}
-.workspace-settings-column {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
-}
-.workspace-settings-section {
-  min-width: 0;
-  padding: 0 0 14px;
-  border-bottom: 1px solid var(--coco-color-border);
-}
-.workspace-settings-section:first-of-type {
-  padding-top: 0;
-}
-.workspace-settings-section > div {
-  margin-bottom: 6px;
-}
-@media (max-width: 850px) {
-  .workspace-settings {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
-  }
-}
 .workspace-history {
   position: absolute;
   left: 63px;
@@ -255,9 +217,6 @@
   line-height: 1.7;
 }
 @media (max-width: 900px) {
-  .workspace-settings {
-    padding: 20px;
-  }
   .workspace-training .training-page {
     padding: var(--coco-space-6) 18px;
   }
