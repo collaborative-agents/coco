@@ -1092,3 +1092,36 @@ describe('deferred suggestion context', () => {
     );
   });
 });
+
+test('restores another conversation when revealing its background reply', async () => {
+  const listeners = new Map<string, (data: unknown) => void>();
+  const conversation = {
+    sessionId: 'background-session',
+    problem: 'Background task',
+    messages: [{ role: 'tutor', text: 'Background task finished.', requestId: 'background-reply' }],
+  };
+  const invoke = jest.fn(async (channel: string) =>
+    channel === 'resume-chat-conversation'
+      ? { success: true, conversation }
+      : null,
+  );
+  (window as any).electron = {
+    ipcRenderer: {
+      on: jest.fn((channel: string, callback: (data: unknown) => void) => {
+        listeners.set(channel, callback);
+        return jest.fn();
+      }),
+      sendMessage: jest.fn(),
+      invoke,
+    },
+  };
+  render(<SessionChatView />);
+  await act(async () => {
+    listeners.get('session-init')?.({ sessionId: 'current-session', problemStatement: 'Current task' });
+  });
+  await act(async () => {
+    listeners.get('reveal-agent-reply')?.({ conversation, requestId: 'background-reply' });
+  });
+  expect(invoke).toHaveBeenCalledWith('resume-chat-conversation', { sessionId: 'background-session' });
+  expect(await screen.findByText('Background task finished.')).toBeInTheDocument();
+});

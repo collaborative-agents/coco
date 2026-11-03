@@ -133,6 +133,7 @@
   grid-template-rows: auto minmax(0, 1fr);
   gap: 24px;
   height: 100%;
+  overflow: hidden;
   min-height: 0;
   box-sizing: border-box;
   padding: 24px 0 0 24px;
@@ -187,6 +188,7 @@
 }
 .settings-category > .workspace-settings-section,
 .settings-category > .settings-token-usage {
+  margin: 0;
   box-sizing: border-box;
   min-width: 0;
   padding: 24px;
@@ -251,6 +253,7 @@
   font-weight: 400;
   line-height: 1.6;
 }
+.settings-navigation button:focus-visible,
 .settings-observer-prompt:focus-visible {
   outline: 2px solid var(--coco-color-primary);
   outline-offset: 2px;
@@ -275,4 +278,10 @@
   flex: 0 1 auto;
   overflow-y: auto;
   max-height: 100dvh;
+}
+
+@media (max-width: 480px) {
+  .settings-toggle-row {
+    flex-wrap: wrap;
+  }
 }

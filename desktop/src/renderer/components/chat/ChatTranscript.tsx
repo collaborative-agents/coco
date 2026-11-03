@@ -241,7 +241,7 @@ export default function ChatTranscript({
                   )}
                 {!m.suggestion &&
                   !isWorkspaceDenial(m) &&
-                  (m.text || m.isError) && (
+                  (m.text.trim() || m.isError) && (
                     <div style={m.isError ? S.errBubble : S.tutorBubble}>
                       {m.isError ? (
                         <>

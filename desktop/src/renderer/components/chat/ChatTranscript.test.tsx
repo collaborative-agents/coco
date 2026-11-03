@@ -4,7 +4,7 @@ import ChatTranscript from './ChatTranscript';
 import type { ChatMessage } from './types';
 
 jest.mock('./MessageContent', () => ({
-  TutorMessage: ({ text }: { text: string }) => <span>{text}</span>,
+  TutorMessage: ({ text }: { text: string }) => <span data-testid="tutor-message">{text}</span>,
   SuggestionMessage: () => null,
 }));
 
@@ -64,4 +64,9 @@ test('actual execution failures still offer retry', () => {
     retryText: 'Do the task',
   });
   expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+});
+
+test('does not render a whitespace-only streaming reply bubble', () => {
+  renderMessage({ role: 'tutor', text: ' \n\t', isStreaming: true });
+  expect(screen.queryByTestId('tutor-message')).toBeNull();
 });

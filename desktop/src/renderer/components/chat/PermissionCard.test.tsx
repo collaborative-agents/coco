@@ -35,6 +35,7 @@ test('shows the exact command and requires explicit one-time approval', async ()
   await waitFor(() =>
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull(),
   );
+  expect(screen.queryByText('git push origin main')).toBeNull();
 });
 
 test('workspace card denies through the dedicated permission channel', async () => {
@@ -138,7 +139,7 @@ test('offers the trusted prefix and submits a reusable decision without sending 
   );
 });
 
-test('identifies commands automatically allowed by a saved workspace rule', () => {
+test('hides commands automatically allowed by a saved workspace rule', () => {
   render(
     <PermissionCard
       request={{ ...request, status: 'allowed', approvalSource: 'saved-rule' }}
@@ -146,6 +147,7 @@ test('identifies commands automatically allowed by a saved workspace rule', () =
       interactive
     />,
   );
-  expect(screen.getByText('Allowed by your saved workspace rule')).toBeTruthy();
+  expect(screen.queryByText('Allowed by your saved workspace rule')).toBeNull();
+  expect(screen.queryByText('git push origin main')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
 });

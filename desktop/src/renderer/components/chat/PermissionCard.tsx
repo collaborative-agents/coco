@@ -60,17 +60,11 @@ export default function PermissionCard({
     }
   };
 
-  if (['allowed', 'denied', 'cancelled'].includes(status)) {
+  if (status === 'allowed' || status === 'cancelled') return null;
+  if (status === 'denied') {
     let subject = `Use ${request.tool}`;
     if (workspace) subject = 'Read and edit folder';
     else if (shell) subject = 'Run command';
-    let outcome = 'Cancelled';
-    if (status === 'denied') outcome = 'Denied by the user';
-    if (status === 'allowed')
-      outcome =
-        request.approvalSource === 'saved-rule'
-          ? 'Allowed by your saved workspace rule'
-          : 'Allowed by the user';
     return (
       <div className="agent-permission-log">
         <div className="agent-permission-heading">
@@ -85,7 +79,7 @@ export default function PermissionCard({
           </pre>
         )}
         <div className={`agent-permission-outcome ${status}`} role="status">
-          {outcome}
+          Denied by the user
         </div>
       </div>
     );

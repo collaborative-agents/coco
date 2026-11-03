@@ -18,8 +18,9 @@ export function groupActivity(activity: AgentActivity[]) {
   )[] = [];
   activity.forEach((item, index) => {
     if (item.kind === 'message') {
-      groups.push({ ...item, key: `message-${index}` });
+      if (item.text.trim()) groups.push({ ...item, key: `message-${index}` });
     } else if (item.kind === 'permission') {
+      if (['allowed', 'cancelled'].includes(item.request.status)) return;
       groups.push({ ...item, key: item.request.id });
     } else if (item.call.name === 'ask_user_question') {
       groups.push({ kind: 'question', call: item.call, key: item.call.id });

@@ -281,10 +281,11 @@ export default function SessionChatView() {
     messagesRef.current = messages;
     problemRef.current = problem;
     if (!sessionIdRef.current || messages.length === 0) return undefined;
+    const savedSessionId = sessionIdRef.current;
     const timeout = window.setTimeout(() => {
       window.electron?.ipcRenderer
         .invoke('save-chat-conversation', {
-          sessionId: sessionIdRef.current,
+          sessionId: savedSessionId,
           problem,
           messages,
         })
@@ -746,12 +747,22 @@ export default function SessionChatView() {
   useEffect(() => {
     const remove = window.electron?.ipcRenderer.on(
       'reveal-agent-reply',
-      (value: any) => {
-        if (
-          value?.sessionId === sessionIdRef.current &&
-          typeof value.requestId === 'string'
-        )
-          setReplyToReveal(value.requestId);
+      (data: any) => {
+        const conversation = data?.conversation as
+          | SavedConversation
+          | undefined;
+        if (!conversation?.sessionId || !data?.requestId) return;
+        setActivePage('chat');
+        setShowSettings(false);
+        setShowHistory(false);
+        if (conversation.sessionId === sessionIdRef.current) {
+          setReviewing(null);
+          setReplyToReveal(data.requestId);
+        } else {
+          resumeConversation(conversation)
+            .then(() => setReplyToReveal(data.requestId))
+            .catch((error) => setUnderstandingError(error.message));
+        }
       },
     );
     return () => {
