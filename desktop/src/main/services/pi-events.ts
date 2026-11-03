@@ -109,8 +109,9 @@ export default class PiEventTranslator {
       });
       this.publish();
     } else if (event.type.startsWith('tool_execution_')) {
-      if (event.type === 'tool_execution_start' && this.text) {
-        this.activity.push({ kind: 'message', text: this.text });
+      if (event.type === 'tool_execution_start') {
+        if (this.text.trim())
+          this.activity.push({ kind: 'message', text: this.text });
         this.text = '';
       }
       const previous = this.calls.get(event.toolCallId);

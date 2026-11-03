@@ -142,3 +142,34 @@ test('totals all calls including cached input, without treating absent usage as 
   translator.handle({ type: 'message_end', message: { role: 'assistant' } });
   expect(translator.metrics('model').prompt_tokens).toBeUndefined();
 });
+
+test('discards whitespace between tools without trimming meaningful streamed text', () => {
+  const translator = new PiEventTranslator(jest.fn());
+  const delta = (text: string) =>
+    translator.handle({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: text },
+    });
+  const tool = (id: string) =>
+    translator.handle({
+      type: 'tool_execution_start',
+      toolCallId: id,
+      toolName: 'read',
+      args: {},
+    });
+  tool('1');
+  delta(' \n\t');
+  tool('2');
+  expect(translator.text).toBe('');
+  expect(translator.activity.map((item) => item.kind)).toEqual([
+    'tool',
+    'tool',
+  ]);
+  delta('  Checking');
+  delta(' the next file.\n');
+  tool('3');
+  expect(translator.activity[2]).toEqual({
+    kind: 'message',
+    text: '  Checking the next file.\n',
+  });
+});

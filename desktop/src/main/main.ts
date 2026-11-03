@@ -3663,13 +3663,9 @@ async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurn
 ipcMain.handle('send-chat-message', runAgentTurn);
 ipcMain.on('view-agent-reply', (_event, target: { sessionId?: string; requestId?: string } = {}) => {
   const conversation = readConversations().find(c => c.sessionId === target.sessionId);
-  if (!conversation) return;
-  currentSessionId = conversation.sessionId;
-  currentTutorModelId = conversation.tutorModelId ?? null;
-  isSessionActive = true;
-  activateAgentSession(conversation.sessionId);
-  openChatForSession(conversation.sessionId, conversation.problem);
-  const reveal = () => chatWindow?.webContents.send('reveal-agent-reply', { sessionId: conversation.sessionId, requestId: target.requestId });
+  if (!conversation || !conversation.messages.some(message => message.requestId === target.requestId)) return;
+  showChatPanel();
+  const reveal = () => chatWindow?.webContents.send('reveal-agent-reply', { conversation, requestId: target.requestId });
   if (chatWindow?.webContents.isLoading()) chatWindow.webContents.once('did-finish-load', () => setTimeout(reveal, 300));
   else reveal();
 });
