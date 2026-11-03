@@ -1,3 +1,7 @@
+import { PersonalizationScheduler } from './services/personalization-scheduler';
+import { DailyMemoryDraftService } from './services/daily-memory-drafts';
+import { PersonalizationCenterService } from './services/personalization-center';
+import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { applyAgentPreferences, observerPreferences, type AgentPreferencesInput } from './agent-preferences';
 import SkillWorkshop from './services/skill-workshop';
 import { tokenCounts } from '../shared/token-usage';
@@ -233,6 +237,36 @@ let wakeWordService: WakeWordService | null = null;
 let wakeWordEnabled = false;
 let wakeWordStatus: WakeWordStatusEvent = { status: 'disabled' };
 let systemSuspended = false;
+let personalizationScheduler: PersonalizationScheduler | null = null;
+let eveningPersonalizationScheduler: EveningPersonalizationScheduler | null =
+  null;
+let wakeAfterEveningPersonalization = false;
+let dailyMemoryDraftService: DailyMemoryDraftService | null = null;
+let personalizationCenterService: PersonalizationCenterService | null = null;
+
+const initializeDailyMemoryDraftService = () => {
+  if (dailyMemoryDraftService) return;
+  const personalizationStateRoot = path.join(
+    app.getPath('userData'),
+    'personalization',
+  );
+  dailyMemoryDraftService = new DailyMemoryDraftService(
+    app.getPath('userData'),
+    personalizationStateRoot,
+    {
+      fixtureStatePath: app.isPackaged
+        ? undefined
+        : process.env.COCO_DAILY_MEMORY_DRAFT_FIXTURE,
+    },
+  );
+  personalizationCenterService = new PersonalizationCenterService(
+    personalizationStateRoot,
+    dailyMemoryDraftService,
+  );
+};
+
+
+
 let wakeWordCapturePaused = false;
 let wakeWordCapturePauseTimer: ReturnType<typeof setTimeout> | null = null;
 let wakeWordCaptureState = 'stopped';
@@ -2472,6 +2506,12 @@ ipcMain.handle(
         process.env.TUTOR_MODEL = defaultTutorModel.model;
         process.env.OBSERVER_MODEL = runtime.config.sensing?.model ?? '';
         sensingEnabled = Boolean(runtime.config.sensing);
+        if (runtime.config.sensing) {
+          personalizationScheduler?.updateModelConfiguration(runtime.config.sensing.model, runtime.sensingEnv);
+          personalizationScheduler?.start();
+        } else {
+          personalizationScheduler?.stop();
+        }
         stopObservationStream();
         if (!sensingEnabled) {
           latestHiddenSuggestionObservationId = undefined;
@@ -2697,10 +2737,97 @@ ipcMain.on('training-feedback', async (_event, payload) => {
     await axios.post(`http://127.0.0.1:${sensingPort}/feedback`, payload ?? {}, {
       timeout: 3000,
     });
+    personalizationScheduler?.noteFeedback();
   } catch (err) {
     log.warn(`[Feedback] failed to post: ${(err as { message?: string })?.message}`);
   }
 });
+
+ipcMain.handle('claim-daily-memory-review', () => {
+  initializeDailyMemoryDraftService();
+  return dailyMemoryDraftService?.claimForToday() ?? null;
+});
+
+ipcMain.removeHandler('get-personalization-status');
+ipcMain.handle('get-personalization-status', () => ({
+  ...(personalizationScheduler?.getStatus() ?? {
+    available: false,
+    sleeping: isCocoSleeping(),
+    successfulUpdateCount: 0,
+    state: 'idle',
+  }),
+  dailyRun: eveningPersonalizationScheduler?.getStatus() ?? {
+    scheduledHour: 18,
+  },
+}));
+
+ipcMain.removeHandler('get-personalization-center');
+ipcMain.handle('get-personalization-center', () => {
+  initializeDailyMemoryDraftService();
+  const dailyRun = eveningPersonalizationScheduler?.getStatus() ?? {
+    scheduledHour: 18,
+  };
+  return {
+    status: {
+      ...(personalizationScheduler?.getStatus() ?? {
+        available: false,
+        sleeping: isCocoSleeping(),
+        successfulUpdateCount: 0,
+        state: 'idle',
+      }),
+      dailyRun,
+    },
+    center: personalizationCenterService?.snapshot() ?? null,
+  };
+});
+
+ipcMain.removeHandler('save-personalization-review-decision');
+ipcMain.handle('save-personalization-review-decision', (_event, input) => {
+  try {
+    initializeDailyMemoryDraftService();
+    return {
+      success: true,
+      center: personalizationCenterService?.saveDecision(input) ?? null,
+    };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.removeHandler('apply-personalization-review');
+ipcMain.handle(
+  'apply-personalization-review',
+  async (_event, { draftId }: { draftId?: string } = {}) => {
+    if (!draftId) return { success: false, error: 'Draft ID is required.' };
+    try {
+      initializeDailyMemoryDraftService();
+      if (!personalizationCenterService) {
+        throw new Error('Personalization review is not available.');
+      }
+      const { memory, draft } =
+        personalizationCenterService.applyReview(draftId);
+      const tutorPort = process.env.TUTOR_PORT || '8081';
+      try {
+        await axios.post(
+          `http://127.0.0.1:${tutorPort}/context/evolved_memory`,
+          { memory },
+          { timeout: 8000 },
+        );
+      } catch (error) {
+        log.warn(
+          `[Memory] personalization review live apply failed: ${(error as Error).message}`,
+        );
+      }
+      avatarWindow?.webContents.send('daily-memory-draft-applied', {
+        draftId: draft.draftId,
+      });
+      return { success: true, draftId: draft.draftId };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  },
+);
+
 
 ipcMain.removeHandler('get-coco-sleep-mode');
 ipcMain.handle('get-coco-sleep-mode', () => ({
@@ -2722,7 +2849,65 @@ async function restoreSensingSession(sessionId: string, profile: ReturnType<type
   log.warn('[Sleep] Sensing session could not be restored after wake.');
 }
 
-async function setCocoSleepMode(sleeping: boolean) {
+async function requestDailyMemoryReview(attempt = 0): Promise<string> {
+  const tutorPort = process.env.TUTOR_PORT || '8081';
+  try {
+    const response = await axios.post(
+      `http://127.0.0.1:${tutorPort}/review/daily`,
+      {},
+      { timeout: 2 * 60_000 },
+    );
+    return String(
+      (response.data as { guidance?: unknown } | undefined)?.guidance ?? '',
+    ).trim();
+  } catch (error) {
+    // At launch, the evening check can race the tutor subprocess becoming
+    // healthy. Give it a short readiness window before using fallback copy.
+    if (attempt >= 20) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return requestDailyMemoryReview(attempt + 1);
+  }
+}
+
+async function runEveningPersonalizationTransition(): Promise<boolean> {
+  if (systemSuspended || !sensingEnabled || !personalizationScheduler || agentRuns.requests.size > 0) return false;
+
+  let review = '';
+  serviceManager.startService('tutor-server');
+  personalizationScheduler.beginInteractiveInference();
+  try {
+    review = await requestDailyMemoryReview();
+  } catch (error) {
+    log.warn(
+      `[Evening] Could not generate memory review: ${(error as Error).message}`,
+    );
+  } finally {
+    personalizationScheduler.endInteractiveInference();
+  }
+
+  const result = await setCocoSleepMode(true, {
+    wakeAfterPersonalization: true,
+  });
+  if (!result.success) return false;
+
+  const message = [
+    review ||
+      "I don't have enough activity in memory to summarize today, but it's still a good time to pause.",
+    '**Take a break when you can.** Coco is now asleep and running today’s personalization update.',
+    'Coco will wake automatically when the update finishes. You can still chat while it runs.',
+  ].join('\n\n');
+  const payload = {
+    message,
+    actionLabel: 'Open Coco',
+  };
+  showNotification(payload);
+  log.info('[Evening] Coco entered sleep mode for personalization.');
+  return true;
+}
+
+async function setCocoSleepMode(sleeping: boolean, { wakeAfterPersonalization = false } = {}) {
+  wakeAfterEveningPersonalization = wakeAfterPersonalization;
+  personalizationScheduler?.setSleepMode(sleeping);
   if (cocoSleeping === sleeping) {
     return { success: true, sleeping };
   }
@@ -3187,6 +3372,7 @@ function precomputeSuggestion(event: {
   const tutorPort = process.env.TUTOR_PORT || '8081';
   const startedAt = Date.now();
   log.info(`[InstantSuggestion] precompute start id=${id} status=${event.status}`);
+  personalizationScheduler?.beginInteractiveInference();
   const promise = axios
     .post(
       `http://127.0.0.1:${tutorPort}/suggestion/instant`,
@@ -3211,6 +3397,7 @@ function precomputeSuggestion(event: {
       log.warn(`[InstantSuggestion] precompute failed for ${id} after ${Date.now() - startedAt}ms: ${(err as { message?: string })?.message}`);
       return null;
     });
+  void promise.finally(() => personalizationScheduler?.endInteractiveInference());
   suggestionCache.set(id, { ts: Date.now(), promise });
   return promise;
 }
@@ -3560,6 +3747,7 @@ async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurn
     return { error: 'The voice recording is empty or too large.' };
   try { agentRuns.begin(sessionId, input.requestId); }
   catch (error) { return { error: (error as Error).message }; }
+  personalizationScheduler?.beginInteractiveInference();
   const conversation = readConversations().find(item => item.sessionId === sessionId);
   const config = readModelConfiguration();
   const modelId = sessionId === currentSessionId ? currentTutorModelId : conversation?.tutorModelId;
@@ -3569,7 +3757,7 @@ async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurn
   const selectedModel = selected?.model || (legacyPi?.mode === 'native' ? `pi/${legacyPi.provider}/${legacyPi.model}` : process.env.TUTOR_MODEL || '');
   const context = { model: selectedModel, scenario: profile.scenario,
     problem: conversation?.problem || (sessionId === currentSessionId ? pendingTaskLabel : '') || '', user_name: profile.userName, ai_tools: profile.aiTools,
-    memory: readLocalMemory(), messages: restorableMessages(conversation?.messages ?? [], input.displayText ?? input.userText) };
+    memory: readInferenceMemory(), messages: restorableMessages(conversation?.messages ?? [], input.displayText ?? input.userText) };
   const progressReminder = new AgentProgressReminder(text => {
     void isChatOutOfView(chatWindow).then(hidden => {
       if (hidden && agentRuns.requests.has(input.requestId) && !agentRuns.requests.get(input.requestId)?.stopped && !hideAvatarMode)
@@ -3654,6 +3842,7 @@ async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurn
     emit({ type: 'error', error: message, llm_metrics: (error as { llm_metrics?: unknown })?.llm_metrics });
     return { error: message };
   } finally {
+    personalizationScheduler?.endInteractiveInference();
     progressReminder.dispose();
     avatarWindow?.webContents.send('agent-work-ended', { requestId: input.requestId });
     chatStreams.finish(input.requestId);
@@ -4007,6 +4196,12 @@ function readLocalMemory(): string {
   }
 }
 
+function readInferenceMemory(): string {
+  let evolved = '';
+  try { evolved = fs.readFileSync(path.join(app.getPath('userData'), 'personalization', 'evolved-memory.md'), 'utf8').trim(); } catch { /* No approved draft yet. */ }
+  return [readLocalMemory().trim(), evolved ? `## Model-evolved memory\n${evolved}` : ''].filter(Boolean).join('\n\n');
+}
+
 ipcMain.removeHandler('get-memory');
 ipcMain.handle('get-memory', async () => {
   // The local file is the source of truth and persists across restarts.
@@ -4218,6 +4413,78 @@ const startObserver = () => {
       );
     }
     startModelServices(serviceManager, observerModel, isCocoSleeping());
+    const recordsRoot = path.join(app.getPath('userData'), 'coco-records');
+    const stateRoot = path.join(app.getPath('userData'), 'personalization');
+    initializeDailyMemoryDraftService();
+    const packagedExecutable = app.isPackaged
+      ? path.join(
+          process.resourcesPath,
+          'service-dist',
+          'coco-services',
+          `personalization-worker${process.platform === 'win32' ? '.exe' : ''}`,
+        )
+      : undefined;
+    personalizationScheduler?.stop();
+    personalizationScheduler = new PersonalizationScheduler({
+      projectRoot: app.isPackaged
+        ? path.dirname(packagedExecutable!)
+        : path.resolve(process.cwd(), '..'),
+      recordsRoot,
+      stateRoot,
+      memoryRoot: app.getPath('userData'),
+      model: observerModel,
+      packagedExecutable,
+      providerEnv: runtime?.sensingEnv,
+      collectTrainingScreenshots: process.env.COLLECT_TRAINING_SCREENSHOTS === '1',
+      evolveConcurrency: Math.min(4, Math.max(1, Number.parseInt(process.env.COCO_PERSONALIZATION_LLM_CONCURRENCY || "4", 10) || 4)),
+      logPath: path.join(
+        app.getPath('userData'),
+        'logs',
+        'personalization.log',
+      ),
+      getIdleSeconds: () => powerMonitor.getSystemIdleTime(),
+      onFatalError: (error) => {
+        log.error('[Personalization]', error);
+      },
+
+      onJobFinished: (job, outcome) => {
+        if (job !== 'evolve') return;
+        if (outcome === 'completed') {
+          avatarWindow?.webContents.send('daily-memory-draft-refresh');
+        }
+        if (
+          wakeAfterEveningPersonalization &&
+          (outcome === 'completed' || outcome === 'no_work')
+        ) {
+          eveningPersonalizationScheduler?.markCompleted(outcome);
+          wakeAfterEveningPersonalization = false;
+          void setCocoSleepMode(false).then((result) => {
+            if (result.success) {
+              log.info(
+                '[Evening] Coco woke after the personalization update finished.',
+              );
+            } else {
+              log.warn(
+                `[Evening] Could not wake Coco after personalization: ${JSON.stringify(result)}`,
+              );
+            }
+          }).catch((error) => {
+            log.warn(
+              `[Evening] Could not wake Coco after personalization: ${error}`,
+            );
+          });
+        }
+      },
+    });
+    personalizationScheduler.setSleepMode(isCocoSleeping());
+    personalizationScheduler.start();
+    eveningPersonalizationScheduler?.stop();
+    eveningPersonalizationScheduler = new EveningPersonalizationScheduler({
+      statePath: path.join(stateRoot, 'evening-review.json'),
+      onEvening: runEveningPersonalizationTransition,
+    });
+    eveningPersonalizationScheduler.start();
+
   } catch (e) {
     console.warn('Failed to start services:', e);
   }
@@ -4239,6 +4506,7 @@ function subscribeToObservations() {
       if (!sensingEnabled || isCocoSleeping()) return;
       if (observationSleepGuard.shouldSuppress(event.ts)) {
         if (event.observation) {
+          personalizationScheduler?.noteObservation();
           log.info(
             `[Power] Dropped suppressed observation status=${event.status ?? '(none)'}`,
           );
@@ -4381,6 +4649,8 @@ app
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
       systemSuspended = true;
+      personalizationScheduler?.stop();
+      eveningPersonalizationScheduler?.stop();
       syncWakeWordService();
       observationSleepGuard.suspend();
       latestHiddenSuggestionObservationId = undefined;
@@ -4396,6 +4666,8 @@ app
     powerMonitor.on('resume', () => {
       log.info('[Power] System resumed; suppressing observations briefly.');
       systemSuspended = false;
+      personalizationScheduler?.start();
+      eveningPersonalizationScheduler?.start();
       syncWakeWordService();
       observationSleepGuard.resume();
       latestHiddenSuggestionObservationId = undefined;
@@ -4461,6 +4733,8 @@ app
   .catch(console.log);
 
 app.on('before-quit', (event) => {
+  personalizationScheduler?.stop();
+  eveningPersonalizationScheduler?.stop();
   if (isQuitting) return;
   event.preventDefault();
   isQuitting = true;

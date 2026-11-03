@@ -13,6 +13,10 @@ TUTOR_ENTRY = (
     ROOT / "lib" / "proactive_tutor" / "proactive_tutor" / "packaged_entrypoint.py"
 )
 SENSING_ENTRY = ROOT / "lib" / "sensing" / "sensing" / "sensing_server.py"
+PERSONALIZATION_ENTRY = (
+    ROOT / "lib" / "personalization" / "personalization" / "runtime.py"
+)
+
 WAKE_WORD_ENTRY = ROOT / "lib" / "sensing" / "sensing" / "wake_word_worker.py"
 
 COMMON_HIDDEN_IMPORTS = [
@@ -65,6 +69,12 @@ SENSING_HIDDEN_IMPORTS = COMMON_HIDDEN_IMPORTS + [
     "mss",
 ]
 
+PERSONALIZATION_HIDDEN_IMPORTS = COMMON_HIDDEN_IMPORTS + [
+    "personalization",
+    "memory",
+]
+
+
 WAKE_WORD_HIDDEN_IMPORTS = [
     "sensing",
     "numpy",
@@ -110,6 +120,10 @@ tutor_datas += copy_metadata("mcp")
 sensing_datas = collect_data_files("sensing")
 sensing_datas += collect_data_files("litellm")
 
+personalization_datas = collect_data_files("personalization")
+personalization_datas += collect_data_files("litellm")
+
+
 wake_word_datas = collect_data_files("sensing")
 wake_word_datas += collect_data_files("sherpa_onnx")
 
@@ -141,6 +155,21 @@ sensing = Analysis(
     optimize=0,
 )
 
+personalization = Analysis(
+    [str(PERSONALIZATION_ENTRY)],
+    pathex=[str(ROOT)],
+    binaries=[],
+    datas=personalization_datas,
+    hiddenimports=PERSONALIZATION_HIDDEN_IMPORTS,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["pandas"],
+    noarchive=False,
+    optimize=0,
+)
+
+
 wake_word = Analysis(
     [str(WAKE_WORD_ENTRY)],
     pathex=[str(ROOT)],
@@ -158,6 +187,7 @@ wake_word = Analysis(
 tutor_pyz = PYZ(tutor.pure)
 sensing_pyz = PYZ(sensing.pure)
 wake_word_pyz = PYZ(wake_word.pure)
+personalization_pyz = PYZ(personalization.pure)
 
 tutor_exe = EXE(
     tutor_pyz,
@@ -195,6 +225,25 @@ sensing_exe = EXE(
     entitlements_file=None,
 )
 
+personalization_exe = EXE(
+    personalization_pyz,
+    personalization.scripts,
+    [],
+    exclude_binaries=True,
+    name="personalization-worker",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+
 wake_word_exe = EXE(
     wake_word_pyz,
     wake_word.scripts,
@@ -220,12 +269,15 @@ bundle = COLLECT(
     tutor_exe,
     sensing_exe,
     wake_word_exe,
+    personalization_exe,
     tutor.binaries,
     tutor.datas,
     sensing.binaries,
     sensing.datas,
     wake_word.binaries,
     wake_word.datas,
+    personalization.binaries,
+    personalization.datas,
     strip=False,
     upx=True,
     upx_exclude=[],

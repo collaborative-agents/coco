@@ -7,11 +7,11 @@ import './DesktopWorkspace.css';
 interface Props {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  active: 'chat' | 'settings';
+  active: 'chat' | 'settings' | 'personalization';
   historyOpen: boolean;
   onHistoryOpen: () => void;
   onHistoryClose: () => void;
-  onNavigate: (page: 'chat' | 'settings') => void;
+  onNavigate: (page: 'chat' | 'settings' | 'personalization') => void;
   history: ReactNode;
   children: ReactNode;
   details: ReactNode;
@@ -72,6 +72,16 @@ export default function DesktopWorkspace({
             >
               <WorkspaceIcon name="chat" />
             </button>
+            <button
+              type="button"
+              title="Personalization"
+              aria-label="Personalization"
+              aria-current={active === 'personalization' ? 'page' : undefined}
+              onMouseEnter={onHistoryClose}
+              onClick={() => onNavigate('personalization')}
+            >
+              <WorkspaceIcon name="personalization" />
+            </button>
           </div>
           <button
             type="button"
@@ -96,7 +106,7 @@ export default function DesktopWorkspace({
       </section>
       <section
         className="workspace-details"
-        aria-label="Settings panel"
+        aria-label={active === 'personalization' ? 'Personalization panel' : 'Settings panel'}
         hidden={active === 'chat'}
       >
         <header className="workspace-page-header">

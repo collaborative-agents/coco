@@ -1,4 +1,5 @@
 export type WorkspaceIconName =
+  | 'personalization'
   | 'chat'
   | 'todo'
   | 'settings'
@@ -12,6 +13,13 @@ export default function WorkspaceIcon({ name }: { name: WorkspaceIconName }) {
   const paths = {
     chat: (
       <path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0Z" />
+    ),
+    personalization: (
+      <>
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3 21v-2a6 6 0 0 1 12 0v2" />
+        <path d="m18 3 1.2 3.8L23 8l-3.8 1.2L18 13l-1.2-3.8L13 8l3.8-1.2Z" />
+      </>
     ),
     todo: (
       <>

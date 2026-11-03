@@ -944,7 +944,8 @@ async def main_async(
         # decision is logged (observations.jsonl / decisions.jsonl / episodes.jsonl)
         # into the same per-run directory as progress_judgments.jsonl.
         ai_processor._recorder = TrainingRecorder(
-            out_dir=_os.path.dirname(_progress_log_path)
+            out_dir=_os.path.dirname(_progress_log_path),
+            retain_screenshots=True,
         )
         # Reset the tutor server's per-session state at startup so any conversation
         # history or curriculum state left over from a previous run doesn't bleed

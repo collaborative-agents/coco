@@ -376,3 +376,59 @@ def test_explain_tool_command_is_isolated_and_preserves_source(monkeypatch):
     assert captured["operation"] == "explain_tool_command"
     assert "Do not execute anything" in captured["system_prompt"]
     assert tutor.conversation_history == history
+
+
+def test_user_and_evolved_memory_are_persisted_as_separate_layers(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("COCO_USER_DATA_DIR", str(tmp_path))
+    ts = _make_tutor_system()
+
+    ts.set_memory("User-written preference")
+    ts.set_evolved_memory("## When to stay silent\n- During routine edits")
+
+    assert (tmp_path / "coco-memory.txt").read_text() == "User-written preference"
+    assert (
+        tmp_path / "personalization" / "evolved-memory.md"
+    ).read_text() == "## When to stay silent\n- During routine edits"
+    assert "User-written preference" in ts.memory
+    assert "## Model-evolved memory" in ts.memory
+    assert "During routine edits" in ts.memory
+
+    restored = _make_tutor_system()
+    assert restored.user_memory == "User-written preference"
+    assert "During routine edits" in restored.memory
+
+
+def test_daily_review_is_stateless_and_requires_todays_memory(monkeypatch):
+    ts = _make_tutor_system()
+    captured = {}
+    metrics = {"operation": "tutor", "tool_calls": []}
+
+    def fake_chat(messages, image_paths=None):
+        captured["messages"] = messages
+        captured["image_paths"] = image_paths
+        return "- Worked on the Coco scheduler.", metrics
+
+    async def fake_recent_observations(**kwargs):
+        captured["retrieval"] = kwargs
+        return {"observations": [{"text": "Worked on the Coco scheduler."}]}
+
+    monkeypatch.setattr(ts.tutor_agent, "chat_with_metrics", fake_chat)
+    monkeypatch.setattr(
+        "proactive_tutor.tutor_system.call_get_recent_observations",
+        fake_recent_observations,
+    )
+    existing_messages = list(ts._chat_messages)
+
+    review, returned_metrics = ts.generate_daily_review_with_metrics()
+
+    assert review == "- Worked on the Coco scheduler."
+    assert returned_metrics is metrics
+    assert captured["image_paths"] is None
+    prompt = captured["messages"][0]["content"]
+    assert captured["retrieval"]["limit"] == 50
+    assert captured["retrieval"]["end_hh_mm_ago"] == "00:00"
+    assert "Worked on the Coco scheduler." in prompt
+    assert "Base the review only on the <today_memory> records" in prompt
+    assert ts._chat_messages == existing_messages

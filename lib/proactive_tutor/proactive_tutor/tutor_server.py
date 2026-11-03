@@ -704,7 +704,7 @@ async def get_memory():
     """Return the long-term personalized memory (for the UI to view/edit)."""
     if tutor is None:
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
-    return MemoryResponse(memory=tutor.memory)
+    return MemoryResponse(memory=tutor.user_memory)
 
 
 @app.post("/context/memory", response_model=StatusResponse)
@@ -913,6 +913,29 @@ def main(port: int = 8081, model_name: str = ""):
     if not (model_name or "").strip():
         raise ValueError("--model_name is required")
     asyncio.run(main_async(port=port, model_name=model_name))
+
+
+@app.post("/context/evolved_memory", response_model=StatusResponse)
+async def set_evolved_memory(req: MemoryRequest):
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="Tutor not initialized")
+    tutor.set_evolved_memory(req.memory)
+    return StatusResponse(status="ok")
+
+
+@app.post("/review/daily", response_model=GuidanceResponse)
+async def daily_review():
+    """Generate a stateless review of today's activity from long-term memory."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    try:
+        guidance, llm_metrics = await asyncio.to_thread(
+            tutor.generate_daily_review_with_metrics
+        )
+        return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
+    except Exception as e:
+        logger.error(f"Error generating daily review: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 if __name__ == "__main__":

@@ -8,6 +8,13 @@ import {
 } from 'electron';
 
 export type Channels =
+  | 'claim-daily-memory-review'
+  | 'get-personalization-status'
+  | 'get-personalization-center'
+  | 'save-personalization-review-decision'
+  | 'apply-personalization-review'
+  | 'daily-memory-draft-applied'
+  | 'daily-memory-draft-refresh'
   | 'answer-agent-permission'
   | 'revoke-agent-workspace'
   | 'list-command-approvals'
