@@ -22,6 +22,7 @@ export type Channels =
   | 'revoke-agent-workspace'
   | 'list-command-approvals'
   | 'revoke-command-approval'
+  | 'revoke-file-approval'
   | 'explain-tool-command'
   | 'curated-skills-changed'
   | 'skill-workshop-start'

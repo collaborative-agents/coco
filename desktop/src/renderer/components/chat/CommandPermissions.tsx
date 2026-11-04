@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { CommandApprovalRule } from '../../../shared/agent-execution';
+import type {
+  CommandApprovalRule,
+  WorkspacePermissionRule,
+} from '../../../shared/agent-execution';
 import WorkspaceDialog from './WorkspaceDialog';
 import './WorkspaceDialog.css';
 import './CommandPermissions.css';
@@ -20,6 +23,7 @@ export default function CommandPermissions({
   };
 }) {
   const [rules, setRules] = useState<CommandApprovalRule[]>([]);
+  const [fileRules, setFileRules] = useState<WorkspacePermissionRule[]>([]);
   const [directory, setDirectory] = useState('');
   const [loading, setLoading] = useState(true);
   const [removing, setRemoving] = useState('');
@@ -35,6 +39,7 @@ export default function CommandPermissions({
         );
         if (active) {
           setRules(value.rules);
+          setFileRules(value.fileRules ?? []);
           setDirectory(value.directory);
         }
       } catch {
@@ -48,16 +53,17 @@ export default function CommandPermissions({
       active = false;
     };
   }, [sessionId]);
-  const revoke = async (id: string) => {
+  const revoke = async (id: string, file = false) => {
     setRemoving(id);
     setError('');
     try {
       const value = await window.electron.ipcRenderer.invoke(
-        'revoke-command-approval',
+        file ? 'revoke-file-approval' : 'revoke-command-approval',
         sessionId,
         id,
       );
       setRules(value.rules);
+      setFileRules(value.fileRules ?? []);
     } catch {
       setError('Could not remove this permission. Try again.');
     } finally {
@@ -84,7 +90,7 @@ export default function CommandPermissions({
             </div>
             <p>
               {workspaceAccess.granted
-                ? 'Coco can read and edit files here for this conversation.'
+                ? 'Coco can read and edit files here across chats and restarts until revoked.'
                 : 'Coco will ask before accessing this folder.'}
             </p>
             {workspaceAccess.granted && (
@@ -144,6 +150,42 @@ export default function CommandPermissions({
                 </p>
               )}
             </>
+          )}
+        </section>
+        <section
+          className="workspace-access-section"
+          aria-label="Additional file access"
+        >
+          <h3>Additional file access</h3>
+          <p>
+            Saved access outside this workspace, reused across chats and
+            restarts.
+          </p>
+          {!loading && !fileRules.length && <p>No saved file permissions.</p>}
+          {fileRules.map((rule) => (
+            <div className="command-permissions-rule" key={rule.id}>
+              <span>
+                {rule.fileAccess?.mode === 'write' ? 'Read and edit' : 'Read'}:{' '}
+                <code>{rule.fileAccess?.path}</code>
+                {rule.fileAccess?.scope === 'directory'
+                  ? ' (including contents)'
+                  : ''}
+              </span>
+              <button
+                type="button"
+                disabled={Boolean(removing)}
+                onClick={() => revoke(rule.id, true)}
+                aria-label={`Remove access to ${rule.fileAccess?.path}`}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          {fileRules.length > 0 && (
+            <p>
+              Removing a grant restores prompts for future tool calls. It does
+              not stop an operation already running.
+            </p>
           )}
         </section>
         {error && <p role="alert">{error}</p>}

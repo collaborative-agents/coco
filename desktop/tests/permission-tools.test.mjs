@@ -196,3 +196,155 @@ test('curated packages are readable outside the workspace but never writable and
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('outside files prompt with canonical scope, and approval resumes the requested tool only', async () => {
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'coco-external-')),
+  );
+  try {
+    const cwd = path.join(root, 'workspace');
+    fs.mkdirSync(cwd);
+    const external = path.join(root, 'external.txt');
+    fs.writeFileSync(external, 'hello');
+    const requests = [];
+    const tools = new Map(
+      createPermissionTools(cwd, async (action) => {
+        requests.push(action);
+        return true;
+      }).map((tool) => [tool.name, tool]),
+    );
+    assert.match(
+      JSON.stringify(
+        await tools.get('read').execute('read', { path: '../external.txt' }),
+      ),
+      /hello/,
+    );
+    assert.deepEqual(requests[0].fileAccess, {
+      path: external,
+      mode: 'read',
+      scope: 'file',
+    });
+    await tools.get('edit').execute('edit', {
+      path: external,
+      edits: [{ oldText: 'hello', newText: 'changed' }],
+    });
+    assert.equal(requests[1].fileAccess.mode, 'write');
+    assert.equal(fs.readFileSync(external, 'utf8'), 'changed');
+    const newFile = path.join(root, 'new', 'nested', 'created.txt');
+    await tools
+      .get('write')
+      .execute('write', { path: newFile, content: 'created' });
+    assert.equal(fs.readFileSync(newFile, 'utf8'), 'created');
+    assert.deepEqual(requests[2].fileAccess, {
+      path: newFile,
+      mode: 'write',
+      scope: 'file',
+    });
+    await tools.get('ls').execute('ls', { path: path.dirname(newFile) });
+    assert.equal(requests[3].fileAccess.scope, 'directory');
+    await tools.get('read').execute('again', { path: external });
+    assert.equal(
+      requests.length,
+      5,
+      'one-time approvals do not leak into subsequent calls',
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('outside permission snapshots arguments and rejects cancelled or redirected paths', async () => {
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'coco-external-race-')),
+  );
+  try {
+    const cwd = path.join(root, 'workspace');
+    fs.mkdirSync(cwd);
+    const one = path.join(root, 'one');
+    const two = path.join(root, 'two');
+    fs.writeFileSync(one, 'one');
+    fs.writeFileSync(two, 'two');
+    const alias = path.join(cwd, 'alias');
+    fs.symlinkSync(one, alias);
+    let release;
+    const tools = new Map(
+      createPermissionTools(
+        cwd,
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      ).map((t) => [t.name, t]),
+    );
+    const args = { path: one, content: 'approved' };
+    const pending = tools.get('write').execute('write', args);
+    args.path = two;
+    args.content = 'not approved';
+    release(true);
+    await pending;
+    assert.equal(fs.readFileSync(one, 'utf8'), 'approved');
+    assert.equal(fs.readFileSync(two, 'utf8'), 'two');
+    const redirected = tools
+      .get('write')
+      .execute('redirect', { path: alias, content: 'bad' });
+    fs.unlinkSync(alias);
+    fs.symlinkSync(two, alias);
+    release(true);
+    await assert.rejects(redirected, /path changed/);
+    const controller = new AbortController();
+    const stopped = tools
+      .get('write')
+      .execute('stop', { path: two, content: 'bad' }, controller.signal);
+    controller.abort();
+    release(true);
+    await assert.rejects(stopped, /aborted/);
+    assert.equal(fs.readFileSync(two, 'utf8'), 'two');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('workspace permission is requested only on file execution and denial blocks IO', async () => {
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'coco-lazy-access-')),
+  );
+  try {
+    const cwd = path.join(root, 'workspace');
+    fs.mkdirSync(cwd);
+    let requests = 0;
+    let allowed = false;
+    const tools = new Map(
+      createPermissionTools(
+        cwd,
+        async () => true,
+        [],
+        async () => {
+          requests++;
+          return allowed;
+        },
+      ).map((t) => [t.name, t]),
+    );
+    assert.equal(requests, 0);
+    await assert.rejects(
+      tools.get('write').execute('denied', { path: 'file.txt', content: 'no' }),
+      /Permission denied/,
+    );
+    assert.equal(requests, 1);
+    assert.equal(fs.existsSync(path.join(cwd, 'file.txt')), false);
+    allowed = true;
+    await tools
+      .get('write')
+      .execute('allowed', { path: 'file.txt', content: 'yes' });
+    assert.equal(fs.readFileSync(path.join(cwd, 'file.txt'), 'utf8'), 'yes');
+    const external = path.join(root, 'external.txt');
+    fs.writeFileSync(external, 'external');
+    await tools.get('read').execute('external', { path: external });
+    assert.equal(
+      requests,
+      2,
+      'external file approval does not also require workspace permission',
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

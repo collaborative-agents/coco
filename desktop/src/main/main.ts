@@ -100,6 +100,8 @@ import {
   type ModelConnection,
 } from './model-config-store';
 import AgentRuns from './services/agent-runs';
+import PiHarness from './services/pi-harness';
+import WorkspacePermissions from './services/workspace-permissions';
 import ChatStreamStore from './services/chat-stream-store';
 import { parseAgentActivity } from '../shared/agent-execution';
 import { getSystemPermissionWarning, systemPermissionButtonLabel, systemPermissionExplanation } from './system-permission-warning';
@@ -114,7 +116,7 @@ import type {
 } from '../renderer/components/observation-types';
 
 const dotenv = require('dotenv');
-const agentRuns = new AgentRuns();
+const agentRuns = new AgentRuns(() => new PiHarness(workspacePermissions()));
 const chatStreams = new ChatStreamStore();
 registerPiProvider(() => agentRuns.busy, () => agentRuns.dispose());
 const piBridgeToken = randomUUID();
@@ -441,10 +443,14 @@ ipcMain.handle('curated-skills-import', async (event) => {
 });
 ipcMain.handle('token-usage', () => tokenUsage().read());
 
+function workspacePermissions() {
+  return new WorkspacePermissions(app.getPath('userData'));
+}
+
 function commandApprovalRules() {
   return new CommandApprovalRules(app.getPath('userData'), 'local');
 }
-for (const channel of ['list-command-approvals', 'revoke-command-approval']) {
+for (const channel of ['list-command-approvals', 'revoke-command-approval', 'revoke-file-approval']) {
   ipcMain.handle(channel, (event, sessionId: string | null, ruleId?: string) => {
     if (!chatWindow || event.sender !== chatWindow.webContents) throw new Error('Open permissions from the chat window.');
     if (sessionId !== null && typeof sessionId !== 'string') throw new Error('Invalid conversation.');
@@ -454,7 +460,13 @@ for (const channel of ['list-command-approvals', 'revoke-command-approval']) {
       if (typeof ruleId !== 'string') throw new Error('Invalid permission rule.');
       rules.revoke(directory, ruleId);
     }
-    return { directory, rules: rules.list(directory) };
+    if (channel === 'revoke-file-approval') {
+      if (typeof ruleId !== 'string') throw new Error('Invalid permission rule.');
+      const grant = workspacePermissions().list(directory).find(rule => rule.id === ruleId);
+      if (grant?.kind !== 'path') throw new Error('Invalid file permission rule.');
+      workspacePermissions().revoke(directory, ruleId);
+    }
+    return { directory, rules: rules.list(directory), fileRules: workspacePermissions().list(directory).filter(rule => rule.kind === 'path') };
   });
 }
 
@@ -464,7 +476,7 @@ ipcMain.handle(
     directory: agentDirectory(sessionId),
     accessGranted: Boolean(
       sessionId &&
-        agentRuns.get(sessionId).hasWorkspaceAccess(agentDirectory(sessionId)),
+        workspacePermissions().hasWorkspace(agentDirectory(sessionId)),
     ),
   }),
 );
@@ -487,11 +499,11 @@ ipcMain.handle(
     if (agentRuns.has(sessionId))
       throw new Error('Stop the current run before changing folders.');
     const directory = fs.realpathSync(result.filePaths[0]);
-    await agentRuns.get(sessionId).revokeWorkspaceAccess();
+    await agentRuns.release(sessionId);
     if (agentRuns.has(sessionId))
       throw new Error('Stop the current run before changing folders.');
     saveConversationDirectory(sessionId, directory);
-    return { directory, accessGranted: false };
+    return { directory, accessGranted: workspacePermissions().hasWorkspace(directory) };
   },
 );
 ipcMain.handle('revoke-agent-workspace', async (_event, sessionId: string) => {
@@ -499,8 +511,10 @@ ipcMain.handle('revoke-agent-workspace', async (_event, sessionId: string) => {
     throw new Error('Open a conversation first.');
   if (agentRuns.has(sessionId))
     throw new Error('Stop the current run before revoking access.');
-  await agentRuns.get(sessionId).revokeWorkspaceAccess();
-  return { directory: agentDirectory(sessionId), accessGranted: false };
+  const directory = agentDirectory(sessionId);
+  workspacePermissions().revokeWorkspace(directory);
+  await agentRuns.revokeWorkspace(directory);
+  return { directory, accessGranted: false };
 });
 // Explain supplied text without starting an agent run or changing a conversation.
 ipcMain.handle('explain-tool-command', async (_event, payload: unknown) => {

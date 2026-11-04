@@ -6,11 +6,24 @@ export interface CommandApprovalRule {
   prefix: string[];
 }
 
+export interface FileAccess {
+  path: string;
+  scope: 'file' | 'directory';
+  mode: 'read' | 'write';
+}
+export interface WorkspacePermissionRule {
+  id: string;
+  directory: string;
+  kind: 'workspace' | 'path';
+  fileAccess?: FileAccess;
+}
+
 export interface PermissionRequest {
   suggestedPrefix?: string[];
   approvalSource?: 'saved-rule';
   id: string;
-  kind: 'workspace' | 'action';
+  kind: 'workspace' | 'action' | 'path';
+  fileAccess?: FileAccess;
   directory: string;
   tool?: string;
   arguments?: Record<string, unknown>;
@@ -41,11 +54,16 @@ export function parseAgentActivity(
       if (
         !request ||
         typeof request.id !== 'string' ||
-        !['workspace', 'action'].includes(request.kind) ||
+        !['workspace', 'action', 'path'].includes(request.kind) ||
         typeof request.directory !== 'string' ||
         !['pending', 'allowed', 'denied', 'cancelled'].includes(
           request.status,
         ) ||
+        (request.kind === 'path' &&
+          (!request.fileAccess ||
+            typeof request.fileAccess.path !== 'string' ||
+            !['file', 'directory'].includes(request.fileAccess.scope) ||
+            !['read', 'write'].includes(request.fileAccess.mode))) ||
         (request.kind === 'action' &&
           (typeof request.tool !== 'string' ||
             !request.arguments ||

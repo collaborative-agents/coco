@@ -1,8 +1,13 @@
+import type WorkspacePermissions from './workspace-permissions';
 import { randomUUID } from 'crypto';
 import CommandApprovalRules, { commandPrefix } from './command-approval-rules';
-import type { PermissionRequest } from '../../shared/agent-execution';
+import type {
+  PermissionRequest,
+  FileAccess,
+} from '../../shared/agent-execution';
 
 export interface ActionApproval {
+  fileAccess?: FileAccess;
   toolCallId: string;
   tool: string;
   arguments: Record<string, unknown>;
@@ -16,6 +21,7 @@ export default class AgentPermissions {
     {
       finish: (status: PermissionRequest['status']) => void;
       remember: () => void;
+      workspace: boolean;
     }
   >();
 
@@ -24,6 +30,7 @@ export default class AgentPermissions {
   constructor(
     publish: (request: PermissionRequest) => void,
     private readonly rules?: CommandApprovalRules,
+    private readonly workspaces?: WorkspacePermissions,
   ) {
     this.publish = publish;
   }
@@ -38,6 +45,21 @@ export default class AgentPermissions {
       id: randomUUID(),
       status: 'pending',
     };
+    if (
+      this.workspaces &&
+      ((input.kind === 'workspace' &&
+        this.workspaces.hasWorkspace(input.directory)) ||
+        (input.kind === 'path' &&
+          input.fileAccess &&
+          this.workspaces.matches(input.directory, input.fileAccess)))
+    ) {
+      this.publish({
+        ...request,
+        status: 'allowed',
+        approvalSource: 'saved-rule',
+      });
+      return Promise.resolve(true);
+    }
     if (input.kind === 'action' && input.tool === 'bash' && this.rules) {
       request.suggestedPrefix =
         commandPrefix(input.arguments?.command) ?? undefined;
@@ -60,8 +82,22 @@ export default class AgentPermissions {
       };
       this.pending.set(request.id, {
         finish,
+        workspace: request.kind === 'workspace' && Boolean(this.workspaces),
         remember: () => {
-          if (!this.rules || !request.suggestedPrefix || signal.aborted)
+          if (signal.aborted) throw new Error('Operation aborted');
+          if (this.workspaces && request.kind === 'workspace') {
+            this.workspaces.allowWorkspace(request.directory);
+            return;
+          }
+          if (
+            this.workspaces &&
+            request.kind === 'path' &&
+            request.fileAccess
+          ) {
+            this.workspaces.allow(request.directory, request.fileAccess);
+            return;
+          }
+          if (!this.rules || !request.suggestedPrefix)
             throw new Error(
               'Reusable approval is unavailable for this request.',
             );
@@ -79,7 +115,8 @@ export default class AgentPermissions {
     const pending = this.pending.get(id);
     if (!pending)
       throw new Error('This permission request is no longer active.');
-    if (allow === 'always') pending.remember();
+    if (allow === 'always' || (allow === true && pending.workspace))
+      pending.remember();
     pending.finish(allow ? 'allowed' : 'denied');
   }
 

@@ -151,3 +151,44 @@ test('hides commands automatically allowed by a saved workspace rule', () => {
   expect(screen.queryByText('git push origin main')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
 });
+
+test('outside file prompt shows read scope and offers workspace-specific persistence', async () => {
+  render(
+    <PermissionCard
+      request={{
+        ...request,
+        kind: 'path',
+        tool: 'read',
+        arguments: { path: '/other/report.txt' },
+        fileAccess: { path: '/other/report.txt', scope: 'file', mode: 'read' },
+      }}
+      requestId="run-1"
+      interactive
+    />,
+  );
+  expect(screen.getByText('Allow read access?')).toBeTruthy();
+  expect(screen.getByText('/other/report.txt')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Always allow in this workspace' }),
+  );
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      'answer-agent-permission',
+      'run-1',
+      'approval-1',
+      'always',
+    ),
+  );
+});
+
+test('workspace prompt explains that the grant survives chats and restarts', () => {
+  render(
+    <PermissionCard
+      request={{ ...request, kind: 'workspace', tool: undefined }}
+      requestId="run-1"
+      interactive
+    />,
+  );
+  expect(screen.getByText(/remembered across chats and restarts/)).toBeTruthy();
+});

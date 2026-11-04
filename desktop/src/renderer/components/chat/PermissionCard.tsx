@@ -15,6 +15,7 @@ export default function PermissionCard({
   const [decision, setDecision] = useState<boolean | null>(null);
   const [error, setError] = useState('');
   const workspace = request.kind === 'workspace';
+  const file = request.kind === 'path';
   const shell = request.tool === 'bash';
   const pending =
     request.status === 'pending' &&
@@ -28,7 +29,9 @@ export default function PermissionCard({
     status = decision ? 'allowed' : 'denied';
   const title = workspace
     ? 'Allow folder access?'
-    : `Allow ${shell ? 'this command' : request.tool}?`;
+    : file
+      ? `Allow ${request.fileAccess?.mode === 'write' ? 'read and edit' : 'read'} access?`
+      : `Allow ${shell ? 'this command' : request.tool}?`;
 
   let scopeHint = 'Approval applies to this action only.';
   if (request.suggestedPrefix)
@@ -36,7 +39,10 @@ export default function PermissionCard({
       'Allow once, or save the displayed command rule for this workspace.';
   if (workspace)
     scopeHint =
-      'Coco can read, create, and edit files in this folder for this conversation until you revoke access or quit Coco.';
+      'Coco can read, create, and edit files in this folder. This grant is remembered across chats and restarts until you revoke it.';
+
+  if (file)
+    scopeHint = `Access applies to this ${request.fileAccess?.scope === 'directory' ? 'folder and its contents' : 'file'}. Allow once, or remember it for this workspace across chats and restarts.`;
 
   const answer = async (allow: boolean | 'always') => {
     if (!pending || submitting) return;
@@ -92,15 +98,20 @@ export default function PermissionCard({
         <span role="status">{status}</span>
       </div>
       <div className="agent-permission-directory">{request.directory}</div>
-      {!workspace && (
+      {!workspace && !file && (
         <pre className="agent-permission-command">
           {shell
             ? String(request.arguments?.command ?? '')
             : JSON.stringify(request.arguments, null, 2)}
         </pre>
       )}
+      {file && (
+        <div className="agent-permission-directory">
+          {request.fileAccess?.path}
+        </div>
+      )}
       <p>{scopeHint}</p>
-      {!workspace && (
+      {!workspace && !file && (
         <p className="agent-permission-note">
           {shell
             ? 'This command can access files outside this folder, use the network, and change external services.'
@@ -116,6 +127,15 @@ export default function PermissionCard({
           >
             Deny
           </button>
+          {file && (
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => answer('always')}
+            >
+              Always allow in this workspace
+            </button>
+          )}
           {shell && request.suggestedPrefix && (
             <button
               type="button"

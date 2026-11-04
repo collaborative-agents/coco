@@ -78,6 +78,15 @@ export default class AgentRuns {
     this.get(request.sessionId).answerPermission(id, allow);
   }
 
+  async revokeWorkspace(directory: string) {
+    const selected = [...this.harnesses.values()].filter((harness) =>
+      harness.usesWorkspace(directory),
+    );
+    await Promise.all(
+      selected.map((harness) => harness.revokeWorkspaceAccess(directory)),
+    );
+  }
+
   async release(sessionId: string) {
     const harness = this.harnesses.get(sessionId);
     await harness?.dispose();

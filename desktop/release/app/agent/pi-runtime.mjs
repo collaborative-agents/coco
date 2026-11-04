@@ -20,8 +20,10 @@ Carry out the user's requested work using the available tools. For multi-step wo
 give short progress updates and continue until finished or you need user input.
 Answer in Markdown, with a clear final result and paths to files you created.
 You can use read, write, edit and bash directly; do not delegate back to another AI.
-File tools can only access the explicitly approved working folder. To access another
-folder, ask the user to choose it in the folder picker. Bash commands require approval unless a saved command rule applies.
+File tools can access the approved working folder. For files outside it, call the
+normal file tool: Coco will request permission for that path, or reuse a saved
+workspace-specific grant. Do not ask the user to change workspaces just to read
+or edit another file. Bash commands require approval unless a saved command rule applies.
 Shell execution is not sandboxed. Prefer file
 tools for ordinary reads and edits. Before requesting commands that send messages,
 publish, or change external services, prepare the concrete action for review.
@@ -49,6 +51,7 @@ export async function createRuntime({
   token,
   context,
   requestApproval,
+  requestWorkspaceAccess,
   connection = { mode: 'coco' },
   skillPaths = [],
   authoring = false,
@@ -142,7 +145,12 @@ export async function createRuntime({
     'get_user_context',
     'get_recent_observations',
   ]);
-  const guardedTools = createPermissionTools(cwd, requestApproval, skillPaths);
+  const guardedTools = createPermissionTools(
+    cwd,
+    requestApproval,
+    skillPaths,
+    requestWorkspaceAccess,
+  );
   const reservedNames = new Set([
     ...guardedTools.map((tool) => tool.name),
     'ask_user_question',

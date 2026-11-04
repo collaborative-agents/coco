@@ -135,7 +135,12 @@ test('pi executes built-in and Coco tools, resumes its session, and aborts', asy
     history: [],
     tools,
   };
+  let workspaceRequests = 0;
   const options = {
+    requestWorkspaceAccess: async () => {
+      workspaceRequests++;
+      return true;
+    },
     cwd: directory,
     sessionId: 'test-session',
     dataDir: directory,
@@ -146,6 +151,11 @@ test('pi executes built-in and Coco tools, resumes its session, and aborts', asy
   let runtime;
   try {
     runtime = await createRuntime(options);
+    assert.equal(
+      workspaceRequests,
+      0,
+      'Creating a runtime must not request workspace access',
+    );
     const events = [];
     runtime.subscribe((event) => {
       events.push(event);
@@ -168,6 +178,10 @@ test('pi executes built-in and Coco tools, resumes its session, and aborts', asy
       }
     });
     await runtime.prompt('Create the file.', [], context);
+    assert.ok(
+      workspaceRequests > 0,
+      'File tools must check workspace access before execution',
+    );
     const requestsBeforeInspect = requestCount;
     const inspected = runtime.getContextSnapshot();
     assert.ok(inspected.estimatedTokens > 0);

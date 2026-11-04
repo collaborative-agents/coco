@@ -31,7 +31,7 @@ export function canonicalPath(target) {
   }
 }
 
-export function workspacePath(cwd, input = '.') {
+function resolveInput(cwd, input = '.') {
   if (typeof input !== 'string' || input.includes('\0'))
     throw new Error('Invalid file path.');
   let value = input
@@ -40,6 +40,11 @@ export function workspacePath(cwd, input = '.') {
   if (value === '~' || value.startsWith('~/'))
     value = path.join(os.homedir(), value.slice(1));
   const resolved = canonicalPath(path.resolve(cwd, value));
+  return resolved;
+}
+
+export function workspacePath(cwd, input = '.') {
+  const resolved = resolveInput(cwd, input);
   const relative = path.relative(cwd, resolved);
   if (
     relative === '..' ||
@@ -52,24 +57,28 @@ export function workspacePath(cwd, input = '.') {
   return resolved;
 }
 
-export function createPermissionTools(cwd, requestApproval, skillPaths = []) {
+export function createPermissionTools(
+  cwd,
+  requestApproval,
+  skillPaths = [],
+  requestWorkspaceAccess,
+) {
   const readableSkills = skillPaths.map((root) => fs.realpathSync(root));
-  const check = (target) => workspacePath(cwd, target);
-  const checkRead = (target) => {
-    for (const root of readableSkills) {
-      try {
-        return workspacePath(root, path.resolve(cwd, target));
-      } catch {
-        /* Try the workspace next. */
-      }
-    }
-    return check(target);
+  const within = (root, target) => {
+    const relative = path.relative(root, target);
+    return (
+      relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    );
   };
-  const readFile = async (target) => fs.promises.readFile(check(target));
-  const writeFile = async (target, content) =>
-    fs.promises.writeFile(check(target), content);
-  const access = async (target) => fs.promises.access(check(target));
-  const tools = [
+  const implicit = (target, mode) =>
+    within(cwd, target) ||
+    (mode === 'read' && readableSkills.some((root) => within(root, target)));
+
+  // Each invocation receives its own scope. A one-time grant never leaks to
+  // concurrent tools, later calls, sibling files, or another chat.
+  const build = (check, checkRead, mkdir) => [
     createReadTool(cwd, {
       operations: {
         readFile: async (target) => fs.promises.readFile(checkRead(target)),
@@ -80,42 +89,120 @@ export function createPermissionTools(cwd, requestApproval, skillPaths = []) {
     }),
     createWriteTool(cwd, {
       operations: {
-        writeFile,
-        mkdir: async (target) => {
-          await fs.promises.mkdir(check(target), { recursive: true });
-        },
+        writeFile: async (target, content) =>
+          fs.promises.writeFile(check(target), content),
+        mkdir,
       },
     }),
-    createEditTool(cwd, { operations: { readFile, writeFile, access } }),
-    // These SDK searches do not follow directory symlinks. Explicit roots are
-    // checked below; grep's context-file reads are checked again at use time.
+    createEditTool(cwd, {
+      operations: {
+        readFile: async (target) => fs.promises.readFile(check(target)),
+        writeFile: async (target, content) =>
+          fs.promises.writeFile(check(target), content),
+        access: async (target) => fs.promises.access(check(target)),
+      },
+    }),
+    // The SDK searches do not follow directory symlinks. Context reads are
+    // checked again at use time, including paths discovered by grep.
     createGrepTool(cwd, {
       operations: {
-        isDirectory: (target) => fs.statSync(check(target)).isDirectory(),
-        readFile: (target) => fs.readFileSync(check(target), 'utf8'),
+        isDirectory: (target) => fs.statSync(checkRead(target)).isDirectory(),
+        readFile: (target) => fs.readFileSync(checkRead(target), 'utf8'),
       },
     }),
     createFindTool(cwd),
     createLsTool(cwd, {
       operations: {
-        exists: (target) => fs.existsSync(check(target)),
-        stat: (target) => fs.promises.stat(check(target)),
-        readdir: (target) => fs.promises.readdir(check(target)),
+        exists: (target) => fs.existsSync(checkRead(target)),
+        stat: (target) => fs.promises.stat(checkRead(target)),
+        readdir: (target) => fs.promises.readdir(checkRead(target)),
       },
     }),
   ];
+  const unavailable = () => {
+    throw new Error('Permission scope has not been established.');
+  };
   return [
-    ...tools.map((tool) => ({
+    ...build(unavailable, unavailable, unavailable).map((tool) => ({
       ...tool,
-      execute(id, args, signal, update) {
+      async execute(id, args, signal, update) {
         if (signal?.aborted) throw new Error('Operation aborted');
-        const checkTarget = tool.name === 'read' ? checkRead : check;
-        const target = checkTarget(args.path ?? '.');
-        // SDK tools normalize paths again. Refuse aliases whose normalization
-        // changes a canonical path (for example a directory with Unicode spaces).
-        if (checkTarget(target) !== target)
+        const approvedArgs = structuredClone(args);
+        const target = resolveInput(cwd, approvedArgs.path ?? '.');
+        if (resolveInput(cwd, target) !== target)
           throw new Error('Permission denied: ambiguous normalized path.');
-        return tool.execute(id, { ...args, path: target }, signal, update);
+        const mode = ['write', 'edit'].includes(tool.name) ? 'write' : 'read';
+        if (within(cwd, target) && requestWorkspaceAccess) {
+          const allowed = await requestWorkspaceAccess(signal);
+          if (signal?.aborted) throw new Error('Operation aborted');
+          if (allowed !== true)
+            throw new Error(
+              'Permission denied by user. Do not retry this action through another tool.',
+            );
+        }
+
+        let grant;
+        if (!implicit(target, mode)) {
+          let scope = ['ls', 'find'].includes(tool.name) ? 'directory' : 'file';
+          try {
+            scope = fs.statSync(target).isDirectory() ? 'directory' : 'file';
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
+          const fileAccess = { path: target, mode, scope };
+          const allowed = await requestApproval?.(
+            {
+              toolCallId: id,
+              tool: tool.name,
+              directory: cwd,
+              arguments: { ...structuredClone(approvedArgs), path: target },
+              fileAccess: structuredClone(fileAccess),
+            },
+            signal,
+          );
+          if (signal?.aborted) throw new Error('Operation aborted');
+          if (allowed !== true)
+            throw new Error(
+              'Permission denied by user. Do not retry this action through another tool.',
+            );
+          grant = fileAccess;
+        }
+        if (resolveInput(cwd, approvedArgs.path ?? '.') !== target)
+          throw new Error(
+            'Permission denied: path changed while waiting for approval.',
+          );
+        const checked = (input, operationMode) => {
+          const resolved = resolveInput(cwd, input);
+          if (
+            implicit(resolved, operationMode) ||
+            (grant &&
+              (grant.mode === 'write' || operationMode === 'read') &&
+              (resolved === grant.path ||
+                (grant.scope === 'directory' && within(grant.path, resolved))))
+          )
+            return resolved;
+          throw new Error(
+            'Permission denied: path is outside the approved scope.',
+          );
+        };
+        const tools = build(
+          (input) => checked(input, 'write'),
+          (input) => checked(input, 'read'),
+          async (input) => {
+            const resolved = resolveInput(cwd, input);
+            // write creates only the requested file's parents, not a reusable
+            // permission to write siblings in the containing directory.
+            if (tool.name !== 'write' || resolved !== path.dirname(target))
+              throw new Error(
+                'Permission denied: unexpected parent directory.',
+              );
+            checked(target, 'write');
+            await fs.promises.mkdir(resolved, { recursive: true });
+          },
+        );
+        return tools
+          .find((candidate) => candidate.name === tool.name)
+          .execute(id, { ...approvedArgs, path: target }, signal, update);
       },
     })),
     requireApproval(createBashTool(cwd), cwd, requestApproval),
