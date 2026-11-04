@@ -3,6 +3,7 @@ import cocoIcon from '../../../../assets/icon.png';
 import WorkspaceIcon from './WorkspaceIcon';
 import WindowControls from './WindowControls';
 import './DesktopWorkspace.css';
+import '../../theme/scrollbars.css';
 
 interface Props {
   expanded: boolean;

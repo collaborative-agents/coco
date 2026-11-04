@@ -83,11 +83,22 @@ describe('PersonalizationCenterService', () => {
     center = new PersonalizationCenterService(stateRoot, drafts);
   });
 
+  it('persists active edits and rejects stale overwrites', () => {
+    const file = path.join(stateRoot, 'evolved-memory.md');
+    fs.writeFileSync(file, '## Preferences\n- Original.');
+    center.saveActiveMemory('## Preferences\n- Original.', '## Preferences\n- Edited.');
+    expect(center.snapshot().activeMemory.content).toBe('## Preferences\n- Edited.');
+    expect(() => center.saveActiveMemory('## Preferences\n- Original.', '')).toThrow('Preferences changed');
+    center.saveActiveMemory('## Preferences\n- Edited.', '');
+    expect(center.snapshot().activeMemory.content).toBe('');
+  });
+
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
   it('exposes checkpoint activity and provisional preferences', () => {
     const snapshot = center.snapshot();
 
+    expect(snapshot.activeMemory.content).toBe('');
     expect(snapshot.provisional).toEqual([
       expect.objectContaining({
         id: 'm-001',
@@ -128,6 +139,8 @@ describe('PersonalizationCenterService', () => {
     expect(applied.memory).toContain('Offer help with reports.');
     expect(applied.memory).toContain('Stay quiet during focused reading.');
     expect(applied.memory).not.toContain('Never interrupt focused work.');
+    expect(center.snapshot().activeMemory.content).toBe(applied.memory);
+    expect(center.snapshot().activeMemory.updatedAt).toBeGreaterThan(0);
     expect(center.snapshot().review).toBeNull();
     expect(center.snapshot().history[0].draftId).toBe('draft-1');
   });

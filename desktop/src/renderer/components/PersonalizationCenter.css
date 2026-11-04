@@ -177,6 +177,7 @@
 }
 
 .personalization-center {
+  --personalization-inset: clamp(24px, 3.5vw, 38px);
   position: relative;
   height: 100%;
   min-width: 0;
@@ -184,7 +185,7 @@
   display: flex;
   min-height: 0;
   flex-direction: column;
-  background: #f5f7fb;
+  background: var(--coco-color-surface);
   color: var(--coco-color-text);
   font-size: var(--coco-text-body);
   line-height: var(--coco-leading-body);
@@ -197,9 +198,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--coco-space-4);
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--pc-border);
-  background: #fff;
+  padding: 20px var(--personalization-inset) 12px;
+  background: var(--coco-color-surface);
 }
 
 .personalization-center__growth-count {
@@ -243,7 +243,7 @@
 .personalization-center__body {
   min-height: 0;
   flex: 1;
-  padding: 14px 18px 18px;
+  padding: 28px var(--personalization-inset) 32px;
   overflow-y: auto;
 }
 

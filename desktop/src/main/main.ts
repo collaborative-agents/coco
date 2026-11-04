@@ -2761,6 +2761,48 @@ ipcMain.handle('get-personalization-status', () => ({
   },
 }));
 
+ipcMain.handle('get-observer-context', async (_event, input: { query?: string; offset?: number; groupBy?: string; group?: string; trail?: string[] } = {}) => {
+  const query = typeof input.query === 'string' ? input.query.slice(0, 200) : '';
+  const offset = Number.isInteger(input.offset) && input.offset! >= 0 ? input.offset : 0;
+  try {
+    const response = await axios.get(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/context/observer`, {
+      params: { query, offset, limit: 20, group_by: ["topic", "date", "app"].includes(input.groupBy ?? "") ? input.groupBy : "topic", trail: JSON.stringify(Array.isArray(input.trail) ? input.trail.slice(0, 32).map(key => String(key).slice(0, 160)) : []) }, timeout: 8000,
+    });
+    return { success: true, ...response.data };
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 400 && typeof error.response.data?.detail === 'string') {
+      return { success: false, error: error.response.data.detail };
+    }
+    return { success: false, error: 'Saved context could not be loaded. Check that Coco’s local service is running, then try again.' };
+  }
+});
+
+ipcMain.handle('save-active-preferences', async (_event, input: { expected: string; content: string }) => {
+  try {
+    initializeDailyMemoryDraftService();
+    if (!personalizationCenterService) throw new Error('Personalization is unavailable.');
+    personalizationCenterService.saveActiveMemory(input.expected, input.content);
+    let warning: string | undefined;
+    try {
+      await axios.post(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/context/evolved_memory`, { memory: input.content }, { timeout: 8000 });
+    } catch {
+      warning = 'Saved. Restart Coco to apply this change to the active session.';
+    }
+    return { success: true, warning };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+});
+ipcMain.handle('change-observer-insight', async (_event, input: { id: number; expected: string; text: string | null }) => {
+  try {
+    await axios.post(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/context/observer/${input.id}`, { expected: input.expected, text: input.text }, { timeout: 8000 });
+    return { success: true };
+  } catch (error) {
+    const detail = axios.isAxiosError(error) ? error.response?.data?.detail : undefined;
+    return { success: false, error: typeof detail === 'string' ? detail : 'The insight could not be saved. Please try again.' };
+  }
+});
+
 ipcMain.removeHandler('get-personalization-center');
 ipcMain.handle('get-personalization-center', () => {
   initializeDailyMemoryDraftService();

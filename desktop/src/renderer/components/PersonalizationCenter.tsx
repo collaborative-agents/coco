@@ -1,3 +1,4 @@
+import { LearnedPreferences, ObserverContext, type ActivePersonalizationMemory } from './PersonalizationKnowledge';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import sleepImage from '../../../assets/sleep1.png';
@@ -5,6 +6,7 @@ import trainingAnimation from '../../../assets/training.gif';
 import { AnimatedCocoGif } from './CocoGifControls';
 import useProvisionalDiscovery from './useProvisionalDiscovery';
 import './PersonalizationCenter.css';
+import '../theme/scrollbars.css';
 
 export interface PersonalizationStatusInfo {
   available: boolean;
@@ -65,6 +67,7 @@ interface DraftBullet {
 }
 
 interface CenterSnapshot {
+  activeMemory?: ActivePersonalizationMemory;
   provisional: Array<{
     id: string;
     section: string;
@@ -422,6 +425,7 @@ export default function PersonalizationCenter({
 }: {
   onBack: () => void;
 }) {
+  const [view, setView] = useState<'preferences' | 'observer' | 'learning'>('preferences');
   const [response, setResponse] = useState<CenterResponse | null>(null);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -681,7 +685,7 @@ export default function PersonalizationCenter({
       <header className="personalization-center__header">
         <div>
           <h1>Personalization</h1>
-          <p>See what Coco is learning and review updates</p>
+          <p>Your preferences, your context, and what Coco learns next</p>
         </div>
         {runStatus && (
           <span className="personalization-center__growth-count">
@@ -699,7 +703,15 @@ export default function PersonalizationCenter({
         </div>
       )}
 
-      <div className="personalization-center__body">
+      <nav className="personalization-views" aria-label="Personalization views">
+        {([['preferences', 'Learned preferences'], ['observer', 'Observer context'], ['learning', 'Learning & review']] as const).map(([id, label]) => (
+          <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => setView(id)}>{label}</button>
+        ))}
+      </nav>
+      {view !== 'learning' && <div className="personalization-knowledge-scroll">
+        {view === 'preferences' ? <LearnedPreferences onChanged={refresh} memory={response?.center?.activeMemory} pendingCount={bullets.length} onReview={() => setView('learning')} /> : <ObserverContext />}
+      </div>}
+      {view === 'learning' && <div className="personalization-center__body">
         <section
           className={`personalization-overview personalization-overview--${runStatus?.state ?? 'idle'}`}
         >
@@ -992,7 +1004,7 @@ export default function PersonalizationCenter({
             </section>
           )}
         </div>
-      </div>
+      </div>}
     </main>
   );
 }

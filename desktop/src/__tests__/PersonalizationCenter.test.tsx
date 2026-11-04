@@ -28,6 +28,7 @@ const status = {
 };
 
 const center = {
+  activeMemory: { content: '' },
   provisional: [
     {
       id: 'm-1',
@@ -127,6 +128,7 @@ describe('PersonalizationCenter', () => {
       },
     };
     render(<PersonalizationCenter onBack={jest.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Learning & review' }));
     expect(await screen.findByText(
       `${count} successful ${count === 1 ? 'update' : 'updates'}`,
     )).toBeVisible();
@@ -145,6 +147,7 @@ describe('PersonalizationCenter', () => {
     };
 
     render(<PersonalizationCenter onBack={jest.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Learning & review' }));
 
     expect(
       await screen.findByLabelText('Summarize: current'),
@@ -180,6 +183,7 @@ describe('PersonalizationCenter', () => {
     };
 
     render(<PersonalizationCenter onBack={jest.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Learning & review' }));
 
     expect(
       await screen.findByText('Preparing the learning run'),
@@ -232,12 +236,13 @@ describe('PersonalizationCenter', () => {
     };
 
     render(<PersonalizationCenter onBack={jest.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Learning & review' }));
 
     expect(
       await screen.findByText('8 of 16 moments processed'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('See what Coco is learning and review updates'),
+      screen.getByText('Your preferences, your context, and what Coco learns next'),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Refresh' }),

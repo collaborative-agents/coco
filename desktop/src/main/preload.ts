@@ -10,6 +10,9 @@ import {
 export type Channels =
   | 'claim-daily-memory-review'
   | 'get-personalization-status'
+  | 'get-observer-context'
+  | 'save-active-preferences'
+  | 'change-observer-insight'
   | 'get-personalization-center'
   | 'save-personalization-review-decision'
   | 'apply-personalization-review'

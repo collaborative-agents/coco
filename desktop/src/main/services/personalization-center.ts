@@ -49,6 +49,7 @@ interface EvolveCheckpoint {
 }
 
 export interface PersonalizationCenterSnapshot {
+  activeMemory: { content: string; updatedAt?: number; error?: string };
   provisional: Array<{
     id: string;
     section: string;
@@ -199,7 +200,15 @@ export class PersonalizationCenterService {
     const history = Object.entries(dailyState.approved ?? {})
       .map(([draftId, item]) => ({ draftId, ...item }))
       .sort((left, right) => right.approvedAt - left.approvedAt);
+    let activeMemory: PersonalizationCenterSnapshot['activeMemory'] = { content: '' };
+    try {
+      const memoryPath = path.join(this.stateRoot, 'evolved-memory.md');
+      activeMemory = { content: fs.readFileSync(memoryPath, 'utf8'), updatedAt: fs.statSync(memoryPath).mtimeMs / 1000 };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') activeMemory.error = 'Approved preferences could not be read.';
+    }
     return {
+      activeMemory,
       provisional,
       activity,
       review: draft
@@ -210,6 +219,18 @@ export class PersonalizationCenterService {
         : null,
       history,
     };
+  }
+
+  saveActiveMemory(expected: string, content: string): void {
+    if (typeof expected !== 'string' || typeof content !== 'string' || content.length > 1_000_000) {
+      throw new Error('Invalid preference content.');
+    }
+    const file = path.join(this.stateRoot, 'evolved-memory.md');
+    if (fs.readFileSync(file, 'utf8') !== expected) {
+      throw new Error('Preferences changed while you were editing. Cancel and reopen the editor to try again.');
+    }
+    fs.writeFileSync(`${file}.tmp`, content, 'utf8');
+    fs.renameSync(`${file}.tmp`, file);
   }
 
   saveDecision(input: {
