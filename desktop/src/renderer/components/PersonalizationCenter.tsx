@@ -426,6 +426,8 @@ export default function PersonalizationCenter({
   onBack: () => void;
 }) {
   const [view, setView] = useState<'preferences' | 'observer' | 'learning'>('preferences');
+  // Choose the opening tab once; polling must not override navigation.
+  const initialViewChosen = useRef(false);
   const [response, setResponse] = useState<CenterResponse | null>(null);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -444,6 +446,12 @@ export default function PersonalizationCenter({
         'get-personalization-center',
       )) as CenterResponse | undefined;
       if (!result) throw new Error('No personalization status was returned.');
+      if (!initialViewChosen.current) {
+        initialViewChosen.current = true;
+        if (result.status.state === 'running' || result.status.state === 'checkpointed') {
+          setView('learning');
+        }
+      }
       setResponse(result);
       setError('');
     } catch (refreshError) {
@@ -705,7 +713,7 @@ export default function PersonalizationCenter({
 
       <nav className="personalization-views" aria-label="Personalization views">
         {([['preferences', 'Learned preferences'], ['observer', 'Observer context'], ['learning', 'Learning & review']] as const).map(([id, label]) => (
-          <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => setView(id)}>{label}</button>
+          <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => { initialViewChosen.current = true; setView(id); }}>{label}</button>
         ))}
       </nav>
       {view !== 'learning' && <div className="personalization-knowledge-scroll">

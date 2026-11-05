@@ -178,6 +178,30 @@ export function renderEvolvedMemory(draft: DailyMemoryDraft): string {
   return `${lines.join('\n')}\n`;
 }
 
+/** Keep existing memory (including manual edits) and append only new preferences. */
+export function mergeReviewedMemory(
+  existing: string,
+  draft: DailyMemoryDraft,
+): string {
+  const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
+  const known = new Set(
+    existing
+      .split('\n')
+      .filter((line) => line.startsWith('- '))
+      .map((line) => normalize(line.slice(2))),
+  );
+  const bullets = draft.bullets.filter((bullet) => {
+    const content = normalize(bullet.content);
+    if (!content || known.has(content)) return false;
+    known.add(content);
+    return true;
+  });
+  if (!bullets.length) return existing;
+  const addition = renderEvolvedMemory({ ...draft, bullets });
+  if (!existing.trim()) return addition;
+  return `${existing.trimEnd()}\n\n${addition}`;
+}
+
 export class DailyMemoryDraftService {
   private readonly draftsRoot: string;
 
@@ -252,13 +276,22 @@ export class DailyMemoryDraftService {
     const approvedDraft = reviewedBullets
       ? { ...draft, bullets: reviewedBullets }
       : draft;
-    const memory = renderEvolvedMemory(approvedDraft);
+    let existing = '';
+    try {
+      existing = fs.readFileSync(this.evolvedMemoryPath, 'utf8');
+    } catch (error) {
+      // A read failure must never be treated as empty memory and overwrite it.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const state = readJson<ReviewState>(this.reviewStatePath, {});
+    if (state.approved?.[draftId])
+      return { memory: existing, draft: approvedDraft };
+    const memory = mergeReviewedMemory(existing, approvedDraft);
     fs.mkdirSync(path.dirname(this.evolvedMemoryPath), { recursive: true });
     const temporary = `${this.evolvedMemoryPath}.tmp`;
     fs.writeFileSync(temporary, memory, 'utf8');
     fs.renameSync(temporary, this.evolvedMemoryPath);
 
-    const state = readJson<ReviewState>(this.reviewStatePath, {});
     state.approved = {
       ...(state.approved ?? {}),
       [draft.draftId]: { approvedAt: nowMs / 1000, periodEnd: draft.periodEnd },

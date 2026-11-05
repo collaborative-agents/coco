@@ -80,10 +80,7 @@ describe('DailyMemoryDraftService', () => {
       'User-written note\n',
     );
     expect(
-      fs.readFileSync(
-        path.join(stateRoot, 'evolved-memory.md'),
-        'utf8',
-      ),
+      fs.readFileSync(path.join(stateRoot, 'evolved-memory.md'), 'utf8'),
     ).toBe(first.memory);
 
     const replacement = {
@@ -97,6 +94,38 @@ describe('DailyMemoryDraftService', () => {
     expect(
       service.claimForToday(new Date(2026, 7, 18, 9).getTime()),
     ).toBeNull();
+  });
+
+  it('keeps earlier approved preferences and manual edits across reviews', () => {
+    writeDraft(root, 'first', 100, 'Offer help with reports');
+    writeDraft(root, 'second', 200, 'Use concise explanations');
+    const service = new DailyMemoryDraftService(root, stateRoot);
+    const first = service.approve('first');
+    const file = path.join(stateRoot, 'evolved-memory.md');
+    fs.appendFileSync(file, '\nMy manually edited preference.\n');
+    const second = service.approve('second');
+    expect(second.memory).toContain(first.memory.trim());
+    expect(second.memory).toContain('My manually edited preference.');
+    expect(second.memory).toContain('Use concise explanations');
+    expect(service.approve('second').memory).toBe(second.memory);
+    expect(fs.readFileSync(file, 'utf8')).toBe(second.memory);
+  });
+
+  it('preserves memory when all new preferences are rejected', () => {
+    writeDraft(root, 'first', 100, 'Existing preference');
+    writeDraft(root, 'rejected', 200, 'Unwanted preference');
+    const service = new DailyMemoryDraftService(root, stateRoot);
+    const first = service.approve('first');
+    expect(service.approve('rejected', []).memory).toBe(first.memory);
+    expect(service.latestPending()).toBeNull();
+  });
+
+  it('does not duplicate preferences repeated by later drafts', () => {
+    writeDraft(root, 'first', 100, 'Offer help with reports');
+    writeDraft(root, 'repeat', 200, 'Offer help with reports');
+    const service = new DailyMemoryDraftService(root, stateRoot);
+    const first = service.approve('first');
+    expect(service.approve('repeat').memory).toBe(first.memory);
   });
 
   it('previews inferred insights from a development Coco-PE state fixture', () => {

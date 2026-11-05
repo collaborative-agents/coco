@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom';
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -68,6 +69,50 @@ const center = {
 };
 
 describe('PersonalizationCenter', () => {
+  it.each([
+    ['running', 'Learning & review'],
+    ['checkpointed', 'Learning & review'],
+    ['idle', 'Learned preferences'],
+    ['completed', 'Learned preferences'],
+  ])('opens %s on %s', async (state, label) => {
+    (window as any).electron = { ipcRenderer: {
+      invoke: jest.fn().mockResolvedValue({ status: { ...status, state }, center }),
+      on: jest.fn(() => jest.fn()), sendMessage: jest.fn(),
+    } };
+    render(<PersonalizationCenter onBack={jest.fn()} />);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('keeps a tab chosen while the opening status is still loading', async () => {
+    let resolve!: (value: unknown) => void;
+    const pending = new Promise(res => { resolve = res; });
+    (window as any).electron = { ipcRenderer: {
+      invoke: jest.fn((channel: string) => channel === 'get-personalization-center'
+        ? pending : Promise.resolve(null)),
+      on: jest.fn(() => jest.fn()), sendMessage: jest.fn(),
+    } };
+    render(<PersonalizationCenter onBack={jest.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Learned preferences' }));
+    await act(async () => resolve({ status, center }));
+    expect(screen.getByRole('button', { name: 'Learned preferences' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('does not switch back to learning during a status refresh', async () => {
+    jest.useFakeTimers();
+    try {
+      (window as any).electron = { ipcRenderer: {
+        invoke: jest.fn().mockResolvedValue({ status, center }),
+        on: jest.fn(() => jest.fn()), sendMessage: jest.fn(),
+      } };
+      render(<PersonalizationCenter onBack={jest.fn()} />);
+      await act(async () => {});
+      fireEvent.click(screen.getByRole('button', { name: 'Learned preferences' }));
+      await act(async () => { jest.advanceTimersByTime(2000); });
+      expect(screen.getByRole('button', { name: 'Learned preferences' })).toHaveAttribute('aria-current', 'page');
+    } finally { jest.useRealTimers(); }
+  });
+
   it('uses the workspace window controls instead of a close-to-chat button', () => {
     (window as any).electron = {
       ipcRenderer: {

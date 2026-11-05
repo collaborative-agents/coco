@@ -149,6 +149,10 @@ function sameMessage(
   );
 }
 
+function isGenericTitle(title: string): boolean {
+  return /^(general (help|chat) session|new conversation)$/i.test(title.trim());
+}
+
 export function deriveConversationTitle(
   problem: string,
   messages: StoredChatMessage[],
@@ -158,15 +162,20 @@ export function deriveConversationTitle(
     messages.find((message) => message.role === 'user' && message.text.trim())
       ?.text ?? '';
   const candidate =
-    normalizedProblem &&
-    normalizedProblem.toLowerCase() !== 'general help session'
+    normalizedProblem && !isGenericTitle(normalizedProblem)
       ? normalizedProblem
-      : firstUserMessage;
+      : firstUserMessage ||
+        messages.find(
+          (message) => message.role === 'tutor' && message.text.trim(),
+        )?.text ||
+        (messages.some((message) => message.images?.length)
+          ? 'Screenshot discussion'
+          : '');
   const cleaned = candidate
     .replace(/[`#>*_]+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!cleaned) return 'General help session';
+  if (!cleaned) return 'New conversation';
   if (cleaned.length <= 72) return cleaned;
   const shortened = cleaned.slice(0, 72);
   const lastSpace = shortened.lastIndexOf(' ');
@@ -259,7 +268,9 @@ export function readConversations(
           ),
         })),
         title:
-          typeof conversation.title === 'string' && conversation.title.trim()
+          typeof conversation.title === 'string' &&
+          conversation.title.trim() &&
+          !isGenericTitle(conversation.title)
             ? conversation.title
             : deriveConversationTitle(
                 conversation.problem,
