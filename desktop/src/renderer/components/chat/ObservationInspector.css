@@ -1,0 +1,416 @@
+.workspace-rail .activity-logo-button {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  width: 48px;
+  height: 56px;
+  margin: -3px -2px;
+  padding: 4px 0;
+  border-radius: 12px;
+  -webkit-app-region: no-drag;
+  transition: background 120ms ease;
+}
+.workspace-rail .activity-logo-button img {
+  width: 40px;
+  height: 40px;
+}
+.activity-logo-more {
+  width: 16px;
+  height: 6px;
+  flex-shrink: 0;
+  fill: currentColor;
+  color: var(--coco-color-text-muted);
+}
+.workspace-rail .activity-logo-button[aria-expanded='true'] {
+  background: var(--coco-color-surface-muted);
+}
+.activity-popover {
+  position: fixed;
+  z-index: 40;
+  width: min(380px, calc(100vw - 16px));
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--coco-color-border);
+  border-radius: 16px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-text);
+  box-shadow:
+    0 16px 48px #18212f14,
+    0 3px 10px #18212f08;
+  font-family: var(--coco-font-family);
+  -webkit-app-region: no-drag;
+}
+.activity-popover-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 22px 22px 0;
+  flex-shrink: 0;
+}
+.activity-heading {
+  flex: 1;
+}
+.activity-popover h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 24px;
+  letter-spacing: -0.2px;
+}
+.activity-popover button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.activity-popover button:hover {
+  background: var(--coco-color-surface-subtle);
+}
+.activity-popover .activity-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border-radius: 7px;
+  color: var(--coco-color-text-muted);
+  flex-shrink: 0;
+}
+.activity-close {
+  margin: -2px -6px 0 0;
+}
+.activity-popover svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.activity-popover-content {
+  overflow-y: auto;
+  min-height: 0;
+  max-height: 480px;
+  padding: 22px;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+}
+.activity-empty {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--coco-color-text-muted);
+}
+.activity-popover :focus-visible {
+  outline: 2px solid var(--coco-color-primary);
+  outline-offset: -2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-rail .activity-logo-button {
+    transition: none;
+  }
+}
+
+.activity-logo-more {
+  overflow: visible;
+}
+.activity-logo-more.is-observing circle {
+  animation: activity-dot-wave 1.5s ease-in-out infinite;
+}
+.activity-logo-more.is-observing circle:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.activity-logo-more.is-observing circle:nth-child(3) {
+  animation-delay: 0.32s;
+}
+@keyframes activity-dot-wave {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+}
+.activity-live-status {
+  font-size: 11px;
+  line-height: 24px;
+  color: var(--coco-color-text-muted);
+  margin-right: 4px;
+}
+.activity-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.activity-feed > li {
+  padding: 0 0 24px;
+}
+.activity-feed > li:last-child {
+  padding-bottom: 0;
+}
+.activity-feed-entry {
+  padding: 0 0 0 2px;
+}
+.is-latest > .activity-feed-entry {
+  padding: 14px 16px;
+  margin: -4px -4px 0 -5px;
+  background: linear-gradient(
+    135deg,
+    var(--coco-color-surface-subtle),
+    var(--coco-color-surface)
+  );
+  border: 1px solid var(--coco-color-border);
+  border-radius: 12px;
+}
+.activity-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin-bottom: 8px;
+  color: var(--coco-color-text-muted);
+  font-size: 11px;
+}
+.activity-latest-label {
+  font-weight: 600;
+  color: var(--coco-color-primary);
+}
+.activity-markdown {
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--coco-color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.activity-markdown > :first-child {
+  margin-top: 0;
+}
+.activity-markdown > :last-child {
+  margin-bottom: 0;
+}
+.activity-markdown p {
+  margin: 0 0 10px;
+}
+.activity-markdown strong {
+  color: var(--coco-color-text);
+  font-weight: 600;
+}
+.activity-markdown h1,
+.activity-markdown h2,
+.activity-markdown h3,
+.activity-markdown h4,
+.activity-markdown h5,
+.activity-markdown h6 {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
+  margin: 14px 0 6px;
+}
+.activity-markdown ul,
+.activity-markdown ol {
+  padding-left: 18px;
+  margin: 8px 0;
+}
+.activity-markdown li + li {
+  margin-top: 4px;
+}
+.activity-markdown li::marker {
+  color: var(--coco-color-accent);
+}
+.activity-markdown code {
+  font-family: var(--coco-font-mono);
+  font-size: 0.9em;
+  background: var(--coco-color-surface-muted);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.activity-markdown pre {
+  padding: 10px;
+  overflow-x: auto;
+  background: var(--coco-color-surface-muted);
+  border-radius: 8px;
+}
+.activity-markdown pre code {
+  padding: 0;
+}
+.activity-markdown blockquote {
+  margin: 10px 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--coco-color-accent-border);
+}
+.activity-markdown a {
+  color: var(--coco-color-primary);
+  text-underline-offset: 3px;
+}
+.activity-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.activity-markdown th,
+.activity-markdown td {
+  padding: 6px 8px;
+  border: 1px solid var(--coco-color-border);
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-logo-more.is-observing circle {
+    animation: none;
+  }
+}
+
+/* A translucent marker stroke leaves the letter shapes and selection intact. */
+.activity-markdown .activity-marker {
+  color: inherit;
+  font-style: normal;
+  background: linear-gradient(
+    177deg,
+    transparent 24%,
+    rgba(var(--activity-marker-rgb, 250, 211, 92), 0.38) 30%,
+    rgba(var(--activity-marker-rgb, 250, 211, 92), 0.5) 82%,
+    transparent 88%
+  );
+  padding: 0 0.08em;
+  margin: 0 -0.08em;
+  border-radius: 0.18em 0.08em 0.2em 0.1em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.activity-markdown .activity-marker-personal {
+  --activity-marker-rgb: 190, 166, 238;
+}
+
+/* Only the thumb is visible; no track, gutter line, or arrow buttons. */
+.activity-popover-content {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(107, 114, 128, 0.28) transparent;
+}
+.activity-popover-content::-webkit-scrollbar {
+  width: 6px;
+}
+.activity-popover-content::-webkit-scrollbar-track,
+.activity-popover-content::-webkit-scrollbar-corner {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.activity-popover-content::-webkit-scrollbar-thumb {
+  background: rgba(107, 114, 128, 0.28);
+  border: 0;
+  border-radius: 6px;
+}
+.activity-popover-content::-webkit-scrollbar-button {
+  display: none;
+}
+
+/* One quiet line. Its wide invisible hit area reveals time labels on demand. */
+.activity-timeline-layout {
+  display: flex;
+  min-height: 0;
+  max-height: 480px;
+  overflow: hidden;
+  margin-top: 18px;
+}
+.activity-time-index {
+  position: relative;
+  flex: 0 0 24px;
+  width: 24px;
+  min-height: 0;
+  margin: 14px 0 34px 12px;
+  z-index: 1;
+}
+.activity-time-index::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 11px;
+  width: 1px;
+  background: var(--coco-color-border);
+}
+.activity-index-hours {
+  position: absolute;
+  inset: 24px 0 0;
+}
+.activity-time-index button {
+  position: absolute;
+  left: 0;
+  width: 24px;
+  height: 12px;
+  transform: translateY(-50%);
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+.activity-time-index button::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--coco-color-text-muted);
+  transform: translateY(-50%);
+  opacity: 0;
+}
+.activity-time-index:hover button::after,
+.activity-time-index:focus-within button::after {
+  opacity: 0.35;
+}
+.activity-time-index .activity-index-now { top: 0; }
+.activity-time-index .activity-index-now::after,
+.activity-time-index button[aria-current='time']::after,
+.activity-time-index button:hover::after,
+.activity-time-index button:focus-visible::after {
+  opacity: 1;
+  background: var(--coco-color-primary);
+  box-shadow: 0 0 0 2px var(--coco-color-surface);
+}
+.activity-index-tooltip {
+  position: absolute;
+  left: 25px;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--coco-color-surface);
+  color: var(--coco-color-primary);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  visibility: hidden;
+  pointer-events: none;
+}
+.activity-time-index button:hover .activity-index-tooltip {
+  visibility: visible;
+}
+.activity-time-index button[aria-current='time'],
+.activity-time-index button:hover,
+.activity-time-index button:focus-visible {
+  z-index: 2;
+}
+.activity-timeline-layout .activity-popover-content {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 18px 22px 10px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-index-position,
+  .activity-index-tooltip,
+  .activity-time-index button::after {
+    transition: none;
+  }
+}

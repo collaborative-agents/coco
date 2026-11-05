@@ -250,7 +250,9 @@ function PetView() {
         // recording new observations in main, but do not replace the accepted
         // suggestion on the avatar surface.
         if (bubblePinnedRef.current) return;
-        if (repeatsCalm) {
+        // Watching is background activity, not a notification. Keep recording
+        // it and animating the pet without showing a passive status bubble.
+        if (incomingStatus === 'observing' || repeatsCalm) {
           // Leave the fox alone while another bubble is on screen.
           if (bubbleShownRef.current) return;
           setMood(STATUS_TO_MOOD[incomingStatus]);

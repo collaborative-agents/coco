@@ -133,7 +133,7 @@ export default function ChatTranscript({
         >
           {m.role === 'user' ? (
             <>
-              <div style={S.userBubble}>
+              <div className="chat-user-message" style={S.userBubble}>
                 {m.text}
                 {m.images && m.images.length > 0 && (
                   <div style={S.thumbRow}>

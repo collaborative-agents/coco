@@ -52,3 +52,11 @@
     opacity: 0.6;
   }
 }
+
+/* Native blue selection disappears against the outgoing message background. */
+.chat-user-message::selection,
+.chat-user-message *::selection {
+  background: #ffe3a3;
+  color: #172b45;
+  text-shadow: none;
+}

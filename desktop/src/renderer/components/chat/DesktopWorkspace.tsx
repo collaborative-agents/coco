@@ -1,6 +1,6 @@
 import { useRef, type ReactNode } from 'react';
-import cocoIcon from '../../../../assets/icon.png';
 import WorkspaceIcon from './WorkspaceIcon';
+import ObservationInspector from './ObservationInspector';
 import WindowControls from './WindowControls';
 import './DesktopWorkspace.css';
 import '../../theme/scrollbars.css';
@@ -55,9 +55,7 @@ export default function DesktopWorkspace({
         }}
       >
         <nav className="workspace-rail" aria-label="Main navigation">
-          <div className="workspace-logo">
-            <img src={cocoIcon} alt="Coco" />
-          </div>
+          <ObservationInspector onOpen={onHistoryClose} />
           <div className="workspace-rail-pages">
             <button
               ref={chatButtonRef}

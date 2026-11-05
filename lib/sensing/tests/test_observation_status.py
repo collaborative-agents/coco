@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 
+import pytest
 from sensing import segment_processor
 from sensing.segment_processor import _classify_observation_status
 
@@ -27,7 +28,15 @@ def test_no_human_mistake_is_neutral():
     assert _classify_observation_status("everyday_support", observation) == "progress"
 
 
-def test_openai_compatible_observer_does_not_inject_provider_options(monkeypatch):
+@pytest.mark.parametrize(
+    "model",
+    [
+        "hosted_vllm/Qwen/Qwen3.5-9B",
+        "hosted_vllm/Qwen/Qwen3.5-35B-A3B",
+        "hosted_vllm/custom-checkpoint",
+    ],
+)
+def test_openai_compatible_observer_disables_thinking(monkeypatch, model):
     captured = {}
 
     def fake_chat_completion(**kwargs):
@@ -38,10 +47,12 @@ def test_openai_compatible_observer_does_not_inject_provider_options(monkeypatch
 
     segment_processor._observe(
         "describe the screen",
-        model="hosted_vllm/Qwen/Qwen3.5-35B-A3B",
+        model=model,
     )
 
-    assert "extra_body" not in captured
+    assert captured["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
     assert "reasoning_effort" not in captured
 
 

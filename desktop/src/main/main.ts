@@ -13,6 +13,7 @@ import { placeAvatarMenu } from './avatar-menu';
 import { placeAvatarBubble, avatarBubbleMaxHeight, type AvatarCardPlacement } from './avatar-bubble';
 import configureMainWindow, { resizeMainWindow } from './main-window-behavior';
 import setupWindowOptions from './setup-window-options';
+import enableSelectionCopy from './selection-copy';
 import AgentProgressReminder from './services/agent-progress-reminder';
 import isChatOutOfView from './services/chat-visibility';
 import type { ChatSuggestion } from '../shared/chat-suggestion';
@@ -998,8 +999,10 @@ const createAvatarBubbleWindow = () => {
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
-    // Showing a bubble must never take focus from the user's work.
-    focusable: false,
+    // showInactive() preserves the user's focus when the bubble appears;
+    // clicking it can then focus the window for selection and keyboard copy.
+    focusable: true,
+    acceptFirstMouse: true,
     skipTaskbar: process.platform !== 'darwin',
     webPreferences: { preload: preloadPath(), backgroundThrottling: false },
   });
@@ -1007,6 +1010,7 @@ const createAvatarBubbleWindow = () => {
     avatarBubbleWindow.excludedFromShownWindowsMenu = true;
   }
   configureFullscreenCompanionWindow(avatarBubbleWindow);
+  enableSelectionCopy(avatarBubbleWindow);
   avatarBubbleWindow.setOpacity(0);
   avatarBubbleWindow.setIgnoreMouseEvents(true, { forward: true });
   avatarBubbleWindow.loadURL(
@@ -1435,6 +1439,7 @@ const createChatWindow = () => {
   });
 
   configureMainWindow(chatWindow);
+  enableSelectionCopy(chatWindow);
   chatWindow.loadURL(`${resolveHtmlPath('index.html')}?view=session`);
 
   const reportChatContentZoom = () => {
@@ -4096,6 +4101,24 @@ ipcMain.handle('get-benchmark-files', async (event, { apiUrl, taskId }) => {
   }
 });
 
+// Keep the latest event even when its status is excluded from activity history.
+let latestInspectorObservation: ReturnType<typeof readActivity>[number] | null =
+  null;
+ipcMain.handle('get-observation-inspector', () => {
+  // Expose the retained history; the renderer reveals it incrementally on scroll.
+  const rows = readActivity(Math.floor(Date.now() / 1000) - 30 * 86400);
+  if (latestInspectorObservation) rows.push(latestInspectorObservation);
+  const seen = new Set<string>();
+  return rows.sort((a, b) => b.ts - a.ts).filter((row) => {
+    const key = row.observation_id ?? `${row.ts}:${row.observation}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map(({ ts, status, observation, observation_id }) => ({
+    ts, status, observation, observation_id,
+  }));
+});
+
 // IPC Handler: the avatar's Activity panel hydrates from persisted history on
 // open. `sinceTs` (unix seconds) bounds the read; default returns the last
 // 14 days so the contribution strip and today's timeline can both render.
@@ -4579,6 +4602,19 @@ function subscribeToObservations() {
       if (status && PRECOMPUTE_STATUSES.has(status) && !event.observation_id) {
         syntheticObsSeq += 1;
         event.observation_id = `synthetic-${Date.now()}-${syntheticObsSeq}`;
+      }
+
+      if (event.observation?.trim()) {
+        latestInspectorObservation = {
+          ts: event.ts ?? Math.floor(Date.now() / 1000),
+          status: (status ?? 'observing') as ObservationStatus,
+          observation: cleanObservation(event.observation),
+          observation_id: event.observation_id,
+        };
+        chatWindow?.webContents.send(
+          'observation-update',
+          latestInspectorObservation,
+        );
       }
 
       // Always forward to avatar window for pet animation / observation bubble.

@@ -25,6 +25,24 @@ const mistakeEvent = () => ({
 });
 
 describe('App', () => {
+  it('does not show a Watching bubble on the first observation', () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const sendMessage = jest.fn();
+    (window as any).electron = { ipcRenderer: {
+      on: (channel: string, callback: (...args: unknown[]) => void) => {
+        listeners.set(channel, callback);
+        return () => listeners.delete(channel);
+      },
+      sendMessage,
+      invoke: jest.fn().mockResolvedValue([]),
+    } };
+    render(<App />);
+    act(() => listeners.get('observation-update')?.({
+      type: 'snapshot', observation: 'Reading a document.', status: 'observing', ts: Date.now() / 1000,
+    }));
+    expect(lastBubbleState(sendMessage)).toBeNull();
+  });
+
   it('shows a calm bubble only when Coco moves into a calm status', () => {
     jest.useFakeTimers();
     const listeners = new Map<string, (...args: unknown[]) => void>();

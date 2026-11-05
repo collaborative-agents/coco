@@ -105,8 +105,9 @@
 
 .observation-bubble-header {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
   flex-shrink: 0;
 }
 
@@ -166,7 +167,7 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--bubble-accent);
-  margin-bottom: var(--coco-space-1);
+  margin-bottom: 0;
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -440,29 +441,54 @@
 
 /* Tier-1 help opens inside the card, beside the dismiss button. */
 .bubble-help-badge {
-  flex: 0 0 16px;
-  margin-top: 4px;
+  flex: 0 0 24px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  color: var(--coco-color-text-muted);
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.bubble-help-badge svg {
   width: 16px;
   height: 16px;
-  padding: 0;
-  background: none;
-  font-family: inherit;
-  line-height: 16px;
-  text-align: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--coco-color-text-subtle);
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 50%;
-  cursor: help;
-  -webkit-app-region: no-drag;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  opacity: 0.7;
+}
+.bubble-help-badge .bubble-info-dot {
+  fill: currentColor;
+  stroke: none;
 }
 .bubble-help-badge:hover,
 .bubble-help-badge[aria-expanded='true'] {
-  background: rgba(0, 0, 0, 0.05);
-  color: var(--coco-color-text-secondary);
+  background: rgba(0, 0, 0, 0.045);
+  color: var(--coco-color-text-muted);
 }
-/* Opened by the "?" inside the card, so the bubble window grows to fit it. */
+.bubble-help-badge:hover svg,
+.bubble-help-badge[aria-expanded='true'] svg {
+  opacity: 1;
+}
+.bubble-help-badge:focus {
+  outline: none;
+  box-shadow: none;
+}
+.bubble-help-badge:focus-visible {
+  outline: none;
+  color: var(--coco-color-text-muted);
+}
+.bubble-help-badge:focus-visible svg {
+  opacity: 1;
+  stroke-width: 1.8;
+}
+/* Opened by the information icon inside the card, so the bubble window grows to fit it. */
 .bubble-help-tip {
   margin: 6px 0 0;
   color: var(--coco-color-text-secondary);

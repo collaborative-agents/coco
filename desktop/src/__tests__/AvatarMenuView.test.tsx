@@ -75,7 +75,7 @@ describe('AvatarMenuView', () => {
         .map(([, action]) => action),
     ).toEqual([
       'open-main-window',
-        'open-chat-settings',
+      'open-chat-settings',
       'toggle-sleep',
       'quit',
     ]);

@@ -34,3 +34,11 @@
   left: -6px;
   transform: rotate(-135deg);
 }
+
+/* Let native mouse selection span suggestion text, including framework pages. */
+.avatar-bubble-view .observation-bubble-text,
+.avatar-bubble-view .bubble-framework-overview {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}

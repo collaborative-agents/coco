@@ -230,17 +230,21 @@ export default function ObservationBubble({
               : label}
         </div>
 
-        {/* Tier-1 (progress/observing): no suggestion. A passive "?" explains that
-          there's nothing proactive right now and points to clicking the pet. */}
+        {/* A quiet information control explains the current status. */}
         {!isTier3 && !showHelpButton && !suggestion && (
           <button
             type="button"
             className="bubble-help-badge"
             aria-label="Why no suggestion?"
+            title="About this status"
             aria-expanded={helpTipOpen}
             onClick={() => setHelpTipOpen((open) => !open)}
           >
-            ?
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="7.25" />
+              <path d="M10 9v4" />
+              <circle className="bubble-info-dot" cx="10" cy="6.5" r=".8" />
+            </svg>
           </button>
         )}
 

@@ -213,6 +213,12 @@ def _observe(
         .startswith("thinkingmachines/inkling")
     ):
         completion_kwargs["reasoning_effort"] = "none"
+    elif model.startswith("hosted_vllm/"):
+        # Disable thinking for compatible sensing endpoints independently of
+        # checkpoint name. Inkling uses reasoning_effort above instead.
+        completion_kwargs["extra_body"] = {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
 
     result, metrics = chat_completion(**completion_kwargs)
 

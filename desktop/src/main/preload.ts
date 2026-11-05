@@ -166,6 +166,7 @@ export type Channels =
   | 'avatar-renderer-ready'
   // Activity panel hydrates persisted history from main on open
   | 'get-activity-history'
+  | 'get-observation-inspector'
   // Persist an observation's proactive-support engagement + revealed content
   | 'activity-support-engaged'
   // Persist support content/rating independently of initial engagement
