@@ -264,7 +264,7 @@ function PetView() {
         }
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
-        const phrase = pickPhrase(incomingStatus, seed);
+        const phrase = event.support_preview?.trim() || pickPhrase(incomingStatus, seed);
 
         // Clear any in-flight timers — we're starting a fresh visible window.
         if (hideTimer.current) clearTimeout(hideTimer.current);

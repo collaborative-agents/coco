@@ -33,7 +33,7 @@ export default function WelcomeStep() {
         <div className="ob-feature-copy">
           <strong>Help in the moment</strong>
           <span>
-            Get a nudge when you’re stuck or discover a useful way to work with
+            Explore a timely suggestion or discover a useful way to work with
             AI.
           </span>
         </div>

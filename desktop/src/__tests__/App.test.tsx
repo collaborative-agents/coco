@@ -622,3 +622,30 @@ describe('session invite with a suggestion preview', () => {
     );
   });
 });
+
+
+it('previews the actual support before revealing it, with a neutral label', () => {
+  const listeners = new Map<string, (...args: unknown[]) => void>();
+  const sendMessage = jest.fn();
+  (window as any).electron = { ipcRenderer: {
+    on: (channel: string, callback: (...args: unknown[]) => void) => {
+      listeners.set(channel, callback);
+      return () => listeners.delete(channel);
+    },
+    sendMessage,
+    invoke: jest.fn().mockResolvedValue([]),
+  } };
+  const app = render(<App />);
+  act(() => listeners.get('observation-update')?.({
+    type: 'snapshot', observation: 'Working on a spreadsheet.', status: 'stuck',
+    observation_id: 'preview', support_preview: 'Use a pivot table to summarize sales by region',
+  }));
+  const bubble = lastBubbleState(sendMessage);
+  expect(bubble.phrase).toBe('Use a pivot table to summarize sales by region');
+  expect(bubble.suggestion).toBeUndefined();
+  app.unmount();
+  render(<ObservationBubble bubble={bubble} onHelpMe={jest.fn()} />);
+  expect(screen.getByText('Support available')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'See suggestion' })).toBeInTheDocument();
+  expect(screen.queryByText('Stuck?')).not.toBeInTheDocument();
+});

@@ -90,6 +90,8 @@ export interface TutorToolCall {
 }
 
 export interface ObservationEvent {
+  /** Short preview of generated support, before the user reveals it. */
+  support_preview?: string;
   type: string;
   observation?: string;
   status?: ObservationStatus;
@@ -287,11 +289,9 @@ export const PHRASES: Record<ObservationStatus, string[]> = {
     'Flowing nicely',
   ],
   stuck: [
-    'Looks like a tricky spot — you can ask me for help',
-    'Seems like you might be stuck — feel free to ask me',
-    'Taking a while here — I\'m here if you need a hint',
-    'Hitting a wall? You can always ask me directly',
-    'Tough moment. Take your time. If you want a hand, just ask!',
+    'I have a suggestion you can explore',
+    'Here’s an option for your next step',
+    'A fresh perspective is available',
   ],
   mistake: [
     'Something looks worth double-checking',
@@ -332,7 +332,7 @@ export const PHRASES: Record<ObservationStatus, string[]> = {
 
 export const STATUS_LABEL: Record<ObservationStatus, string> = {
   progress: 'Progress',
-  stuck: 'Stuck?',
+  stuck: 'Support available',
   mistake: 'Heads up',
   inefficient: 'AI could help',
   ai_struggle: 'AI hiccup',

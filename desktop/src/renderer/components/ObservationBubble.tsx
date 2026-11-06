@@ -388,7 +388,7 @@ export default function ObservationBubble({
             onHelpMe?.();
           }}
         >
-          {helpClicked ? 'Opening…' : 'Help me with this'}
+          {helpClicked ? 'Opening…' : 'See suggestion'}
         </button>
       )}
 

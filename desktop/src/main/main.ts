@@ -235,6 +235,7 @@ let hotkeyCaptureInProgress = false;
 let wakeWordCaptureWindow: BrowserWindow | null = null;
 
 let latestHiddenSuggestionObservationId: string | undefined;
+let latestAvatarSuggestionObservationId: string | undefined;
 let onboardingWindow: BrowserWindow | null = null;
 
 let tray: Tray | null = null;
@@ -4273,13 +4274,17 @@ function subscribeToObservations() {
         );
       }
 
-      // Always forward to avatar window for pet animation / observation bubble.
+      // Actionable bubbles wait for a preview of the actual support.
+      latestAvatarSuggestionObservationId = event.observation_id;
+      // Forward calm observations immediately for the pet animation.
       if (
         !hideAvatarMode &&
         avatarWindow &&
         !avatarWindow.isDestroyed()
       ) {
-        avatarWindow.webContents.send('observation-update', event);
+        if (!status || !PRECOMPUTE_STATUSES.has(status)) {
+          avatarWindow.webContents.send('observation-update', event);
+        }
       }
 
       // Tee into the persistent activity history so the Activity panel survives
@@ -4307,6 +4312,14 @@ function subscribeToObservations() {
       // way, falling back to the chat flow only on a cache miss.
       if (status && PRECOMPUTE_STATUSES.has(status)) {
         const suggestionPromise = precomputeSuggestion(event);
+        void suggestionPromise?.then((suggestion) => {
+          if (!suggestion?.title?.trim() || !sensingEnabled || isCocoSleeping() ||
+              hideAvatarMode || latestAvatarSuggestionObservationId !== event.observation_id ||
+              !avatarWindow || avatarWindow.isDestroyed()) return;
+          const title = suggestion.title.replace(/[`#*_]/g, '').replace(/\s+/g, ' ').trim();
+          const preview = title.length > 90 ? `${title.slice(0, 87).trimEnd()}…` : title;
+          avatarWindow.webContents.send('observation-update', { ...event, support_preview: preview });
+        });
         if (hideAvatarMode && event.observation) {
           const rawObservation = cleanObservation(event.observation);
           latestHiddenSuggestionObservationId = event.observation_id;
