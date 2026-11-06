@@ -13,8 +13,8 @@ describe('Main window stacking', () => {
       expect(window.setAlwaysOnTop.mock.calls).toEqual([[false], [false]]);
       if (platform === 'darwin') {
         expect(window.setVisibleOnAllWorkspaces.mock.calls).toEqual([
-          [false],
-          [false],
+          [false, { skipTransformProcessType: true }],
+          [false, { skipTransformProcessType: true }],
         ]);
       } else {
         expect(window.setVisibleOnAllWorkspaces).not.toHaveBeenCalled();

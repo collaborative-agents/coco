@@ -24,6 +24,7 @@ jest.mock('electron', () => ({
 jest.mock('electron-log', () => ({ info: jest.fn() }));
 jest.mock('./util', () => ({ resolveHtmlPath: () => 'index.html' }));
 jest.mock('./services/fullscreen-companion-window', () => ({
+  ...jest.requireActual('./services/fullscreen-companion-window'),
   __esModule: true,
   default: jest.fn(),
 }));

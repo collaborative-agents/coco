@@ -62,11 +62,14 @@ If there is a mistake, describe it clearly and objectively.
 If everything is consistent so far, output "no mistake so far".
 
 5. Detect where the student gets stuck
-Look for signs the student is not making forward progress — repeated erasure of the same step, prolonged inactivity on a specific sub-problem, circular reasoning, or an incomplete step with no visible continuation.
+Look for concrete signs the student is not making forward progress — repeated failed attempts, repeated erasure of the same step, or circular reasoning. Inactivity or an unfinished step alone is not evidence of being stuck; the student may be reading, watching, or thinking.
 If the student is not stuck, output "not stuck".
 
 Directly output in JSON format:
 {
+  "current_task": "short goal of the current activity; app changes alone do not change the task",
+  "task_continuity": "same | new | uncertain, relative to previous_task in support_feedback",
+  "repeats_dismissed_support": "yes | no | uncertain, whether proposed help repeats recent dismissed support",
   "observation": "description of whiteboard activity and how it evolved over time, or 'no snapshots provided'",
   "student_intent": "what method, idea, or strategy the student appears to be attempting",
   "mistakes": "description of any conceptual, computational, or procedural error, or 'no mistake so far'",

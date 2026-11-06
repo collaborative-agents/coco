@@ -11,7 +11,10 @@ export default function configureMainWindow(
   platform: string = process.platform,
 ) {
   window.setAlwaysOnTop(false);
-  if (platform === 'darwin') window.setVisibleOnAllWorkspaces(false);
+  if (platform === 'darwin') {
+    // Space membership is per-window; do not change Coco's app-wide Dock policy.
+    window.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true });
+  }
 }
 
 /** Resize in place; move left only when expansion would leave the display. */

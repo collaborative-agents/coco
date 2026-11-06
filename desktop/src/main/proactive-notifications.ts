@@ -3,7 +3,7 @@ import type { IpcMain } from 'electron';
 import { randomUUID } from 'crypto';
 import log from 'electron-log';
 import { resolveHtmlPath } from './util';
-import configureFullscreenCompanionWindow from './services/fullscreen-companion-window';
+import configureFullscreenCompanionWindow, { fullscreenCompanionOptions } from './services/fullscreen-companion-window';
 import type { InstantSuggestion, ChatSeed } from './proactive-types';
 interface Dependencies {
   ipc: Pick<IpcMain, 'on' | 'removeAllListeners'>;
@@ -76,6 +76,7 @@ export default function createProactiveNotifications(deps: Dependencies) {
   type VizState = 'none' | 'success' | 'error';
   type NotifType =
     | 'default'
+    | 'daily-summary'
     | 'proactive-suggestion'
     | 'instant-suggestion'
     | 'session-start-prompt'
@@ -116,11 +117,12 @@ export default function createProactiveNotifications(deps: Dependencies) {
     const adjustable = deps.avatarHidden();
 
     notificationWindow = new BrowserWindow({
+      ...fullscreenCompanionOptions(),
       show: false,
       x,
       y,
       width: NOTIF_WIDTH,
-      height: NOTIF_HEIGHT,
+      height: payload.notifType === 'daily-summary' ? Math.min(340, workArea.height - 32) : NOTIF_HEIGHT,
       transparent: true,
       frame: false,
       alwaysOnTop: true,

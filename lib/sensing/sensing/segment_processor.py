@@ -37,6 +37,7 @@ from memory import MemoryEngine, ObservationInput
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 from sensing.language import ActionNode, SequenceNode, annotate_high_level_nodes
+from sensing.support_feedback import SupportFeedback
 
 logger = init_logger(__name__)
 
@@ -585,8 +586,8 @@ class AiTutoringProcessor(SegmentProcessor):
     * ``"snapshot"``    — adds the latest screenshot to the buffer; when the
                           buffer is full an observation is generated and stored
                           in ``obs_history`` for future context.
-    * ``"pause"``       — generates an observation and publishes it to a Redis
-                          channel so ``TutorAgentNode`` can act on it.
+    * ``"pause"``       — assesses inactivity; notifies the tutor only when
+                          the observation identifies a need for support.
     * ``"user_prompt"`` — generates and *returns* an observation (also
                           accessible via ``generate_observation()``).
     """
@@ -635,6 +636,7 @@ class AiTutoringProcessor(SegmentProcessor):
         # back into the observer prompt so it doesn't re-raise suggestions the
         # user dismissed or rated negatively.
         self._reactions: dict[str, str] = {}
+        self._support_feedback = SupportFeedback()
         # Live subscribers (e.g. SSE clients on the Electron UI) that receive
         # every observation as it is produced.
         self._obs_subscribers: list[asyncio.Queue] = []
@@ -772,11 +774,9 @@ class AiTutoringProcessor(SegmentProcessor):
     ) -> None:
         if not self._obs_subscribers:
             return
-        # Pause / struggle events are mechanical signals that the user is stuck —
-        # bypass the JSON classifier (the observation text for these may not even
-        # be JSON, e.g. the prefixed "[Struggle trigger — …]" string from
-        # ProgressDetector._fire).
-        if type_ in ("pause", "struggle"):
+        # A struggle event has already been assessed by the progress judge.
+        # A pause only requests assessment: inactivity is not evidence of need.
+        if type_ == "struggle":
             status = "stuck"
         else:
             status = _classify_observation_status(
@@ -794,6 +794,18 @@ class AiTutoringProcessor(SegmentProcessor):
         # calls ``broadcast_invite`` when it decides to invite. This keeps a
         # single decision path and one set of timing/cooldown knobs.
 
+        if type_ != "user_prompt" and self._support_feedback.blocked():
+            if status in {
+                "stuck",
+                "mistake",
+                "inefficient",
+                "ai_struggle",
+                "support_needed",
+                "discernment_opportunity",
+                "task_suggested",
+                "task_complete",
+            }:
+                status = "observing"
         applying_ai_output = _extract_applying_ai_output(observation)
 
         event: dict = {
@@ -838,6 +850,8 @@ class AiTutoringProcessor(SegmentProcessor):
         ``status == "task_suggested"`` and shows the "start a session?" bubble.
         Firing/timing is owned by the judge, so there is no rate-limit here.
         """
+        if self._support_feedback.blocked():
+            return
         event = {
             "type": "invite",
             "observation": observation,
@@ -880,6 +894,8 @@ class AiTutoringProcessor(SegmentProcessor):
 
     def broadcast_pause(self, payload: dict) -> None:
         """Push a pause-event payload to every subscriber (drops on backpressure)."""
+        if self._support_feedback.blocked():
+            return
         for q in self._pause_subscribers:
             try:
                 q.put_nowait(payload)
@@ -1059,6 +1075,12 @@ class AiTutoringProcessor(SegmentProcessor):
         obs, text, metrics = await self._handle_observation(type="pause")
         self._log(f"[PAUSE OBSERVATION] {obs}\n")
 
+        status = _classify_observation_status(
+            self._scenario, obs, session_active=self._session_active
+        )
+        if status not in {"stuck", "mistake", "inefficient", "ai_struggle"}:
+            return
+
         payload = {
             "data": {
                 "data_type": "pause_detected",
@@ -1092,9 +1114,18 @@ class AiTutoringProcessor(SegmentProcessor):
         recent_block = self._recent_observations_block(n=3)
         if recent_block:
             text += recent_block + "\n"
+        text += self._support_feedback.context()
         now_ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
         if type == "pause":
-            text += f'<user_input timestamp="{now_ts}">(The user has been idle.)</user_input>'
+            text += (
+                f'<activity_check timestamp="{now_ts}">'
+                "No recent keyboard or mouse input was detected. This is not a "
+                "request for help or evidence of being stuck: the user may be "
+                "watching, reading, or thinking. Assess the visible activity and "
+                "preferences; only flag support when there is concrete evidence "
+                "beyond inactivity."
+                "</activity_check>"
+            )
         elif type == "user_prompt":
             text += f'<user_input timestamp="{now_ts}">{user_text or ""}</user_input>'
         elif type == "snapshot":
@@ -1134,6 +1165,7 @@ class AiTutoringProcessor(SegmentProcessor):
         )
         print(f"[HANDLE OBSERVATION] type: {type}, obs: {obs}")
         self._last_observation_id = observation_id
+        self._support_feedback.observe(observation_id, obs)
 
         # Record the observer call for training BEFORE cleanup, so screenshot
         # retention (when enabled) can copy the files the observer actually saw.
@@ -1253,7 +1285,9 @@ class AiTutoringProcessor(SegmentProcessor):
         "thumbs_down",
     )
 
-    def record_reaction(self, observation_id: str | None, kind: str) -> None:
+    def record_reaction(
+        self, observation_id: str | None, kind: str, text: str | None = None
+    ) -> None:
         """Record the user's reaction to a specific observation (from /feedback).
 
         A later ``shown`` never overwrites an explicit accept/decline already
@@ -1261,6 +1295,7 @@ class AiTutoringProcessor(SegmentProcessor):
         """
         if not observation_id or not kind:
             return
+        self._support_feedback.record(observation_id, kind, text)
         prev = self._reactions.get(observation_id)
         if kind == "shown" and prev in self._TERMINAL_REACTIONS:
             return
@@ -1299,7 +1334,7 @@ class AiTutoringProcessor(SegmentProcessor):
             "A NEGATIVE rating means the resulting help was not useful: classify "
             'similar observations as "progress". Only re-flag after a dismissal or '
             "negative rating if the situation has materially changed (a new task, "
-            "new app, or genuinely different issue or opportunity).",
+            "genuinely different issue or opportunity; changing apps alone is not a new task).",
         ]
         for i, entry in enumerate(recent, start=1):
             age = max(0.0, now - float(entry.get("ts", now)))

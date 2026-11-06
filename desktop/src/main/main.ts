@@ -107,7 +107,7 @@ import ChatStreamStore from './services/chat-stream-store';
 import { parseAgentActivity } from '../shared/agent-execution';
 import { getSystemPermissionWarning, systemPermissionButtonLabel, systemPermissionExplanation } from './system-permission-warning';
 import { openSystemPermissionSettings } from './open-system-permission-settings';
-import configureFullscreenCompanionWindow from './services/fullscreen-companion-window';
+import configureFullscreenCompanionWindow, { fullscreenCompanionOptions } from './services/fullscreen-companion-window';
 import { ObservationSleepGuard } from './observation-sleep-guard';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
 import type {
@@ -842,6 +842,7 @@ function openAvatarMenu(): void {
 const createAvatarMenuWindow = () => {
   if (avatarMenuWindow && !avatarMenuWindow.isDestroyed()) return;
   avatarMenuWindow = new BrowserWindow({
+    ...fullscreenCompanionOptions(),
     show: false,
     width: 1,
     height: 1,
@@ -992,6 +993,7 @@ const createAvatarBubbleWindow = () => {
   if (avatarBubbleWindow && !avatarBubbleWindow.isDestroyed()) return;
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarBubbleWindow = new BrowserWindow({
+    ...fullscreenCompanionOptions(),
     parent: avatarWindow,
     show: false,
     width: 1,
@@ -1160,6 +1162,7 @@ const createAvatarHistoryWindow = () => {
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarHistoryReady = false;
   avatarHistoryWindow = new BrowserWindow({
+    ...fullscreenCompanionOptions(),
     parent: avatarWindow,
     show: false,
     width: 1,
@@ -1276,6 +1279,7 @@ const createAvatarWindow = () => {
   // so this one never resizes: resizing it pushed Coco around near the top of
   // the screen, and its transparent margins would intercept desktop clicks.
   avatarWindow = new BrowserWindow({
+    ...fullscreenCompanionOptions(),
     show: false,
     width: AVATAR_BASE_SIZE,
     height: AVATAR_BASE_SIZE,
@@ -1746,6 +1750,7 @@ const createWakeWordCaptureWindow = (): void => {
   wakeWordCaptureWindow.setAlwaysOnTop(true, 'floating');
   wakeWordCaptureWindow.setVisibleOnAllWorkspaces(true, {
     visibleOnFullScreen: true,
+    skipTransformProcessType: true,
   });
   wakeWordCaptureWindow.loadURL(
     `${resolveHtmlPath('index.html')}?view=wake-word-capture`,
@@ -2849,15 +2854,10 @@ async function runEveningPersonalizationTransition(): Promise<boolean> {
   });
   if (!result.success) return false;
 
-  const message = [
-    review ||
-      "I don't have enough activity in memory to summarize today, but it's still a good time to pause.",
-    '**Take a break when you can.** Coco is now asleep and running today’s personalization update.',
-    'Coco will wake automatically when the update finishes. You can still chat while it runs.',
-  ].join('\n\n');
   const payload = {
-    message,
-    actionLabel: 'Open Coco',
+    message: review || 'There isn’t enough activity to put together a recap today. You can still open chat whenever you need a hand.',
+    actionLabel: 'Open chat',
+    notifType: 'daily-summary' as const,
   };
   proactive.showNotification(payload);
   log.info('[Evening] Coco entered sleep mode for personalization.');

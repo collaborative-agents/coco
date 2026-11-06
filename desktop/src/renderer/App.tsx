@@ -608,6 +608,12 @@ function PetView() {
   const handleDismiss = () => {
     if (!bubble) return;
     bubblePinnedRef.current = false;
+    if (bubble.showHelpButton && !bubble.suggestion && !bubble.invite && bubble.observationId) {
+      window.electron?.ipcRenderer.sendMessage('training-feedback', {
+        kind: 'dismiss', surface: 'bubble', observation_id: bubble.observationId,
+        status: bubble.status, text: bubble.phrase,
+      });
+    }
     if (bubble.invite) {
       window.electron?.ipcRenderer.sendMessage('session-invite-response', {
         inviteId: bubble.invite.inviteId,
