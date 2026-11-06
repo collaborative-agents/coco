@@ -3626,13 +3626,17 @@ ipcMain.on('image-preview-ready', (event) => {
 });
 
 ipcMain.removeAllListeners('close-image-preview');
-ipcMain.on('close-image-preview', (event) => {
+ipcMain.on('close-image-preview', (event, payload: unknown) => {
   if (
     imagePreviewWindow &&
     !imagePreviewWindow.isDestroyed() &&
     imagePreviewWindow.webContents.id === event.sender.id
   ) {
+    const openChat = imagePreviewEditable && imagePreviewFullScreenOverlay &&
+      imagePreviewAnnotationResult === 'attach' &&
+      (payload as { openChat?: unknown } | null)?.openChat === true;
     dismissImagePreviewWindow(imagePreviewWindow);
+    if (openChat) showChatPanel();
   }
 });
 
