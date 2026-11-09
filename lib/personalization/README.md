@@ -45,6 +45,8 @@ docker run --rm --gpus all --ipc=host \
     --server.port 1919
 ```
 
+**Enable FP8:** in the Qwen3.5-35B-A3B command above, replace the model-path line with `--model.path Qwen/Qwen3.5-35B-A3B-FP8` CTI-engine detects quantization from the checkpoint and no extra FP8 flag is needed. For other models, select a compatible FP8 checkpoint using `--model.path`; see [CTI-engine's supported checkpoint formats](https://github.com/mit-han-lab/cti-engine/blob/main/docs/features.md#supported-models).
+
 Keep the exposed port accessible only on a trusted network. If Coco runs on the same host and remote access is unnecessary, use `-p 127.0.0.1:1919:1919` instead; that binding prevents connections from other machines.
 
 Leave the server running and configure the model as the sensing model in Settings -> Model.
