@@ -115,6 +115,14 @@ export interface ObservationEvent {
   llm_metrics?: LLMCallMetrics;
 }
 
+/** Support categories shared with the trajectory annotation schema. */
+export type SupportDimension =
+  | 'execution'
+  | 'judgment'
+  | 'learning'
+  | 'attention'
+  | 'motivation';
+
 /**
  * A pre-computed, ready-to-use suggestion revealed instantly when the user
  * clicks "Help me with this". Mirrors the InstantSuggestion type in main.ts and
@@ -132,6 +140,8 @@ export interface InstantSuggestion {
   targetTool?: string;
   prompt?: string;
   copyText: string;
+  /** Most relevant support categories first; absent on older suggestions. */
+  dimensions?: SupportDimension[];
   llm_metrics?: LLMCallMetrics;
   fourDDimension?:
     | 'delegation'

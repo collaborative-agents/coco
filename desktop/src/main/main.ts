@@ -3240,6 +3240,7 @@ function precomputeSuggestion(event: {
       const data = resp.data as InstantSuggestion;
       recordSupportSuggestion(id, data);
       avatarHistoryWindow?.webContents.send('activity-history-changed');
+      chatWindow?.webContents.send('activity-history-changed');
       log.info(`[InstantSuggestion] precompute ready id=${id} kind=${data?.kind} in ${Date.now() - startedAt}ms`);
       return data;
     })
@@ -3775,8 +3776,8 @@ ipcMain.handle('get-observation-inspector', () => {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).map(({ ts, status, observation, observation_id }) => ({
-    ts, status, observation, observation_id,
+  }).map(({ ts, status, observation, observation_id, proactive_support }) => ({
+    ts, status, observation, observation_id, proactive_support,
   }));
 });
 

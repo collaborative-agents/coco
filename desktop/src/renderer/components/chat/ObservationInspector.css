@@ -26,6 +26,7 @@
   background: var(--coco-color-surface-muted);
 }
 .activity-popover {
+  --activity-suggestion-color: #8050ac;
   position: fixed;
   z-index: 40;
   width: min(380px, calc(100vw - 16px));
@@ -189,6 +190,131 @@
   line-height: 1.75;
   color: var(--coco-color-text-secondary);
   overflow-wrap: anywhere;
+}
+.activity-suggestion {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--coco-color-border);
+}
+.activity-suggestion summary {
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--activity-suggestion-color);
+}
+.activity-suggestion-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+.activity-suggestion-title {
+  display: block;
+  margin-top: 4px;
+  color: var(--coco-color-text);
+  font-weight: 500;
+}
+.activity-suggestion-content {
+  margin-top: 10px;
+}
+.activity-suggestion-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.activity-suggestion-tag {
+  --suggestion-tag-color: var(--activity-suggestion-color);
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: color-mix(
+    in srgb,
+    var(--suggestion-tag-color) 9%,
+    var(--coco-color-surface)
+  );
+  color: var(--suggestion-tag-color);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+.activity-suggestion-tag--execution {
+  --suggestion-tag-color: #286b70;
+}
+.activity-suggestion-tag--judgment {
+  --suggestion-tag-color: #96611e;
+}
+.activity-suggestion-tag--attention {
+  --suggestion-tag-color: #4269a0;
+}
+.activity-suggestion-tag--motivation {
+  --suggestion-tag-color: #a04f70;
+}
+.activity-suggestion-tag--format {
+  --suggestion-tag-color: var(--coco-color-text-muted);
+}
+.activity-suggestion-main h3 {
+  margin: 0;
+  line-height: 1.6;
+}
+.activity-suggestion-main .activity-suggestion-label {
+  color: var(--activity-suggestion-color);
+}
+.activity-suggestion-main .activity-suggestion-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.activity-observation-context {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--coco-color-border);
+}
+.activity-observation-context summary {
+  cursor: pointer;
+  color: var(--coco-color-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.activity-observation-context > .activity-markdown {
+  margin-top: 10px;
+}
+.activity-filters {
+  display: flex;
+  gap: 6px;
+  padding: 14px 22px 0;
+  flex-shrink: 0;
+}
+.activity-filters button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  color: var(--coco-color-text-muted);
+}
+.activity-filters button[aria-pressed='true'] {
+  background: var(--coco-color-surface-muted);
+  color: var(--coco-color-text);
+}
+.activity-filters .activity-filter-suggestions[aria-pressed='true'] {
+  color: var(--activity-suggestion-color);
+  background: color-mix(
+    in srgb,
+    var(--activity-suggestion-color) 9%,
+    transparent
+  );
+}
+.activity-filter-count {
+  font-variant-numeric: tabular-nums;
+}
+.activity-suggestion-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--activity-suggestion-color);
+  flex-shrink: 0;
+}
+.activity-feed > .has-suggestion > .activity-feed-entry {
+  border-left: 2px solid var(--activity-suggestion-color);
+  padding-left: 12px;
 }
 .activity-markdown > :first-child {
   margin-top: 0;
@@ -369,7 +495,9 @@
 .activity-time-index:focus-within button::after {
   opacity: 0.35;
 }
-.activity-time-index .activity-index-now { top: 0; }
+.activity-time-index .activity-index-now {
+  top: 0;
+}
 .activity-time-index .activity-index-now::after,
 .activity-time-index button[aria-current='time']::after,
 .activity-time-index button:hover::after,
@@ -377,6 +505,17 @@
   opacity: 1;
   background: var(--coco-color-primary);
   box-shadow: 0 0 0 2px var(--coco-color-surface);
+}
+.activity-time-index button.has-suggestions::after {
+  opacity: 1;
+  width: 7px;
+  height: 7px;
+  left: 8px;
+  background: var(--activity-suggestion-color);
+  box-shadow: 0 0 0 2px var(--coco-color-surface);
+}
+.activity-time-index button.has-suggestions .activity-index-tooltip {
+  color: var(--activity-suggestion-color);
 }
 .activity-index-tooltip {
   position: absolute;
@@ -394,7 +533,8 @@
   visibility: hidden;
   pointer-events: none;
 }
-.activity-time-index button:hover .activity-index-tooltip {
+.activity-time-index button:hover .activity-index-tooltip,
+.activity-time-index button:focus-visible .activity-index-tooltip {
   visibility: visible;
 }
 .activity-time-index button[aria-current='time'],

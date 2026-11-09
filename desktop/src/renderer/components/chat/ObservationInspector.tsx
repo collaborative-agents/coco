@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -10,7 +11,12 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import activityHighlights from './activity-highlights';
 import subscribeCocoSleepMode from '../../services/coco-sleep-mode';
-import { cleanObservation, type ActivityRecord } from '../observation-types';
+import {
+  cleanObservation,
+  type ActivityRecord,
+  type InstantSuggestion,
+  type SupportDimension,
+} from '../observation-types';
 import cocoIcon from '../../../../assets/icon.png';
 import './ObservationInspector.css';
 
@@ -45,6 +51,133 @@ function age(ts: number, now: number) {
   return new Date(ts * 1000).toLocaleDateString();
 }
 
+const supportDimensionTags: Record<
+  SupportDimension,
+  { label: string; description: string }
+> = {
+  execution: {
+    label: 'Execution',
+    description: 'Remove a blocker or get work done.',
+  },
+  judgment: {
+    label: 'Judgment',
+    description: 'Check information or make a better decision.',
+  },
+  learning: {
+    label: 'Learning',
+    description: 'Build understanding or a skill.',
+  },
+  attention: {
+    label: 'Attention',
+    description: 'Stay on track with priorities and follow-ups.',
+  },
+  motivation: {
+    label: 'Motivation',
+    description: 'Keep going, recognize progress, or take a break.',
+  },
+};
+
+function SuggestionTags({ suggestion }: { suggestion: InstantSuggestion }) {
+  const dimensions = [...new Set(suggestion.dimensions ?? [])]
+    .filter((dimension) =>
+      Object.prototype.hasOwnProperty.call(supportDimensionTags, dimension),
+    )
+    .slice(0, 2);
+  return (
+    <span
+      className="activity-suggestion-tags"
+      role="list"
+      aria-label="Suggestion tags"
+    >
+      {dimensions.map((dimension) => (
+        <span
+          key={dimension}
+          role="listitem"
+          className={`activity-suggestion-tag activity-suggestion-tag--${dimension}`}
+          title={supportDimensionTags[dimension].description}
+        >
+          {supportDimensionTags[dimension].label}
+        </span>
+      ))}
+      <span
+        className="activity-suggestion-tag activity-suggestion-tag--format"
+        role="listitem"
+      >
+        {suggestion.kind === 'delegate' ? 'AI prompt' : 'Ready to use'}
+      </span>
+    </span>
+  );
+}
+
+function ActivityEntryContent({
+  record,
+  suggestionsOnly,
+}: {
+  record: ActivityRecord;
+  suggestionsOnly: boolean;
+}) {
+  const suggestion = record.proactive_support?.suggestion;
+  const observation = (
+    <div className="activity-markdown">
+      <Markdown
+        remarkPlugins={[remarkGfm, activityHighlights]}
+        skipHtml
+        disallowedElements={['img']}
+        components={activityMarkdownComponents}
+      >
+        {cleanObservation(record.observation)}
+      </Markdown>
+    </div>
+  );
+  const suggestionHeading = suggestion && (
+    <>
+      <span className="activity-suggestion-label">Coco suggested</span>
+      <span className="activity-suggestion-title">{suggestion.title}</span>
+      <SuggestionTags suggestion={suggestion} />
+    </>
+  );
+  const suggestionContent = suggestion && (
+    <div className="activity-markdown activity-suggestion-content">
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        disallowedElements={['img']}
+        components={activityMarkdownComponents}
+      >
+        {(suggestion.kind === 'delegate'
+          ? suggestion.prompt
+          : suggestion.body) || suggestion.copyText}
+      </Markdown>
+    </div>
+  );
+
+  if (suggestionsOnly && suggestion) {
+    return (
+      <>
+        <div className="activity-suggestion-main">
+          <h3>{suggestionHeading}</h3>
+          {suggestionContent}
+        </div>
+        <details className="activity-observation-context">
+          <summary>Related observation</summary>
+          {observation}
+        </details>
+      </>
+    );
+  }
+  return (
+    <>
+      {observation}
+      {suggestion && (
+        <details className="activity-suggestion">
+          <summary>{suggestionHeading}</summary>
+          {suggestionContent}
+        </details>
+      )}
+    </>
+  );
+}
+
 export default function ObservationInspector({
   onOpen,
 }: {
@@ -53,6 +186,12 @@ export default function ObservationInspector({
   const [open, setOpen] = useState(false);
   const [sleeping, setSleeping] = useState<boolean | null>(null);
   const [records, setRecords] = useState<ActivityRecord[]>([]);
+  const [suggestionsOnly, setSuggestionsOnly] = useState(false);
+  const suggestions = useMemo(
+    () => records.filter((record) => record.proactive_support?.suggestion),
+    [records],
+  );
+  const feedRecords = suggestionsOnly ? suggestions : records;
   const [visibleCount, setVisibleCount] = useState(40);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -70,12 +209,23 @@ export default function ObservationInspector({
     const ipc = window.electron?.ipcRenderer;
     let disposed = false;
     let revision = 0;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const remove = ipc?.on('observation-update', (value: unknown) => {
       const record = value as ActivityRecord;
       if (!record?.observation?.trim()) return;
       revision += 1;
       setRecords((previous) => [
-        { ...record, ts: record.ts ?? Date.now() / 1000 },
+        {
+          ...record,
+          ts: record.ts ?? Date.now() / 1000,
+          proactive_support:
+            record.proactive_support ??
+            previous.find(
+              (item) =>
+                record.observation_id &&
+                item.observation_id === record.observation_id,
+            )?.proactive_support,
+        },
         ...previous.filter(
           (item) =>
             !record.observation_id ||
@@ -85,40 +235,67 @@ export default function ObservationInspector({
       setLoaded(true);
       setError('');
     });
-    const initialRevision = revision;
-    ipc
-      ?.invoke('get-observation-inspector')
-      .then((rows: ActivityRecord[]) => {
-        if (!disposed) {
-          if (!Array.isArray(rows)) throw new Error();
-          setRecords((current) => {
-            const seen = new Set<string>();
-            return [...current, ...rows]
-              .filter((row) => {
-                const key =
-                  row.observation_id ?? `${row.ts}:${row.observation}`;
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-              })
-              .sort((a, b) => b.ts - a.ts);
-          });
-          setLoaded(true);
-        }
-        return undefined;
-      })
-      .catch(() => {
-        if (!disposed && initialRevision === revision) {
-          setError(
-            'Observations could not be loaded. New observations will appear when available.',
-          );
-          setLoaded(true);
-        }
-        return undefined;
-      });
+    const refresh = () => {
+      const initialRevision = revision;
+      return ipc
+        ?.invoke('get-observation-inspector')
+        .then((rows: ActivityRecord[]) => {
+          if (!disposed) {
+            if (!Array.isArray(rows)) throw new Error();
+            setRecords((current) => {
+              const seen = new Set<string>();
+              const saved = new Map(
+                rows.map((row) => [
+                  row.observation_id ?? `${row.ts}:${row.observation}`,
+                  row,
+                ]),
+              );
+              return [
+                ...current.map((row) => ({
+                  ...row,
+                  proactive_support:
+                    saved.get(
+                      row.observation_id ?? `${row.ts}:${row.observation}`,
+                    )?.proactive_support ?? row.proactive_support,
+                })),
+                ...rows,
+              ]
+                .filter((row) => {
+                  const key =
+                    row.observation_id ?? `${row.ts}:${row.observation}`;
+                  if (seen.has(key)) return false;
+                  seen.add(key);
+                  return true;
+                })
+                .sort((a, b) => b.ts - a.ts);
+            });
+            setLoaded(true);
+            setError('');
+          }
+          return undefined;
+        })
+        .catch(() => {
+          if (!disposed && initialRevision === revision) {
+            setError(
+              'Observations could not be loaded. New observations will appear when available.',
+            );
+            setLoaded(true);
+          }
+          return undefined;
+        });
+    };
+    refresh();
+    const removeChanged = ipc?.on('activity-history-changed', () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refresh();
+      }, 300);
+    });
     return () => {
       disposed = true;
+      clearTimeout(refreshTimer);
       if (typeof remove === 'function') remove();
+      if (typeof removeChanged === 'function') removeChanged();
     };
   }, []);
 
@@ -192,8 +369,13 @@ export default function ObservationInspector({
   // Index all available history, independent of feed pagination. Compress long
   // idle gaps while retaining room to select dense periods of activity.
   const times = [
-    ...new Set(records.map((record) => hourStart(record.ts))),
+    ...new Set(feedRecords.map((record) => hourStart(record.ts))),
   ].sort((a, b) => b - a);
+  const suggestionCounts = new Map<number, number>();
+  suggestions.forEach((record) => {
+    const time = hourStart(record.ts);
+    suggestionCounts.set(time, (suggestionCounts.get(time) ?? 0) + 1);
+  });
 
   let timelineDistance = 0;
   const timePositions = times.map((time, index) => {
@@ -204,7 +386,7 @@ export default function ObservationInspector({
 
   useLayoutEffect(() => {
     if (jumpTime === null || !open) return;
-    const index = records.findIndex(
+    const index = feedRecords.findIndex(
       (record) => hourStart(record.ts) === jumpTime,
     );
     if (index < 0) {
@@ -229,7 +411,7 @@ export default function ObservationInspector({
       );
     }
     setJumpTime(null);
-  }, [jumpTime, open, records, visibleCount]);
+  }, [jumpTime, open, feedRecords, visibleCount]);
 
   const latest = records[0];
   const observing =
@@ -245,6 +427,9 @@ export default function ObservationInspector({
   if (sleeping) emptyText = 'Activity is paused while Coco is asleep.';
   if (!loaded) emptyText = 'Loading your activity…';
   if (error) emptyText = 'Your activity is unavailable right now.';
+  if (suggestionsOnly && loaded && !error) {
+    emptyText = 'No suggestions yet. Coco’s suggestions will appear here.';
+  }
   const close = () => {
     setOpen(false);
     trigger.current?.focus();
@@ -316,6 +501,44 @@ export default function ObservationInspector({
                 </svg>
               </button>
             </header>
+            <div
+              className="activity-filters"
+              role="group"
+              aria-label="Show activity"
+            >
+              <button
+                type="button"
+                aria-pressed={!suggestionsOnly}
+                onClick={() => {
+                  setSuggestionsOnly(false);
+                  setVisibleCount(40);
+                  setSelectedTime('now');
+                  setJumpTime(null);
+                  if (scrollArea.current) scrollArea.current.scrollTop = 0;
+                }}
+              >
+                All activity
+              </button>
+              <button
+                type="button"
+                className="activity-filter-suggestions"
+                aria-label="All suggestions"
+                aria-pressed={suggestionsOnly}
+                onClick={() => {
+                  setSuggestionsOnly(true);
+                  setVisibleCount(40);
+                  setSelectedTime('now');
+                  setJumpTime(null);
+                  if (scrollArea.current) scrollArea.current.scrollTop = 0;
+                }}
+              >
+                <span className="activity-suggestion-dot" aria-hidden="true" />
+                All suggestions{' '}
+                <span className="activity-filter-count">
+                  {suggestions.length}
+                </span>
+              </button>
+            </div>
             <div className="activity-timeline-layout">
               <nav
                 className="activity-time-index"
@@ -340,15 +563,30 @@ export default function ObservationInspector({
                     <button
                       key={time}
                       type="button"
-                      aria-label={`Jump to ${timeLabel(time)}`}
+                      aria-label={`Jump to ${timeLabel(time)}${
+                        suggestionCounts.has(time)
+                          ? ` · ${suggestionCounts.get(time)} Coco suggestion${suggestionCounts.get(time) === 1 ? '' : 's'}`
+                          : ''
+                      }`}
+                      className={
+                        suggestionCounts.has(time)
+                          ? 'has-suggestions'
+                          : undefined
+                      }
                       aria-current={selectedTime === time ? 'time' : undefined}
-                      style={{ top: `${(timePositions[index] / timelineDistance) * 100}%` }}
+                      style={{
+                        top: `${(timePositions[index] / timelineDistance) * 100}%`,
+                      }}
                       onClick={() => {
                         setSelectedTime(time);
                         setJumpTime(time);
                       }}
                     >
-                      <span className="activity-index-tooltip">{timeLabel(time)}</span>
+                      <span className="activity-index-tooltip">
+                        {timeLabel(time)}
+                        {suggestionCounts.has(time) &&
+                          ` · ${suggestionCounts.get(time)} suggestion${suggestionCounts.get(time) === 1 ? '' : 's'}`}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -369,25 +607,30 @@ export default function ObservationInspector({
                       ),
                     ).find((item) => item.getBoundingClientRect().bottom > top);
                     const record = entry
-                      ? records[Number(entry.dataset.activityIndex)]
+                      ? feedRecords[Number(entry.dataset.activityIndex)]
                       : undefined;
                     if (record) setSelectedTime(hourStart(record.ts));
                   }
                   if (scrollHeight - scrollTop - clientHeight < 160) {
                     setVisibleCount((count) =>
-                      Math.min(records.length, count + 40),
+                      Math.min(feedRecords.length, count + 40),
                     );
                   }
                 }}
               >
-                {records.length === 0 ? (
+                {feedRecords.length === 0 ? (
                   <p className="activity-empty">{emptyText}</p>
                 ) : (
-                  <ol className="activity-feed" aria-label="Recent activity">
-                    {records.slice(0, visibleCount).map((record, index) => (
+                  <ol
+                    className="activity-feed"
+                    aria-label={
+                      suggestionsOnly ? 'All suggestions' : 'Recent activity'
+                    }
+                  >
+                    {feedRecords.slice(0, visibleCount).map((record, index) => (
                       <li
                         data-activity-index={index}
-                        className={index === 0 ? 'is-latest' : ''}
+                        className={`${index === 0 ? 'is-latest' : ''}${record.proactive_support?.suggestion ? ' has-suggestion' : ''}`}
                         key={record.observation_id ?? `${record.ts}-${index}`}
                       >
                         <div className="activity-feed-entry">
@@ -414,16 +657,10 @@ export default function ObservationInspector({
                                 : `${age(record.ts, now)} · ${new Date(record.ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`}
                             </time>
                           </div>
-                          <div className="activity-markdown">
-                            <Markdown
-                              remarkPlugins={[remarkGfm, activityHighlights]}
-                              skipHtml
-                              disallowedElements={['img']}
-                              components={activityMarkdownComponents}
-                            >
-                              {cleanObservation(record.observation)}
-                            </Markdown>
-                          </div>
+                          <ActivityEntryContent
+                            record={record}
+                            suggestionsOnly={suggestionsOnly}
+                          />
                         </div>
                       </li>
                     ))}

@@ -95,7 +95,7 @@ Screenshots are deleted the moment the observer has read them, so nothing accumu
 ### VLM Calls
 
 While Coco application is fully local, the observer involves the VLM call: it sends **screenshots of your screen** to whichever VLM you select, so your provider choice determines where those pixels go. We are working on making Coco on-device naitive. Right now, we recommend:
-- Self-hosted VLMs, e.g., via [vLLM](https://github.com/vllm-project/vllm), [LM Studio](https://lmstudio.ai/)
+- Self-hosted VLMs, e.g., via [CTI-engine](https://github.com/mit-han-lab/cti-engine), [vLLM](https://github.com/vllm-project/vllm), or [LM Studio](https://lmstudio.ai/). CTI-engine is optimized for consumer hardware and AI PCs and makes it easy to run local models through Docker. See the [personalization privacy and local deployment guide](lib/personalization/README.md#privacy-and-local-deployment) for Docker commands to serve Qwen3.5 with [DFlash](https://github.com/z-lab/dflash) using CTI-engine and keep personalization processing on hardware you control.
 - Trusted Execution Environment (TEE) providers — open-weight models hosted on attested secure hardware, e.g. [Tinfoil](https://tinfoil.sh/)
 - [Unlinkable inference](https://openanonymity.ai/blog/unlinkable-inference/) — relays requests to any model provider while adding confidentiality, e.g. [Open Anonymity](https://chat.openanonymity.ai/)
 

@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 import chz
 import uvicorn
@@ -96,6 +97,9 @@ class InstantSuggestionResponse(BaseModel):
     targetTool: str | None = None
     prompt: str | None = None
     copyText: str  # unified text the UI copies (body for content, prompt for delegate)
+    dimensions: list[
+        Literal["execution", "judgment", "learning", "attention", "motivation"]
+    ] = Field(default_factory=list)
     llm_metrics: dict | None = None
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from external_api.litellm_api import (
     FunctionCall,
     LiteLLMMessage,
@@ -10,6 +11,51 @@ from external_api.litellm_api import (
 )
 from proactive_tutor import instant_suggestion
 from proactive_tutor.agents import tutor as tutor_module
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ("<dimensions>execution,judgment</dimensions>", ["execution", "judgment"]),
+        (
+            "<dimensions> Learning,LEARNING,unknown,attention,motivation</dimensions>",
+            ["learning", "attention"],
+        ),
+        ("<dimensions>unknown</dimensions>", []),
+        ("", []),
+    ],
+)
+def test_support_dimensions_from_xml(field, expected):
+    result = instant_suggestion._parse_instant_suggestion(
+        f"<suggestion><kind>content</kind><title>Review</title>{field}"
+        "<body>Check the source.</body></suggestion>"
+    )
+    assert result["dimensions"] == expected
+    assert result["copyText"] == "Check the source."
+
+
+@pytest.mark.parametrize(
+    ("dimensions", "expected"),
+    [
+        (["motivation", "attention"], ["motivation", "attention"]),
+        ([None, 42, "Judgment", "judgment", "unknown"], ["judgment"]),
+        ("execution,learning", ["execution", "learning"]),
+        ({"execution": True}, []),
+    ],
+)
+def test_support_dimensions_from_json(dimensions, expected):
+    result = instant_suggestion._parse_instant_suggestion(
+        json.dumps(
+            {
+                "kind": "delegate",
+                "title": "Review",
+                "prompt": "Check the source.",
+                "dimensions": dimensions,
+            }
+        )
+    )
+    assert result["dimensions"] == expected
+    assert result["copyText"] == "Check the source."
 
 
 def _metrics(call_id: str) -> dict:
@@ -168,6 +214,7 @@ def test_endpoint_uses_assigned_suggestion_model_and_legacy_fallback(monkeypatch
             "title": "Suggestion",
             "body": "Done",
             "copyText": "Done",
+            "dimensions": ["execution", "learning"],
         }, {}
 
     monkeypatch.setattr(
@@ -180,10 +227,9 @@ def test_endpoint_uses_assigned_suggestion_model_and_legacy_fallback(monkeypatch
     )
     client = TestClient(tutor_server.app)
     monkeypatch.setenv("COCO_INSTANT_SUGGESTION_MODEL", "pi/test/fast")
-    assert (
-        client.post("/suggestion/instant", json={"observation": "Writing"}).status_code
-        == 200
-    )
+    response = client.post("/suggestion/instant", json={"observation": "Writing"})
+    assert response.status_code == 200
+    assert response.json()["dimensions"] == ["execution", "learning"]
     monkeypatch.delenv("COCO_INSTANT_SUGGESTION_MODEL")
     assert (
         client.post("/suggestion/instant", json={"observation": "Writing"}).status_code

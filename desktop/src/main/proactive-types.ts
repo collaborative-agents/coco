@@ -2,7 +2,9 @@ import type { ChatSuggestion } from '../shared/chat-suggestion';
 import type {
   AiToolButton,
   LLMCallMetrics,
+  SupportDimension,
 } from '../renderer/components/observation-types';
+
 export interface ChatSeed {
   phrase: string;
   label: string;
@@ -23,6 +25,7 @@ export interface InstantSuggestion {
   targetTool?: string;
   prompt?: string;
   copyText: string;
+  dimensions?: SupportDimension[];
   availableTools?: AiToolButton[];
   llm_metrics?: LLMCallMetrics;
 }

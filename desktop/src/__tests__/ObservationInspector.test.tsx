@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import ObservationInspector from '../renderer/components/chat/ObservationInspector';
 
 const row = {
@@ -27,6 +27,215 @@ function setup(snapshot: Promise<unknown> = Promise.resolve([row])) {
   render(<ObservationInspector onOpen={jest.fn()} />);
   return { listeners, invoke };
 }
+
+it('shows saved suggestions inline with their activity in the existing panel', async () => {
+  setup(
+    Promise.resolve([
+      {
+        ...row,
+        proactive_support: {
+          engaged: false,
+          suggestion: {
+            kind: 'content',
+            title: 'Compare the results',
+            body: 'Review **both outputs** before choosing.',
+            copyText: 'Review both outputs before choosing.',
+            dimensions: ['judgment', 'learning'],
+          },
+        },
+      },
+      {
+        ...row,
+        observation_id: 'delegate',
+        ts: row.ts - 60,
+        proactive_support: {
+          engaged: true,
+          suggestion: {
+            kind: 'delegate',
+            title: 'Ask for a review',
+            prompt: 'Check `router.ts` for edge cases.',
+            copyText: 'Check router.ts for edge cases.',
+          },
+        },
+      },
+    ]),
+  );
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Your activity' }));
+  expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  const title = screen.getByText('Compare the results');
+  const tags = within(title.closest('summary')!).getByRole('list', {
+    name: 'Suggestion tags',
+  });
+  expect(
+    within(tags)
+      .getAllByRole('listitem')
+      .map((tag) => tag.textContent),
+  ).toEqual(['Judgment', 'Learning', 'Ready to use']);
+  expect(
+    screen.getByTitle('Check information or make a better decision.'),
+  ).toHaveTextContent('Judgment');
+  expect(screen.getByText('AI prompt')).toBeInTheDocument();
+  expect(title.closest('details')).not.toHaveAttribute('open');
+  fireEvent.click(title.closest('summary')!);
+  expect(title.closest('details')).toHaveAttribute('open');
+  expect(screen.getByText('both outputs').tagName).toBe('STRONG');
+  expect(screen.getByText('Ask for a review')).toBeInTheDocument();
+  expect(screen.getByText('router.ts').tagName).toBe('CODE');
+  fireEvent.click(screen.getByRole('button', { name: 'All suggestions' }));
+  expect(screen.getByText('Judgment')).toBeVisible();
+  expect(screen.getByText('Learning')).toBeVisible();
+  expect(screen.getByText('Ready to use')).toBeVisible();
+  expect(screen.getByText('AI prompt')).toBeVisible();
+  expect(screen.getAllByText('Related observation')).toHaveLength(2);
+});
+
+it('refreshes completed suggestions without losing live activity', async () => {
+  jest.useFakeTimers();
+  const { listeners, invoke } = setup();
+  await act(async () => {});
+  act(() =>
+    listeners.get('observation-update')?.({
+      ...row,
+      observation_id: 'newer',
+      observation: 'New live context.',
+    }),
+  );
+  invoke.mockImplementation(async (channel: string) => {
+    if (channel !== 'get-observation-inspector') return {};
+    return [
+      {
+        ...row,
+        proactive_support: {
+          engaged: false,
+          suggestion: {
+            kind: 'content',
+            title: 'A finished suggestion',
+            body: 'Try this approach.',
+            copyText: 'Try this approach.',
+          },
+        },
+      },
+    ];
+  });
+  await act(async () => {
+    listeners.get('activity-history-changed')?.();
+    jest.advanceTimersByTime(300);
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Your activity' }));
+  expect(screen.getByText('A finished suggestion')).toBeInTheDocument();
+  expect(screen.getByText('New live context.')).toBeInTheDocument();
+  expect(
+    screen.getAllByText(
+      (_, element) =>
+        element?.tagName === 'P' && element.textContent === row.observation,
+    ),
+  ).toHaveLength(1);
+  jest.useRealTimers();
+});
+
+it('marks suggestion hours and filters all saved suggestions before pagination', async () => {
+  const rows = Array.from({ length: 85 }, (_, index) => ({
+    ...row,
+    ts: row.ts - index * 3600,
+    observation_id: `activity-${index}`,
+    observation: `Activity entry ${index}`,
+    ...(index === 2 || index === 84
+      ? {
+          proactive_support: {
+            engaged: false,
+            suggestion: {
+              kind: 'content',
+              title: `Suggestion ${index}`,
+              body: `Suggestion text ${index}`,
+              copyText: `Suggestion text ${index}`,
+            },
+          },
+        }
+      : {}),
+  }));
+  setup(Promise.resolve(rows));
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Your activity' }));
+  const markers = screen.getAllByRole('button', { name: /Jump to/ });
+  expect(
+    markers.filter((marker) => marker.classList.contains('has-suggestions')),
+  ).toHaveLength(2);
+  expect(screen.queryByText('Suggestion 84')).not.toBeInTheDocument();
+  const filter = screen.getByRole('button', { name: 'All suggestions' });
+  expect(filter).toHaveTextContent('2');
+  fireEvent.click(filter);
+  expect(filter).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  expect(screen.queryByText('Activity entry 0')).not.toBeInTheDocument();
+  expect(screen.getByText('Suggestion 84')).toBeVisible();
+  expect(screen.getByText('Suggestion text 84')).toBeVisible();
+  expect(screen.getByText('Suggestion 84').closest('details')).toBeNull();
+  const observation = screen.getByText('Activity entry 84');
+  const context = observation.closest('details')!;
+  expect(context).not.toHaveAttribute('open');
+  expect(observation).not.toBeVisible();
+  expect(
+    screen.getByText('Suggestion 84').compareDocumentPosition(context),
+  ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  fireEvent.click(context.querySelector('summary')!);
+  expect(observation).toBeVisible();
+  expect(context).toHaveAttribute('open');
+  expect(screen.getAllByRole('button', { name: /Jump to/ })).toHaveLength(2);
+  fireEvent.click(screen.getByRole('button', { name: 'All activity' }));
+  expect(screen.getByText('Activity entry 0')).toBeVisible();
+  expect(screen.queryByText('Suggestion 84')).not.toBeInTheDocument();
+});
+
+it('paginates suggestions and jumps to older suggestion hours in the filtered feed', async () => {
+  setup(
+    Promise.resolve(
+      Array.from({ length: 85 }, (_, index) => ({
+        ...row,
+        ts: row.ts - index * 3600,
+        observation_id: `activity-${index}`,
+        observation: `Activity entry ${index}`,
+        ...(index % 2 === 0
+          ? {
+              proactive_support: {
+                engaged: false,
+                suggestion: {
+                  kind: 'delegate',
+                  title: `Suggestion ${index}`,
+                  prompt: `Prompt ${index}`,
+                  copyText: `Prompt ${index}`,
+                },
+              },
+            }
+          : {}),
+      })),
+    ),
+  );
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Your activity' }));
+  fireEvent.click(screen.getByRole('button', { name: 'All suggestions' }));
+  expect(screen.queryByText('Suggestion 84')).not.toBeInTheDocument();
+  const hours = screen.getAllByRole('button', { name: /Jump to/ });
+  fireEvent.click(hours[hours.length - 1]);
+  expect(screen.getByText('Suggestion 84')).toBeVisible();
+  expect(hours[hours.length - 1]).toHaveAttribute('aria-current', 'time');
+  fireEvent.click(screen.getByRole('button', { name: 'All activity' }));
+  fireEvent.click(screen.getByRole('button', { name: 'All suggestions' }));
+  fireEvent.scroll(document.querySelector('.activity-popover-content')!);
+  expect(screen.getByText('Suggestion 84')).toBeVisible();
+});
+
+it('explains when there are no suggestions and keeps activity accessible', async () => {
+  setup();
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Your activity' }));
+  fireEvent.click(screen.getByRole('button', { name: 'All suggestions' }));
+  expect(screen.getByText(/No suggestions yet/)).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'All activity' }));
+  expect(
+    screen.getByRole('list', { name: 'Recent activity' }),
+  ).toHaveTextContent(row.observation);
+});
 
 it('stays closed during updates, then shows live observations and restores focus on Escape', async () => {
   const { listeners } = setup();
@@ -199,7 +408,9 @@ it('jumps to an hour today beyond the initially rendered entries', async () => {
   expect(screen.getByText('Today entry 61')).toBeInTheDocument();
   expect(hour).toHaveAttribute('aria-current', 'time');
   expect(nowButton).not.toHaveAttribute('aria-current');
-  const older = screen.getByRole('button', { name: /Jump to Nov 4, 2026 18:00/ });
+  const older = screen.getByRole('button', {
+    name: /Jump to Nov 4, 2026 18:00/,
+  });
   fireEvent.click(older);
   expect(screen.getByText('Yesterday entry')).toBeInTheDocument();
   expect(older).toHaveAttribute('aria-current', 'time');
