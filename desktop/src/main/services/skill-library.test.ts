@@ -70,3 +70,30 @@ test('rejects path traversal and symlink packages without granting access', () =
   expect(() => library.import(source)).toThrow('symbolic links');
   expect(library.runtimeSkills().paths).toEqual([]);
 });
+
+test('bundled Cua skill is available without imports and can be explicitly overridden', () => {
+  const bundled = path.resolve(__dirname, '../../../assets/skills');
+  library = new SkillLibrary(path.join(root, 'library'), bundled);
+  expect(library.list().map((skill) => skill.id)).toContain('cua-driver');
+  const original = library.runtimeSkills();
+  expect(original.paths).toContain(path.join(bundled, 'cua-driver'));
+  expect(library.directory('cua-driver')).toBe(
+    path.join(bundled, 'cua-driver'),
+  );
+
+  library.create({
+    name: 'cua-driver',
+    description: 'My local computer workflow',
+    instructions: 'Use my reviewed workflow.',
+  });
+  expect(
+    library.list().filter((skill) => skill.id === 'cua-driver'),
+  ).toHaveLength(1);
+  expect(library.directory('cua-driver')).toBe(
+    path.join(root, 'library', 'cua-driver'),
+  );
+  expect(library.runtimeSkills().revision).not.toBe(original.revision);
+  expect(library.runtimeSkills().paths).not.toContain(
+    path.join(bundled, 'cua-driver'),
+  );
+});

@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import AgentActivityList, { groupActivity } from './AgentActivityList';
 import type { TutorToolCall } from '../observation-types';
 
@@ -130,4 +130,26 @@ test('groups tool calls across approved requests while retaining denials', () =>
   ]);
   expect(groups.map((group) => group.kind)).toEqual(['tools', 'permission']);
   expect(groups[0].kind === 'tools' && groups[0].calls).toHaveLength(2);
+});
+
+test('keeps the explicit Auto mode choice visible but hides subsequent automatic approvals', () => {
+  const request = {
+    id: 'auto-choice',
+    kind: 'action' as const,
+    tool: 'bash',
+    arguments: { command: 'pwd' },
+    directory: '/work',
+    status: 'allowed' as const,
+    approvalSource: 'auto-mode' as const,
+  };
+  render(
+    <AgentActivityList
+      activity={[
+        { kind: 'permission', request: { ...request, autoModeEnabled: true } },
+        { kind: 'permission', request: { ...request, id: 'next-action' } },
+      ]}
+      interactive={false}
+    />,
+  );
+  expect(screen.getAllByText(/Auto mode enabled/)).toHaveLength(1);
 });

@@ -12,7 +12,7 @@ export default function PermissionCard({
   interactive: boolean;
 }) {
   const [submitting, setSubmitting] = useState(false);
-  const [decision, setDecision] = useState<boolean | null>(null);
+  const [decision, setDecision] = useState<boolean | 'auto' | null>(null);
   const [error, setError] = useState('');
   const cardRef = useRef<HTMLElement>(null);
   const answeringRef = useRef(false);
@@ -47,7 +47,7 @@ export default function PermissionCard({
     scopeHint = `Access applies to this ${request.fileAccess?.scope === 'directory' ? 'folder and its contents' : 'file'}. Allow once, or remember it for this workspace across chats and restarts.`;
 
   const answer = useCallback(
-    async (allow: boolean | 'always') => {
+    async (allow: boolean | 'always' | 'auto') => {
       if (!pending || answeringRef.current) return;
       answeringRef.current = true;
       setSubmitting(true);
@@ -61,7 +61,7 @@ export default function PermissionCard({
           request.id,
           allow,
         );
-        setDecision(allow !== false);
+        setDecision(allow === 'auto' ? 'auto' : allow !== false);
       } catch (err) {
         answeringRef.current = false;
         setError(
@@ -118,6 +118,18 @@ export default function PermissionCard({
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [pending, answer]);
 
+  if (
+    status === 'allowed' &&
+    (request.autoModeEnabled || decision === 'auto')
+  ) {
+    return (
+      <div className="agent-permission-log" role="status">
+        Auto mode enabled for this run. Tool actions are approved automatically.
+        {interactive &&
+          ' Use Stop to end the run. Folder and file access still require permission.'}
+      </div>
+    );
+  }
   if (status === 'allowed' || status === 'cancelled') return null;
   if (status === 'denied') {
     let subject = `Use ${request.tool}`;
@@ -175,6 +187,15 @@ export default function PermissionCard({
             : 'This tool may send data or change an external service.'}
         </p>
       )}
+      {pending && request.kind === 'action' && (
+        <p className="agent-permission-note">
+          Auto mode allows this and all remaining tool actions in this run,
+          including commands and desktop control, without individual approval.
+          It resets when the run ends or you press Stop. Folder and file access
+          permissions stay separate; shell commands can still access files
+          outside the working folder.
+        </p>
+      )}
       {pending && (
         <div className="agent-permission-actions">
           <button
@@ -203,6 +224,15 @@ export default function PermissionCard({
             >
               Always allow <code>{request.suggestedPrefix.join(' ')} …</code> in
               this workspace
+            </button>
+          )}
+          {request.kind === 'action' && (
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => answer('auto')}
+            >
+              Enable Auto mode
             </button>
           )}
           <button

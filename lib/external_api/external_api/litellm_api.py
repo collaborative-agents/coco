@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
@@ -84,6 +86,16 @@ def get_litellm_completion(
         ],
         "stream": stream,
     }
+    # The desktop can configure several OpenAI-compatible endpoints. Select
+    # routing per request; mutating os.environ would race with other chats and
+    # instant suggestions running in this same process.
+    routes_json = os.environ.get("COCO_HOSTED_MODEL_ROUTES")
+    if model.startswith("hosted_vllm/") and routes_json:
+        route = json.loads(routes_json).get(model)
+        if route is None or not route.get("api_base"):
+            raise ValueError("No endpoint configured for the selected model.")
+        kwargs["api_base"] = route["api_base"]
+        kwargs["api_key"] = route["api_key"]
     if not uses_prompt_only_sampling and temperature is not None:
         kwargs["temperature"] = temperature
     # max_tokens is required by some providers (e.g. Anthropic); only include

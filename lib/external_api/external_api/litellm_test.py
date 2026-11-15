@@ -2,8 +2,12 @@
 `uv run pytest lib/external_api/external_api/litellm_test.py`
 """
 
+import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import pytest
 from external_api import litellm_api
 from external_api.litellm_api import (
     ImageURL,
@@ -12,6 +16,57 @@ from external_api.litellm_api import (
     TextContent,
     get_litellm_completion,
 )
+
+
+def test_hosted_models_use_per_request_routes(monkeypatch):
+    routes = {
+        "hosted_vllm/Qwen/Qwen3.5-9B": {
+            "api_base": "http://local.test/v1",
+            "api_key": "local-key",
+        },
+        "hosted_vllm/cloud/chat": {
+            "api_base": "https://cloud.test/v1",
+            "api_key": "cloud-key",
+        },
+    }
+    monkeypatch.setenv("COCO_HOSTED_MODEL_ROUTES", json.dumps(routes))
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "https://wrong.test/v1")
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "wrong-key")
+
+    def fake_completion(**kwargs):
+        route = routes[kwargs["model"]]
+        assert kwargs["api_base"] == route["api_base"]
+        assert kwargs["api_key"] == route["api_key"]
+        assert os.environ["HOSTED_VLLM_API_BASE"] == "https://wrong.test/v1"
+        assert os.environ["HOSTED_VLLM_API_KEY"] == "wrong-key"
+        if kwargs["stream"]:
+            return iter(
+                [
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content="OK", tool_calls=[])
+                            )
+                        ]
+                    )
+                ]
+            )
+        return {"choices": [{"message": {"content": "OK"}}], "usage": {}}
+
+    monkeypatch.setattr(litellm_api, "completion", fake_completion)
+
+    def call(model):
+        for stream in (False, True):
+            reply, _ = get_litellm_completion(
+                [{"role": "user", "content": "Hello"}], model=model, stream=stream
+            )
+            assert reply.content[0].text == "OK"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(call, list(routes) * 3))
+
+    with pytest.raises(ValueError, match="No endpoint configured"):
+        get_litellm_completion([], model="hosted_vllm/missing")
 
 
 def test_text_only_query(monkeypatch):

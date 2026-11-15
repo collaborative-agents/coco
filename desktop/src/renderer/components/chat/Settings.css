@@ -101,6 +101,24 @@
 .local-settings > .coco-button {
   align-self: flex-start;
 }
+.model-settings-save-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--coco-color-border);
+}
+.model-settings-reminder {
+  padding: 12px 16px;
+  border-left: 3px solid var(--coco-color-primary);
+  border-radius: 4px;
+  background: var(--coco-color-accent-soft);
+}
+.model-settings-save-status {
+  color: var(--coco-color-text-secondary);
+  font-size: var(--coco-text-secondary);
+}
 .pi-provider-settings.ob-model-card {
   gap: var(--coco-space-3);
   padding: var(--coco-space-4);

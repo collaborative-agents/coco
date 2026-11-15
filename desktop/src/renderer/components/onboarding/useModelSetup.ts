@@ -16,6 +16,18 @@ export default function useModelSetup() {
   const [tutorModels, setTutorModels] = useState<ModelDraft[]>([]);
   const [defaultTutorId, setDefaultTutorId] = useState('');
   const [instantSuggestionModelId, setInstantSuggestionModelId] = useState('');
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [savedDraft, setSavedDraft] = useState<string | null>(null);
+  const draft = JSON.stringify({
+    sensingEnabled,
+    sensingModel,
+    tutorModels,
+    defaultTutorId,
+    instantSuggestionModelId,
+  });
+  useEffect(() => {
+    if (modelsLoaded && savedDraft === null) setSavedDraft(draft);
+  }, [modelsLoaded, savedDraft, draft]);
   const [connectionTests, setConnectionTests] = useState<
     Record<string, ConnectionTestStatus>
   >({});
@@ -113,7 +125,8 @@ export default function useModelSetup() {
         setInstantSuggestionModelId(config.instantSuggestionModelId || '');
         return undefined;
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setModelsLoaded(true));
   }, []);
 
   const saveModels = async () => {
@@ -142,7 +155,11 @@ export default function useModelSetup() {
       }
       tutorModels.forEach((item) => {
         if (item.apiKey.trim())
-          credentials[`tutor:${item.provider}`] = item.apiKey;
+          credentials[
+            item.provider === 'hosted_vllm'
+              ? `tutor:${item.provider}:${item.id}`
+              : `tutor:${item.provider}`
+          ] = item.apiKey;
       });
       const result = await window.electron?.ipcRenderer.invoke(
         'save-model-configuration',
@@ -177,6 +194,8 @@ export default function useModelSetup() {
         return false;
       }
 
+      // Capture the submitted draft so edits made during saving stay unsaved.
+      setSavedDraft(draft);
       return true;
     } catch {
       setModelError('Could not save model configuration. Please try again.');
@@ -187,6 +206,7 @@ export default function useModelSetup() {
   };
   return {
     savingModels,
+    hasUnsavedChanges: savedDraft !== null && draft !== savedDraft,
     saveModels,
     modelProps: {
       sensingEnabled,

@@ -401,7 +401,10 @@ function agentDirectory(sessionId: string | null = currentSessionId): string {
   return directory;
 }
 
-const skillLibrary = () => new SkillLibrary(path.join(app.getPath('userData'), 'skills'));
+const skillLibrary = () => new SkillLibrary(
+  path.join(app.getPath('userData'), 'skills'),
+  path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'assets', 'skills'),
+);
 const tokenUsage = () => new TokenUsageStore(path.join(app.getPath('userData'), 'token-usage.json'));
 ipcMain.handle('curated-skills-list', () => skillLibrary().list());
 ipcMain.handle('curated-skills-reveal', async (_event, id: string) => {
@@ -811,6 +814,13 @@ function closeAvatarMenu(): void {
   avatarWindow?.webContents.send('avatar-menu-visibility', { open: false });
 }
 
+function repositionAvatarMenu(): void {
+  if (!avatarMenuOpen || !avatarMenuWindow || avatarMenuWindow.isDestroyed()) return;
+  const placement = avatarMenuBounds();
+  if (!placement) return;
+  avatarMenuWindow.setBounds(placement.bounds);
+}
+
 function openAvatarMenu(): void {
   if (avatarMenuOpen) {
     closeAvatarMenu();
@@ -841,8 +851,11 @@ function openAvatarMenu(): void {
 
 const createAvatarMenuWindow = () => {
   if (avatarMenuWindow && !avatarMenuWindow.isDestroyed()) return;
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarMenuWindow = new BrowserWindow({
     ...fullscreenCompanionOptions(),
+    // macOS moves child windows in the same frame as their parent.
+    parent: avatarWindow,
     show: false,
     width: 1,
     height: 1,
@@ -902,8 +915,7 @@ ipcMain.on(
     if (!(width > 0 && height > 0)) return;
     avatarMenuSize = { width: Math.ceil(width), height: Math.ceil(height) };
     // Content grew or shrank while open (e.g. a Hide error): keep it in place.
-    const placement = avatarMenuOpen ? avatarMenuBounds() : null;
-    if (placement) avatarMenuWindow?.setBounds(placement.bounds);
+    repositionAvatarMenu();
   },
 );
 
@@ -1364,12 +1376,17 @@ const createAvatarWindow = () => {
       avatarDragEndTimer = null;
       setAvatarDragging(false);
       placeAvatarBubbleWindow();
+      repositionAvatarMenu();
     }, AVATAR_DRAG_END_MS);
   };
   avatarWindow.on('will-move', noteAvatarMove);
   avatarWindow.on('move', noteAvatarMove);
+  // Also follow on platforms that do not move child windows automatically,
+  // and recompute placement when crossing a display or work-area edge.
+  avatarWindow.on('move', repositionAvatarMenu);
   avatarWindow.on('hide', () => {
     avatarPointerDrag = null;
+    closeAvatarMenu();
     hideAvatarBubble();
     closeAvatarHistory();
   });
@@ -2220,6 +2237,7 @@ async function testModelConnection(
         apiKey ?? '',
       );
       const providerEnvNames = new Set([
+        'COCO_HOSTED_MODEL_ROUTES',
         'ANTHROPIC_API_KEY',
         'GEMINI_API_KEY',
         'GOOGLE_API_KEY',

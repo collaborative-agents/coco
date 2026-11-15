@@ -1,6 +1,7 @@
 // Kept as native ESM: the pi SDK and its resource discovery must not be webpacked.
 import fs from 'node:fs';
 import { createModelRuntime } from './pi-auth.mjs';
+import { contextWindowForModel } from './pi-context-window.mjs';
 import { chatThinkingLevel } from './pi-thinking.mjs';
 import { fileURLToPath } from 'node:url';
 import { ANSWER_CHANNEL, CANCEL_CHANNEL } from './question-channel.mjs';
@@ -23,7 +24,8 @@ You can use read, write, edit and bash directly; do not delegate back to another
 File tools can access the approved working folder. For files outside it, call the
 normal file tool: Coco will request permission for that path, or reuse a saved
 workspace-specific grant. Do not ask the user to change workspaces just to read
-or edit another file. Bash commands require approval unless a saved command rule applies.
+or edit another file. Bash commands require approval unless a saved command rule
+applies or the user enabled Auto mode for this run through Coco's approval UI.
 Shell execution is not sandboxed. Prefer file
 tools for ordinary reads and edits. Before requesting commands that send messages,
 publish, or change external services, prepare the concrete action for review.
@@ -122,7 +124,7 @@ export async function createRuntime({
           reasoning: false,
           input: ['text', 'image'],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 64000,
+          contextWindow: contextWindowForModel(context.model, modelRuntime.getModels()),
           maxTokens: 8192,
           compat: {
             supportsDeveloperRole: false,

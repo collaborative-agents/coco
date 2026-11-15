@@ -8,6 +8,46 @@ import {
 } from '@testing-library/react';
 import LocalModelSettings from '../renderer/components/chat/LocalModelSettings';
 
+it('saves separate keys for hosted tutor connections', async () => {
+  const tutors = ['local', 'cloud'].map((id) => ({
+    id,
+    label: id,
+    provider: 'hosted_vllm',
+    model: `hosted_vllm/${id}/chat`,
+    baseUrl: `https://${id}.test/v1`,
+  }));
+  const invoke = jest.fn(async (channel) => {
+    if (channel === 'get-model-configuration')
+      return { sensing: null, tutors, defaultTutorId: 'local' };
+    if (channel === 'pi-provider')
+      return {
+        connection: { mode: 'coco' },
+        flow: null,
+        providers: [],
+        models: [],
+      };
+    if (channel === 'save-model-configuration') return { success: true };
+    return null;
+  });
+  (window as any).electron = { ipcRenderer: { invoke } };
+  render(<LocalModelSettings />);
+  await screen.findByDisplayValue('local');
+  const keys = screen.getAllByPlaceholderText('API key (optional)');
+  fireEvent.change(keys[0], { target: { value: 'local-key' } });
+  fireEvent.change(keys[1], { target: { value: 'cloud-key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save model settings' }));
+  await screen.findByText('Saved');
+  expect(invoke).toHaveBeenCalledWith(
+    'save-model-configuration',
+    expect.objectContaining({
+      credentials: {
+        'tutor:hosted_vllm:local': 'local-key',
+        'tutor:hosted_vllm:cloud': 'cloud-key',
+      },
+    }),
+  );
+});
+
 it('selects connected Pi models for sensing and suggestions and saves through the shared configuration', async () => {
   const invoke = jest.fn(async (channel, action) => {
     if (channel === 'pi-provider')
@@ -66,11 +106,26 @@ it('selects connected Pi models for sensing and suggestions and saves through th
   expect(
     [...sensing.options].some((option) => option.value === 'pi/test/text'),
   ).toBe(false);
+  expect(screen.queryByText(/Unsaved changes/)).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Instant suggestion model'), {
+    target: { value: 'fast' },
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Unsaved changes — save to apply.',
+  );
+  fireEvent.change(screen.getByLabelText('Instant suggestion model'), {
+    target: { value: '' },
+  });
+  expect(screen.queryByText(/Unsaved changes/)).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Instant suggestion model'), {
     target: { value: 'fast' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Save model settings' }));
   await screen.findByText('Saved');
+  expect(screen.queryByText(/Unsaved changes/)).not.toBeInTheDocument();
+  expect(screen.getByText('Saved').parentElement).toBe(
+    screen.getByRole('button', { name: 'Save model settings' }).parentElement,
+  );
   expect(invoke).toHaveBeenCalledWith(
     'save-model-configuration',
     expect.objectContaining({
@@ -84,6 +139,11 @@ it('selects connected Pi models for sensing and suggestions and saves through th
     }),
   );
   expect(screen.queryByText('Use native Pi')).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Instant suggestion model'), {
+    target: { value: '' },
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(/Unsaved changes/);
+  expect(screen.queryByText('Saved')).not.toBeInTheDocument();
   view.unmount();
 });
 

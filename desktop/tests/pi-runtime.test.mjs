@@ -445,13 +445,16 @@ test('advertises only curated skills and explicitly loads a selected skill into 
       tutorUrl: `http://127.0.0.1:${server.address().port}`,
       token: 'test',
       context,
-      skillPaths: [skill],
+      skillPaths: [skill, path.resolve('assets/skills/cua-driver')],
     });
     await runtime.prompt('Help with my notes', [], context);
     const initial = JSON.stringify(requests[0]);
     assert.match(initial, /Prepare weekly advisor notes/);
     assert.doesNotMatch(initial, /Never discover this skill/);
     assert.doesNotMatch(initial, /Use plain bullets and preserve all links/);
+    assert.match(initial, /name>cua-driver/);
+    await runtime.prompt('/skill:cua-driver Inspect Calculator', [], context);
+    assert.match(JSON.stringify(requests.at(-1)), /cua-driver call list_apps/);
     await runtime.prompt('/skill:weekly-update Draft my update', [], context);
     assert.match(
       JSON.stringify(requests.at(-1)),

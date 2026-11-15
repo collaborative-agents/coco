@@ -20,7 +20,8 @@ export interface WorkspacePermissionRule {
 
 export interface PermissionRequest {
   suggestedPrefix?: string[];
-  approvalSource?: 'saved-rule';
+  approvalSource?: 'saved-rule' | 'auto-mode';
+  autoModeEnabled?: boolean;
   id: string;
   kind: 'workspace' | 'action' | 'path';
   fileAccess?: FileAccess;

@@ -273,3 +273,66 @@ test('historical prompts do not respond to shortcuts', () => {
   fireEvent.keyDown(document.body, { key: 'Escape' });
   expect(invoke).not.toHaveBeenCalled();
 });
+
+test('auto mode requires an explicit click and explains the run scope', async () => {
+  render(<PermissionCard request={request} requestId="run-1" interactive />);
+  expect(
+    screen.getByText(/all remaining tool actions in this run/),
+  ).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Enable Auto mode' }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      'answer-agent-permission',
+      'run-1',
+      request.id,
+      'auto',
+    ),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('status').textContent).toContain(
+      'Auto mode enabled',
+    ),
+  );
+  expect(screen.queryByRole('button')).toBeNull();
+});
+
+test.each(['workspace', 'path'] as const)(
+  'does not offer auto mode for %s access',
+  (kind) => {
+    render(
+      <PermissionCard
+        request={{
+          ...request,
+          kind,
+          fileAccess: { path: '/other', scope: 'file', mode: 'read' },
+        }}
+        requestId="run-1"
+        interactive
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Enable Auto mode' }),
+    ).toBeNull();
+  },
+);
+
+test('retains the auto-mode decision in history without live-run controls', () => {
+  render(
+    <PermissionCard
+      request={{
+        ...request,
+        status: 'allowed',
+        approvalSource: 'auto-mode',
+        autoModeEnabled: true,
+      }}
+      requestId="run-1"
+      interactive={false}
+    />,
+  );
+  expect(screen.getByRole('status').textContent).toContain(
+    'Auto mode enabled for this run',
+  );
+  expect(screen.queryByText(/Use Stop/)).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+});
