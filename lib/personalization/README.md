@@ -9,13 +9,13 @@ Coco Personalization learns when and how to help from user feedback and activity
 
 ## Desktop integration
 
-The desktop app runs personalization in the background when compute is available and stops the worker when interactive tutor inference needs it. Checkpoints let interrupted work resume. Recent feedback supplies short-lived signals, while longer idle periods let Coco learn a draft of durable preferences.
-
-Open **Personalization** in the sidebar to inspect progress and review completed drafts. Keep, edit, or reject each preference; decisions are saved so you can return later. Provisional memory stays out of the live prompt, and approved learned memory preserves user-written memory.
+The desktop app runs personalization in the background when compute is available and stops the worker when interactive tutor inference needs it. Checkpoints let interrupted work resume. Recent feedback supplies short-lived signals, while longer idle periods let Coco learn a draft of durable preferences. Open **Personalization** in the sidebar to inspect progress and review completed drafts.
 
 ## Privacy and local deployment
 
-[CTI-engine](https://github.com/mit-han-lab/cti-engine) is optimized for consumer hardware and AI PCs, making it easy to run local models through Docker. Loading the model with one command on RTX 5090, RTX PRO 6000, and DGX Spark on Linux with NVIDIA driver 580 or newer and the NVIDIA Container Toolkit.
+There is an inherent tension for personal agent: The more it knows about you, the better it can help but the more privacy matters. We believe personal AI should run primarily on your own device similar to personal computer.
+
+For on-device personalization, we recommend [CTI](https://github.com/mit-han-lab/cti-engine), which is an engine optimized for consumer hardware and AI PCs, making it easy to run local models through Docker. Loading the model with one command on RTX 5090, RTX PRO 6000, and DGX Spark on Linux with NVIDIA driver 580 or newer and the NVIDIA Container Toolkit.
 
 **Qwen3.5-9B**
 
