@@ -6,10 +6,56 @@ import path from 'node:path';
 import http from 'node:http';
 import { createRuntime } from '../release/app/agent/pi-runtime.mjs';
 
+// Keep unrelated runtime tests offline; browser tests explicitly enable a fake server.
+function testDataDirectory(prefix) {
+  const directory = fs.mkdtempSync(prefix);
+  fs.mkdirSync(path.join(directory, 'pi'));
+  fs.writeFileSync(
+    path.join(directory, 'pi/browser.json'),
+    '{"enabled":false}',
+  );
+  return directory;
+}
+
 // Real SDK + real file tools; only the model and Coco's HTTP service are fake.
 for (const thinking of ['off', 'on'])
-  test(`pi executes tools and resumes with Qwen thinking ${thinking}`, async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coco-pi-test-'));
+  test(`pi executes tools and resumes with Qwen thinking ${thinking}`, async (t) => {
+    const originalNodeOptions = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '-r coco-missing-launcher-preload';
+    t.after(() => {
+      if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = originalNodeOptions;
+    });
+    const directory = testDataDirectory(
+      path.join(os.tmpdir(), 'coco-pi-test-'),
+    );
+    const browserEnabled = process.platform !== 'win32';
+    if (browserEnabled) {
+      fs.mkdirSync(path.join(directory, 'pi'), { recursive: true });
+      const command = path.join(directory, 'fake-npx');
+      fs.writeFileSync(
+        command,
+        `#!/usr/bin/env node
+const readline = require('node:readline');
+const fs = require('node:fs');
+fs.writeFileSync(__filename + '.args', JSON.stringify(process.argv.slice(2)));
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  let result = {};
+  if (message.method === 'initialize') result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'fake-browser', version: '1' } };
+  if (message.method === 'tools/list') result = { tools: [{ name: 'browser_tabs', description: 'List browser tabs', inputSchema: { type: 'object', properties: {} } }] };
+  if (message.method === 'tools/call') result = { content: [{ type: 'text', text: 'Coco browser tab' }] };
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
+});
+`,
+        { mode: 0o755 },
+      );
+      fs.writeFileSync(
+        path.join(directory, 'pi/browser.json'),
+        JSON.stringify({ enabled: true, command }),
+      );
+    }
     let requestCount = 0;
     let hang = false;
     let notifyRequest;
@@ -75,6 +121,7 @@ for (const thinking of ['off', 'on'])
           'edit',
           'bash',
           'ask_user_question',
+          ...(browserEnabled ? ['mcp__browser__browser_tabs'] : []),
           ...tools.map((t) => t.function.name),
         ]) {
           assert.ok(
@@ -85,6 +132,19 @@ for (const thinking of ['off', 'on'])
         emit({ content: 'I will write the file and check context.' });
         emit({
           tool_calls: [
+            ...(browserEnabled
+              ? [
+                  {
+                    index: 3,
+                    id: 'browser-1',
+                    type: 'function',
+                    function: {
+                      name: 'mcp__browser__browser_tabs',
+                      arguments: '{}',
+                    },
+                  },
+                ]
+              : []),
             {
               index: 2,
               id: 'question-1',
@@ -145,7 +205,13 @@ for (const thinking of ['off', 'on'])
       tools,
     };
     let workspaceRequests = 0;
+    let browserApprovals = 0;
     const options = {
+      requestApproval: async (request) => {
+        assert.equal(request.tool, 'mcp__browser__browser_tabs');
+        browserApprovals++;
+        return true;
+      },
       requestWorkspaceAccess: async () => {
         workspaceRequests++;
         return true;
@@ -191,6 +257,23 @@ for (const thinking of ['off', 'on'])
         workspaceRequests > 0,
         'File tools must check workspace access before execution',
       );
+      if (browserEnabled) {
+        assert.equal(browserApprovals, 1);
+        assert.ok(
+          lastRequest.messages.some(
+            (message) =>
+              message.role === 'tool' &&
+              message.content.includes('Coco browser tab'),
+          ),
+        );
+        const args = JSON.parse(
+          fs.readFileSync(path.join(directory, 'fake-npx.args'), 'utf8'),
+        );
+        assert.ok(args.includes('--background'));
+        assert.ok(args.includes('--extension'));
+        assert.ok(args.includes('@playwright/mcp@0.0.85'));
+        assert.ok(!args.includes('--session-name'));
+      }
       const requestsBeforeInspect = requestCount;
       const inspected = runtime.getContextSnapshot();
       assert.ok(inspected.estimatedTokens > 0);
@@ -228,7 +311,7 @@ for (const thinking of ['off', 'on'])
             message.role === 'tool' && message.content.includes('Brief'),
         ),
       );
-      runtime.dispose();
+      await runtime.dispose();
       runtime = await createRuntime(options);
       await runtime.prompt('What did you do?', [], context);
       assert.ok(
@@ -244,7 +327,7 @@ for (const thinking of ['off', 'on'])
       await runtime.abort();
       await pending;
     } finally {
-      runtime?.dispose();
+      await runtime?.dispose();
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
       fs.rmSync(directory, { recursive: true, force: true });
@@ -255,7 +338,9 @@ test('native provider sends inference directly with its own credentials', async 
   const { createModelRuntime } = await import(
     '../release/app/agent/pi-auth.mjs'
   );
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coco-native-test-'));
+  const directory = testDataDirectory(
+    path.join(os.tmpdir(), 'coco-native-test-'),
+  );
   const originalFetch = globalThis.fetch;
   let runtime;
   const requests = [];
@@ -312,13 +397,15 @@ test('native provider sends inference directly with its own credentials', async 
     }
   } finally {
     globalThis.fetch = originalFetch;
-    runtime?.dispose();
+    await runtime?.dispose();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test('two sessions overlap with independent routing and cancellation', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coco-pi-parallel-'));
+  const directory = testDataDirectory(
+    path.join(os.tmpdir(), 'coco-pi-parallel-'),
+  );
   let firstStarted;
   const started = new Promise((resolve) => {
     firstStarted = resolve;
@@ -403,8 +490,8 @@ test('two sessions overlap with independent routing and cancellation', async () 
     await b.prompt('Continue B', [], context);
     assert.equal(received.at(-1).id, 'b');
   } finally {
-    a?.dispose();
-    b?.dispose();
+    await a?.dispose();
+    await b?.dispose();
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(directory, { recursive: true, force: true });
@@ -412,7 +499,7 @@ test('two sessions overlap with independent routing and cancellation', async () 
 });
 
 test('advertises only curated skills and explicitly loads a selected skill into the request', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'coco-skill-runtime-'));
+  const root = testDataDirectory(path.join(os.tmpdir(), 'coco-skill-runtime-'));
   const cwd = path.join(root, 'workspace');
   const skill = path.join(root, 'skills', 'alice', 'weekly-update');
   fs.mkdirSync(cwd);
@@ -474,14 +561,16 @@ test('advertises only curated skills and explicitly loads a selected skill into 
       /no longer available/,
     );
   } finally {
-    runtime?.dispose();
+    await runtime?.dispose();
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
 test('skill authoring has no tools and does not persist its internal planning conversation', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coco-authoring-'));
+  const directory = testDataDirectory(
+    path.join(os.tmpdir(), 'coco-authoring-'),
+  );
   let received;
   const server = http.createServer(async (req, res) => {
     const chunks = [];
@@ -527,7 +616,7 @@ test('skill authoring has no tools and does not persist its internal planning co
     for (const folder of fs.readdirSync(sessions))
       assert.deepEqual(fs.readdirSync(path.join(sessions, folder)), []);
   } finally {
-    runtime?.dispose();
+    await runtime?.dispose();
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(directory, { recursive: true, force: true });

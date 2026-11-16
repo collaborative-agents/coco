@@ -1,9 +1,14 @@
 ---
 name: cua-driver
-description: Use Cua Driver to inspect and operate applications on the user's current computer, including reading windows, clicking controls, and typing. Use for requested desktop or browser interactions.
+description: Use Cua Driver to inspect and operate native desktop applications, including reading windows, clicking controls, and typing. For website tasks, prefer the Browser skill and Playwright tools; use Cua for browser chrome or an explicitly requested desktop-control fallback.
 ---
 
 # Local computer control with Cua Driver
+
+For website content and navigation, prefer the Browser skill and Coco's
+`mcp__browser__*` tools. Use this skill for native desktop apps, browser chrome,
+or when the user explicitly requests Cua. If Playwright is unavailable, explain
+the issue and get agreement before switching to desktop control.
 
 Use the installed `cua-driver` CLI through Coco's bash tool. This controls the current computer; Cua Spaces, remote pairing, and RDP are not required. Coco's existing command approvals still apply. Loading this skill does not authorize unrelated desktop actions or grant macOS permissions.
 

@@ -75,6 +75,9 @@ test('bundled Cua skill is available without imports and can be explicitly overr
   const bundled = path.resolve(__dirname, '../../../assets/skills');
   library = new SkillLibrary(path.join(root, 'library'), bundled);
   expect(library.list().map((skill) => skill.id)).toContain('cua-driver');
+  expect(library.list().map((skill) => skill.id)).toContain('browser');
+  expect(library.runtimeSkills().paths).toContain(path.join(bundled, 'browser'));
+  expect(library.directory('browser')).toBe(path.join(bundled, 'browser'));
   const original = library.runtimeSkills();
   expect(original.paths).toContain(path.join(bundled, 'cua-driver'));
   expect(library.directory('cua-driver')).toBe(

@@ -38,7 +38,7 @@ interface Runtime {
   setHistoryLength(length: number): void;
   answerQuestion(toolCallId: string, response: unknown): void;
   abort(): Promise<void>;
-  dispose(): void;
+  dispose(): void | Promise<void>;
 }
 
 export default class PiHarness {
@@ -121,7 +121,7 @@ export default class PiHarness {
     this.workspaceGrant = undefined;
     this.workspaceDirectory = undefined;
     await this.abort();
-    this.runtime?.dispose();
+    await this.runtime?.dispose();
     this.runtime = undefined;
     this.key = '';
   }
@@ -253,7 +253,7 @@ export default class PiHarness {
         options.authoringInstructions,
       ]);
       if (!this.runtime || key !== this.key) {
-        this.runtime?.dispose();
+        await this.runtime?.dispose();
         this.runtime = undefined;
         const runtimePath = app.isPackaged
           ? path.join(app.getAppPath(), 'agent', 'pi-runtime.mjs')
