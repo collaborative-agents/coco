@@ -774,6 +774,25 @@ export default function ImagePreviewView() {
   if (editable) {
     return (
       <div style={styles.root}>
+        {fullScreenOverlay && (
+          <button
+            type="button"
+            style={{
+              ...styles.actionButton,
+              position: 'fixed',
+              top: 20,
+              right: 20,
+              zIndex: 5,
+            }}
+            onClick={() =>
+              window.electron?.ipcRenderer.sendMessage('close-image-preview', {
+                openChat: true,
+              })
+            }
+          >
+            Skip screenshot
+          </button>
+        )}
         <canvas
           ref={canvasRef}
           style={{

@@ -863,3 +863,34 @@ describe('suggestion pop-up height', () => {
     expect(fittedCardHeight(card)).toBe(270);
   });
 });
+
+describe('daily review', () => {
+  it('shows the complete review in its own layout and preserves actions', () => {
+    const onAction = jest.fn();
+    const onDismiss = jest.fn();
+    const message = `- Reviewed the **podcast draft** and checked pacing.\n\n${'A longer reflection on the day. '.repeat(12)}\n\nFinal detail that must remain readable.`;
+    const { container } = render(
+      <NotificationBubble
+        message={message}
+        notifType="daily-summary"
+        actionLabel="Open chat"
+        onAction={onAction}
+        onDismiss={onDismiss}
+      />,
+    );
+    expect(
+      screen.getByRole('heading', { name: 'Your day, in review' }),
+    ).toBeVisible();
+    expect(
+      screen.getByText('Final detail that must remain readable.'),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector('.daily-review-body strong'),
+    ).toHaveTextContent('podcast draft');
+    expect(container.querySelector('.toast-brand')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open chat' }));
+    expect(onAction).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});

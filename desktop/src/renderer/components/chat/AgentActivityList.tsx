@@ -20,7 +20,11 @@ export function groupActivity(activity: AgentActivity[]) {
     if (item.kind === 'message') {
       if (item.text.trim()) groups.push({ ...item, key: `message-${index}` });
     } else if (item.kind === 'permission') {
-      if (['allowed', 'cancelled'].includes(item.request.status)) return;
+      if (
+        item.request.status === 'cancelled' ||
+        (item.request.status === 'allowed' && !item.request.autoModeEnabled)
+      )
+        return;
       groups.push({ ...item, key: item.request.id });
     } else if (item.call.name === 'ask_user_question') {
       groups.push({ kind: 'question', call: item.call, key: item.call.id });

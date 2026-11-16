@@ -1,17 +1,18 @@
 import { useRef, type ReactNode } from 'react';
-import cocoIcon from '../../../../assets/icon.png';
 import WorkspaceIcon from './WorkspaceIcon';
+import ObservationInspector from './ObservationInspector';
 import WindowControls from './WindowControls';
 import './DesktopWorkspace.css';
+import '../../theme/scrollbars.css';
 
 interface Props {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  active: 'chat' | 'settings';
+  active: 'chat' | 'settings' | 'personalization';
   historyOpen: boolean;
   onHistoryOpen: () => void;
   onHistoryClose: () => void;
-  onNavigate: (page: 'chat' | 'settings') => void;
+  onNavigate: (page: 'chat' | 'settings' | 'personalization') => void;
   history: ReactNode;
   children: ReactNode;
   details: ReactNode;
@@ -54,9 +55,7 @@ export default function DesktopWorkspace({
         }}
       >
         <nav className="workspace-rail" aria-label="Main navigation">
-          <div className="workspace-logo">
-            <img src={cocoIcon} alt="Coco" />
-          </div>
+          <ObservationInspector onOpen={onHistoryClose} />
           <div className="workspace-rail-pages">
             <button
               ref={chatButtonRef}
@@ -71,6 +70,16 @@ export default function DesktopWorkspace({
               onClick={() => onNavigate('chat')}
             >
               <WorkspaceIcon name="chat" />
+            </button>
+            <button
+              type="button"
+              title="Personalization"
+              aria-label="Personalization"
+              aria-current={active === 'personalization' ? 'page' : undefined}
+              onMouseEnter={onHistoryClose}
+              onClick={() => onNavigate('personalization')}
+            >
+              <WorkspaceIcon name="personalization" />
             </button>
           </div>
           <button
@@ -96,7 +105,7 @@ export default function DesktopWorkspace({
       </section>
       <section
         className="workspace-details"
-        aria-label="Settings panel"
+        aria-label={active === 'personalization' ? 'Personalization panel' : 'Settings panel'}
         hidden={active === 'chat'}
       >
         <header className="workspace-page-header">

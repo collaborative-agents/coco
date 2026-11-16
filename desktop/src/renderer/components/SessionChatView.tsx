@@ -1,3 +1,4 @@
+import PersonalizationCenter from './PersonalizationCenter';
 import SettingsPanel from './chat/SettingsPanel';
 import SkillWorkshopBanner from './chat/SkillWorkshopBanner';
 import TokenUsageSettings from './chat/TokenUsageSettings';
@@ -63,7 +64,7 @@ export default function SessionChatView() {
   const [understandingError, setUnderstandingError] = useState('');
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(true);
-  const [activePage, setActivePage] = useState<'chat' | 'settings'>('chat');
+  const [activePage, setActivePage] = useState<'chat' | 'settings' | 'personalization'>('chat');
   const changeExpanded = (value: boolean) => {
     setExpanded(value);
     window.electron?.ipcRenderer.sendMessage('toggle-float-window', {
@@ -83,6 +84,20 @@ export default function SessionChatView() {
     };
   }, []);
   const [contentZoomFactor, setContentZoomFactor] = useState(1);
+  const [showPersonalization, setShowPersonalization] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    const checkReview = async () => {
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const draft = await window.electron?.ipcRenderer.invoke('claim-daily-memory-review');
+        if (draft && !disposed) setShowPersonalization(true);
+      } catch { /* Retry when the next daily review check runs. */ }
+    };
+    void checkReview();
+    const timer = window.setInterval(checkReview, 60_000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1045,6 +1060,7 @@ export default function SessionChatView() {
       () => {
         setShowHistory(false);
         setReviewing(null);
+        setShowPersonalization(false);
         setShowSettings(true);
       },
     );
@@ -1502,7 +1518,9 @@ export default function SessionChatView() {
       expanded={expanded}
       onExpandedChange={changeExpanded}
       active={
-        showSettings
+        showPersonalization
+          ? 'personalization'
+          : showSettings
           ? 'settings'
           : activePage === 'settings'
             ? 'chat'
@@ -1513,6 +1531,7 @@ export default function SessionChatView() {
       onHistoryClose={() => setShowHistory(false)}
       onNavigate={(page) => {
         setActivePage(page);
+        setShowPersonalization(page === 'personalization');
         setShowSettings(page === 'settings');
         if (page !== 'chat') {
           setShowHistory(false);
@@ -1550,7 +1569,16 @@ export default function SessionChatView() {
       }
       details={
         <>
-          {showSettings && (
+          {showPersonalization && (
+            <div className="workspace-personalization">
+              <PersonalizationCenter onBack={() => {
+                setShowPersonalization(false);
+                setShowSettings(false);
+                setActivePage('chat');
+              }} />
+            </div>
+          )}
+          {showSettings && !showPersonalization && (
             <SettingsPanel
               sections={{
                 general: (

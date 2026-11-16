@@ -33,3 +33,5 @@ declare module '*.css' {
   const content: Styles;
   export default content;
 }
+
+declare module "*.gif" { const value: string; export default value; }

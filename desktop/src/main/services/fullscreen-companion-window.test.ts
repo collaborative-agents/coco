@@ -1,4 +1,6 @@
-import configureFullscreenCompanionWindow from './fullscreen-companion-window';
+import configureFullscreenCompanionWindow, {
+  fullscreenCompanionOptions,
+} from './fullscreen-companion-window';
 
 describe('configureFullscreenCompanionWindow', () => {
   it('shows a floating companion surface in macOS fullscreen Spaces', () => {
@@ -12,6 +14,7 @@ describe('configureFullscreenCompanionWindow', () => {
     expect(window.setAlwaysOnTop).toHaveBeenCalledWith(true, 'floating');
     expect(window.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, {
       visibleOnFullScreen: true,
+      skipTransformProcessType: true,
     });
   });
 
@@ -26,4 +29,13 @@ describe('configureFullscreenCompanionWindow', () => {
     expect(window.setAlwaysOnTop).toHaveBeenCalledWith(true, 'floating');
     expect(window.setVisibleOnAllWorkspaces).not.toHaveBeenCalled();
   });
+});
+
+it('uses panels only for macOS companion surfaces', () => {
+  expect(fullscreenCompanionOptions('darwin')).toEqual({
+    type: 'panel',
+    fullscreenable: false,
+  });
+  expect(fullscreenCompanionOptions('win32')).toEqual({});
+  expect(fullscreenCompanionOptions('linux')).toEqual({});
 });

@@ -255,12 +255,45 @@ test('keeps usage when main settles a reply while the renderer is closed', () =>
 });
 
 it('preserves stopped tool activity when main settles a reply after the window closes', () => {
-  const activity = [{ kind: 'tool' as const, call: {
-    id: 'tool-1', name: 'read', arguments: { path: 'README.md' }, status: 'completed' as const,
-    result: { output: 'Project instructions' },
-  } }];
-  const settled = applyStoredReply([{ role: 'tutor', text: '', requestId: 'run-1', isStreaming: true }],
-    'run-1', { text: 'Stopped.', activity, stopped: true });
-  expect(settled?.[0]).toMatchObject({ text: 'Stopped.', activity, stopped: true });
+  const activity = [
+    {
+      kind: 'tool' as const,
+      call: {
+        id: 'tool-1',
+        name: 'read',
+        arguments: { path: 'README.md' },
+        status: 'completed' as const,
+        result: { output: 'Project instructions' },
+      },
+    },
+  ];
+  const settled = applyStoredReply(
+    [{ role: 'tutor', text: '', requestId: 'run-1', isStreaming: true }],
+    'run-1',
+    { text: 'Stopped.', activity, stopped: true },
+  );
+  expect(settled?.[0]).toMatchObject({
+    text: 'Stopped.',
+    activity,
+    stopped: true,
+  });
   expect(settled?.[0].isStreaming).toBeUndefined();
+});
+
+it('derives useful titles for legacy generic names and image-only conversations', () => {
+  expect(
+    deriveConversationTitle('General chat session', [
+      { role: 'user', text: 'Polish my Twitter post' },
+    ]),
+  ).toBe('Polish my Twitter post');
+  expect(
+    deriveConversationTitle('General help session', [
+      { role: 'user', text: '', images: ['image'] },
+    ]),
+  ).toBe('Screenshot discussion');
+  expect(
+    deriveConversationTitle('', [
+      { role: 'tutor', text: 'Try a pivot table for this data' },
+    ]),
+  ).toBe('Try a pivot table for this data');
 });

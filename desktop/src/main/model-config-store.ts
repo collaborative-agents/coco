@@ -87,6 +87,14 @@ const credentialsPath = () =>
 export const credentialId = (role: 'sensing' | 'tutor', provider: ProviderId) =>
   `${role}:${provider}`;
 
+const connectionCredentialId = (
+  role: 'sensing' | 'tutor',
+  connection: ModelConnection,
+) =>
+  connection.provider === 'hosted_vllm' && role === 'tutor'
+    ? `${credentialId(role, connection.provider)}:${connection.id}`
+    : credentialId(role, connection.provider);
+
 function isProvider(value: unknown): value is ProviderId {
   return typeof value === 'string' && value in PROVIDERS;
 }
@@ -234,6 +242,7 @@ export function getModelConfigurationView(): ModelConfigurationView | null {
       ? [credentialId('sensing', config.sensing.provider)]
       : []),
     ...config.tutors.map((item) => credentialId('tutor', item.provider)),
+    ...config.tutors.map((item) => connectionCredentialId('tutor', item)),
   ]);
   return {
     ...config,
@@ -258,6 +267,7 @@ export function saveModelConfiguration(
       ? [credentialId('sensing', config.sensing.provider)]
       : []),
     ...config.tutors.map((item) => credentialId('tutor', item.provider)),
+    ...config.tutors.map((item) => connectionCredentialId('tutor', item)),
   ]);
   Object.keys(credentials).forEach((id) => {
     if (!allowedCredentialIds.has(id)) delete credentials[id];
@@ -302,6 +312,7 @@ function connectionEnv(
   const env: Record<string, string> = {};
   const keyName = PROVIDER_KEY_ENV[connection.provider];
   const key =
+    credentials[connectionCredentialId(role, connection)] ||
     credentials[credentialId(role, connection.provider)] ||
     (keyName ? fallbackEnv[keyName] : undefined);
   if (keyName && key) env[keyName] = key;
@@ -322,6 +333,22 @@ export function buildRoleModelEnvironments(
   credentials: CredentialMap,
   fallbackEnv: NodeJS.ProcessEnv = {},
 ): { sensingEnv: Record<string, string>; tutorEnv: Record<string, string> } {
+  const hostedRoutes = Object.fromEntries(
+    config.tutors
+      .filter((item) => item.provider === 'hosted_vllm')
+      .map((item) => {
+        const env = connectionEnv(item, 'tutor', credentials, fallbackEnv);
+        return [
+          item.model,
+          {
+            api_base:
+              env.HOSTED_VLLM_API_BASE || fallbackEnv.HOSTED_VLLM_API_BASE,
+            // A nonempty placeholder prevents LiteLLM from borrowing another key.
+            api_key: env.HOSTED_VLLM_API_KEY || 'coco-no-api-key',
+          },
+        ];
+      }),
+  );
   return {
     sensingEnv: config.sensing
       ? {
@@ -331,6 +358,11 @@ export function buildRoleModelEnvironments(
       : {},
     tutorEnv: Object.assign(
       {
+        ...(Object.keys(hostedRoutes).length
+          ? {
+              COCO_HOSTED_MODEL_ROUTES: JSON.stringify(hostedRoutes),
+            }
+          : {}),
         COCO_INSTANT_SUGGESTION_MODEL: config.tutors.find(
           (item) =>
             item.id ===
@@ -374,7 +406,7 @@ export function prepareModelConnectionTest(
   }
   const credentials = readCredentials();
   if (apiKey.trim()) {
-    credentials[credentialId(role, connection.provider)] = apiKey.trim();
+    credentials[connectionCredentialId(role, connection)] = apiKey.trim();
   }
   const env = connectionEnv(connection, role, credentials, process.env);
   const keyName = PROVIDER_KEY_ENV[connection.provider];

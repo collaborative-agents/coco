@@ -8,10 +8,21 @@ import {
 } from 'electron';
 
 export type Channels =
+  | 'claim-daily-memory-review'
+  | 'get-personalization-status'
+  | 'get-observer-context'
+  | 'save-active-preferences'
+  | 'change-observer-insight'
+  | 'get-personalization-center'
+  | 'save-personalization-review-decision'
+  | 'apply-personalization-review'
+  | 'daily-memory-draft-applied'
+  | 'daily-memory-draft-refresh'
   | 'answer-agent-permission'
   | 'revoke-agent-workspace'
   | 'list-command-approvals'
   | 'revoke-command-approval'
+  | 'revoke-file-approval'
   | 'explain-tool-command'
   | 'curated-skills-changed'
   | 'skill-workshop-start'
@@ -155,6 +166,7 @@ export type Channels =
   | 'avatar-renderer-ready'
   // Activity panel hydrates persisted history from main on open
   | 'get-activity-history'
+  | 'get-observation-inspector'
   // Persist an observation's proactive-support engagement + revealed content
   | 'activity-support-engaged'
   // Persist support content/rating independently of initial engagement

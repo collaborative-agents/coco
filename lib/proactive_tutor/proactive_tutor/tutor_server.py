@@ -6,12 +6,15 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 import chz
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
+from memory.inspection import change_insight, inspect_context
+from memory.paths import default_memory_db_path
 from proactive_tutor.html_executor import VIZ_ROOT, VizResult, save_html_visualization
 from proactive_tutor.pi_bridge import create_pi_router
 from proactive_tutor.tutor_system import TutorSystem
@@ -94,6 +97,9 @@ class InstantSuggestionResponse(BaseModel):
     targetTool: str | None = None
     prompt: str | None = None
     copyText: str  # unified text the UI copies (body for content, prompt for delegate)
+    dimensions: list[
+        Literal["execution", "judgment", "learning", "attention", "motivation"]
+    ] = Field(default_factory=list)
     llm_metrics: dict | None = None
 
 
@@ -650,6 +656,48 @@ async def handle_pause(req: EventRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+class InsightChangeRequest(BaseModel):
+    expected: str = Field(max_length=100_000)
+    text: str | None = Field(max_length=100_000)
+
+
+@app.post("/context/observer/{insight_id}")
+async def change_observer_insight(insight_id: int, req: InsightChangeRequest):
+    try:
+        await asyncio.to_thread(
+            change_insight, default_memory_db_path(), insight_id, req.expected, req.text
+        )
+        return {"success": True}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/context/observer")
+async def observer_context(
+    query: str = Query(default="", max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=50),
+    group_by: str = Query(default="topic", pattern="^(topic|date|app)$"),
+    group: str = Query(default="", max_length=100),
+    trail: str = Query(default="[]", max_length=6000),
+):
+    """Inspect saved observer context without starting inference or changing it."""
+    try:
+        context_path = json.loads(trail)
+        return await asyncio.to_thread(
+            inspect_context,
+            default_memory_db_path(),
+            query,
+            offset,
+            limit,
+            group_by,
+            group,
+            context_path,
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/context", response_model=ContextResponse)
 async def get_context():
     """Return conversation history and problem statement for the Streamer to build context prompts."""
@@ -704,7 +752,7 @@ async def get_memory():
     """Return the long-term personalized memory (for the UI to view/edit)."""
     if tutor is None:
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
-    return MemoryResponse(memory=tutor.memory)
+    return MemoryResponse(memory=tutor.user_memory)
 
 
 @app.post("/context/memory", response_model=StatusResponse)
@@ -913,6 +961,29 @@ def main(port: int = 8081, model_name: str = ""):
     if not (model_name or "").strip():
         raise ValueError("--model_name is required")
     asyncio.run(main_async(port=port, model_name=model_name))
+
+
+@app.post("/context/evolved_memory", response_model=StatusResponse)
+async def set_evolved_memory(req: MemoryRequest):
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="Tutor not initialized")
+    tutor.set_evolved_memory(req.memory)
+    return StatusResponse(status="ok")
+
+
+@app.post("/review/daily", response_model=GuidanceResponse)
+async def daily_review():
+    """Generate a stateless review of today's activity from long-term memory."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    try:
+        guidance, llm_metrics = await asyncio.to_thread(
+            tutor.generate_daily_review_with_metrics
+        )
+        return GuidanceResponse(guidance=guidance, llm_metrics=llm_metrics)
+    except Exception as e:
+        logger.error(f"Error generating daily review: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 if __name__ == "__main__":

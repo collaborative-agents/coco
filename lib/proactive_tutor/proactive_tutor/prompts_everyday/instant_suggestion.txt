@@ -29,6 +29,13 @@ Rules:
 - Be concrete and specific to the observation. No generic advice, no meta-commentary, no "here's how you could…".
 - Plain text only inside body/prompt. No surrounding quotes, no markdown code fences, no nested XML tags.
 - `title` is a short label (≤ 6 words) describing the suggestion, e.g. "Reply to Sarah's email" or "Draft the launch checklist".
+- `dimensions` contains one or two support categories, most relevant first, separated by commas. Categorize the help this suggestion actually provides using only these values:
+  - execution: remove a blocker, fix an error, or take over slow manual work.
+  - judgment: improve a decision, verify output or assumptions, or check a trade-off.
+  - learning: explain an unfamiliar concept or build a method or skill.
+  - attention: stay on track with priorities, follow-ups, deadlines, or unfinished work.
+  - motivation: support persistence after setbacks, recognize a specific milestone, or encourage a needed break.
+  Do not infer a person's skill level or personality. These tags describe the suggestion's purpose.
 
 Output EXACTLY ONE block in this format and nothing else:
 
@@ -36,6 +43,7 @@ For content:
 <suggestion>
 <kind>content</kind>
 <title>short label</title>
+<dimensions>execution</dimensions>
 <body>the final, ready-to-paste text</body>
 </suggestion>
 
@@ -43,6 +51,7 @@ For delegate:
 <suggestion>
 <kind>delegate</kind>
 <title>short label</title>
+<dimensions>execution,judgment</dimensions>
 <targetTool>chatgpt</targetTool>
 <prompt>the complete, ready-to-paste prompt</prompt>
 </suggestion>

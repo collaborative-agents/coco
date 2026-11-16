@@ -177,6 +177,35 @@ COCO_DESKTOP_USER_DATA_DIR="$COCO_TEST_DATA" npm start
 
 ### Dependency compatibility checks
 
+Coco bundles its own Pi SDK; updating a global `pi` command does not update Coco.
+The agent packages are pinned in `release/app/package.json` and
+`release/app/package-lock.json`. Use npm for this directory; its old empty pnpm
+lockfile has been removed. `release/app/.npmrc` preserves exact versions on install.
+The SDK and server have independent release versions and need not match.
+
+Dependabot checks the Pi packages and bundled extensions weekly and groups their
+updates into a pull request. Once `.github/dependabot.yml` reaches the default
+branch, GitHub starts these checks. Updates remain reviewable PRs; they are not
+merged or shipped automatically.
+
+The **Pi compatibility** CI jobs run on Linux, macOS and Windows for pull requests,
+main/dev pushes and manual runs. They install both npm lockfiles, run all agent
+runtime tests (including inference and thinking), type-check, build the desktop
+app and run the host permission/UI tests. No model credentials are needed.
+Review upstream breaking changes along with these checks before merging a Pi
+update; ship the tested versions in a normal Coco release.
+
+For a manual upgrade, from `desktop`:
+
+```bash
+npm --prefix release/app install --save-exact --ignore-scripts @earendil-works/pi-coding-agent@<sdk-version> @earendil-works/pi-server@<server-version>
+npm run test:agent
+npm run typecheck
+npm run build
+npm run test:agent-host
+```
+
+
 `uv.lock` pins the Python dependency versions used by development, CI, and
 release builds. CI runs `uv sync --locked`; changing a dependency requires
 regenerating and committing the lockfile with the manifest change. To upgrade
@@ -215,3 +244,27 @@ When the local Coco service is running, its context and tools remain available.
 Screen sensing, proactive suggestions, and voice transcription still require the
 local services and their model configuration. Native login alone does not configure
 those services. Native-only users can finish onboarding after choosing a Pi model.
+
+### Remembered workspace and file access
+
+Coco requests workspace access only when a file tool first needs it. Greetings
+and ordinary conversation do not prompt for file access. Commands and outside-file
+requests use their own approvals without a redundant workspace prompt.
+
+Allowing a workspace saves its read/edit grant across chats and app restarts.
+Changing folders or rebuilding a chat runtime does not revoke previously approved
+workspaces. The first approval after upgrading establishes the saved grant;
+permissions are not inferred from old chat messages.
+
+When a file tool needs a path outside the workspace, Coco shows the resolved path
+and requested read or read/edit scope. **Allow once** resumes that tool invocation.
+**Always allow in this workspace** saves access to that file, or the requested
+folder and its contents, for future chats using the same workspace. Read-only
+permissions do not authorize writes. A grant for one file does not cover siblings.
+
+Open **Workspace access** beside the folder selector to revoke workspace access,
+additional file grants, or saved command approvals. Revoking workspace access
+also stops runtimes using that workspace. Revoking an individual file/command rule
+restores prompts for future calls; an operation already running may finish.
+Grants are scoped to canonical workspace paths and stored in Electron's user-data
+directory. Shell commands retain their separate approval flow.

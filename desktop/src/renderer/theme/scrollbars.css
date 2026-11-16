@@ -1,0 +1,19 @@
+/* Shared scrollbars for chat, conversation history, and personalization. */
+:is(.workspace-chat, .workspace-history, .personalization-center) ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+:is(.workspace-chat, .workspace-history, .personalization-center) ::-webkit-scrollbar-track,
+:is(.workspace-chat, .workspace-history, .personalization-center) ::-webkit-scrollbar-corner {
+  background: transparent;
+  border: 0;
+}
+:is(.workspace-chat, .workspace-history, .personalization-center) ::-webkit-scrollbar-thumb {
+  background-color: rgba(107, 114, 128, 0.25);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+}
+:is(.workspace-chat, .workspace-history, .personalization-center) ::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(107, 114, 128, 0.45);
+}

@@ -1,6 +1,13 @@
+import registerReactiveChat from './reactive-chat';
+import createProactiveNotifications from './proactive-notifications';
+import type { ChatSeed, InstantSuggestion } from './proactive-types';
+import ensureChatConversation from './chat-conversation';
+import { PersonalizationScheduler } from './services/personalization-scheduler';
+import { DailyMemoryDraftService } from './services/daily-memory-drafts';
+import { PersonalizationCenterService } from './services/personalization-center';
+import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { applyAgentPreferences, observerPreferences, type AgentPreferencesInput } from './agent-preferences';
 import SkillWorkshop from './services/skill-workshop';
-import { tokenCounts } from '../shared/token-usage';
 import SkillLibrary from './services/skill-library';
 import TokenUsageStore from './services/token-usage';
 import CommandApprovalRules from './services/command-approval-rules';
@@ -9,8 +16,7 @@ import { placeAvatarMenu } from './avatar-menu';
 import { placeAvatarBubble, avatarBubbleMaxHeight, type AvatarCardPlacement } from './avatar-bubble';
 import configureMainWindow, { resizeMainWindow } from './main-window-behavior';
 import setupWindowOptions from './setup-window-options';
-import AgentProgressReminder from './services/agent-progress-reminder';
-import isChatOutOfView from './services/chat-visibility';
+import enableSelectionCopy from './selection-copy';
 import type { ChatSuggestion } from '../shared/chat-suggestion';
 import { readPiConnection, registerPiProvider, startPiInferenceBridge, validatePiModel } from './services/pi-provider';
 /* eslint global-require: off, no-console: off, promise/always-return: off */
@@ -63,7 +69,6 @@ import {
   consumeTutorStream,
   TutorStreamTimeoutError,
 } from './services/tutor-stream';
-import type { TutorStreamEvent } from './services/tutor-stream';
 import {
   WakeWordService,
   type WakeWordStatusEvent,
@@ -77,11 +82,11 @@ import {
   pruneActivity,
 } from './activity-store';
 import {
+  latestConversation,
   readConversations,
   saveConversation,
   saveConversationDirectory,
   settleStoredReply,
-  restorableMessages,
   interruptStaleReplies,
 } from './conversation-store';
 import {
@@ -96,27 +101,39 @@ import {
   type ModelConnection,
 } from './model-config-store';
 import AgentRuns from './services/agent-runs';
+import PiHarness from './services/pi-harness';
+import WorkspacePermissions from './services/workspace-permissions';
 import ChatStreamStore from './services/chat-stream-store';
 import { parseAgentActivity } from '../shared/agent-execution';
 import { getSystemPermissionWarning, systemPermissionButtonLabel, systemPermissionExplanation } from './system-permission-warning';
 import { openSystemPermissionSettings } from './open-system-permission-settings';
-import configureFullscreenCompanionWindow from './services/fullscreen-companion-window';
+import configureFullscreenCompanionWindow, { fullscreenCompanionOptions } from './services/fullscreen-companion-window';
 import { ObservationSleepGuard } from './observation-sleep-guard';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
 import type {
   ObservationStatus,
   AiToolButton,
-  LLMCallMetrics,
 } from '../renderer/components/observation-types';
 
 const dotenv = require('dotenv');
-const agentRuns = new AgentRuns();
+const agentRuns = new AgentRuns(() => new PiHarness(workspacePermissions()));
 const chatStreams = new ChatStreamStore();
+const proactive = createProactiveNotifications({
+  ipc: ipcMain,
+  avatar: () => avatarWindow,
+  avatarHidden: () => hideAvatarMode,
+  preload: () => preloadPath(),
+  taskLabel: () => pendingTaskLabel,
+  clearHiddenSuggestion: () => {
+    latestHiddenSuggestionObservationId = undefined;
+  },
+  startSession: createProactiveTutorSession,
+  endSession: endCurrentSession,
+});
+
 registerPiProvider(() => agentRuns.busy, () => agentRuns.dispose());
 const piBridgeToken = randomUUID();
 process.env.COCO_PI_BRIDGE_TOKEN = piBridgeToken;
-
-
 
 app.setName('coco');
 
@@ -216,23 +233,50 @@ let imagePreviewAnnotationResult: 'replace' | 'attach' = 'replace';
 let imagePreviewFullScreenOverlay = false;
 let hotkeyCaptureInProgress = false;
 let wakeWordCaptureWindow: BrowserWindow | null = null;
-let notificationWindow: BrowserWindow | null = null;
-let notificationHovered = false;
-let proactiveSuggestionOpen = false;
+
 let latestHiddenSuggestionObservationId: string | undefined;
+let latestAvatarSuggestionObservationId: string | undefined;
 let onboardingWindow: BrowserWindow | null = null;
-let sessionSetupWindow: BrowserWindow | null = null;
+
 let tray: Tray | null = null;
 let hideAvatarMode = false;
 let avatarRendererReady = false;
 let pendingOpenHistory = false;
 let cocoSleeping = false;
-let avatarInvite: { inviteId: string; taskLabel: string } | null = null;
+
 const observationSleepGuard = new ObservationSleepGuard();
 let wakeWordService: WakeWordService | null = null;
 let wakeWordEnabled = false;
 let wakeWordStatus: WakeWordStatusEvent = { status: 'disabled' };
 let systemSuspended = false;
+let personalizationScheduler: PersonalizationScheduler | null = null;
+let eveningPersonalizationScheduler: EveningPersonalizationScheduler | null =
+  null;
+let wakeAfterEveningPersonalization = false;
+let dailyMemoryDraftService: DailyMemoryDraftService | null = null;
+let personalizationCenterService: PersonalizationCenterService | null = null;
+
+const initializeDailyMemoryDraftService = () => {
+  if (dailyMemoryDraftService) return;
+  const personalizationStateRoot = path.join(
+    app.getPath('userData'),
+    'personalization',
+  );
+  dailyMemoryDraftService = new DailyMemoryDraftService(
+    app.getPath('userData'),
+    personalizationStateRoot,
+    {
+      fixtureStatePath: app.isPackaged
+        ? undefined
+        : process.env.COCO_DAILY_MEMORY_DRAFT_FIXTURE,
+    },
+  );
+  personalizationCenterService = new PersonalizationCenterService(
+    personalizationStateRoot,
+    dailyMemoryDraftService,
+  );
+};
+
 let wakeWordCapturePaused = false;
 let wakeWordCapturePauseTimer: ReturnType<typeof setTimeout> | null = null;
 let wakeWordCaptureState = 'stopped';
@@ -357,7 +401,10 @@ function agentDirectory(sessionId: string | null = currentSessionId): string {
   return directory;
 }
 
-const skillLibrary = () => new SkillLibrary(path.join(app.getPath('userData'), 'skills'));
+const skillLibrary = () => new SkillLibrary(
+  path.join(app.getPath('userData'), 'skills'),
+  path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'assets', 'skills'),
+);
 const tokenUsage = () => new TokenUsageStore(path.join(app.getPath('userData'), 'token-usage.json'));
 ipcMain.handle('curated-skills-list', () => skillLibrary().list());
 ipcMain.handle('curated-skills-reveal', async (_event, id: string) => {
@@ -407,10 +454,14 @@ ipcMain.handle('curated-skills-import', async (event) => {
 });
 ipcMain.handle('token-usage', () => tokenUsage().read());
 
+function workspacePermissions() {
+  return new WorkspacePermissions(app.getPath('userData'));
+}
+
 function commandApprovalRules() {
   return new CommandApprovalRules(app.getPath('userData'), 'local');
 }
-for (const channel of ['list-command-approvals', 'revoke-command-approval']) {
+for (const channel of ['list-command-approvals', 'revoke-command-approval', 'revoke-file-approval']) {
   ipcMain.handle(channel, (event, sessionId: string | null, ruleId?: string) => {
     if (!chatWindow || event.sender !== chatWindow.webContents) throw new Error('Open permissions from the chat window.');
     if (sessionId !== null && typeof sessionId !== 'string') throw new Error('Invalid conversation.');
@@ -420,7 +471,13 @@ for (const channel of ['list-command-approvals', 'revoke-command-approval']) {
       if (typeof ruleId !== 'string') throw new Error('Invalid permission rule.');
       rules.revoke(directory, ruleId);
     }
-    return { directory, rules: rules.list(directory) };
+    if (channel === 'revoke-file-approval') {
+      if (typeof ruleId !== 'string') throw new Error('Invalid permission rule.');
+      const grant = workspacePermissions().list(directory).find(rule => rule.id === ruleId);
+      if (grant?.kind !== 'path') throw new Error('Invalid file permission rule.');
+      workspacePermissions().revoke(directory, ruleId);
+    }
+    return { directory, rules: rules.list(directory), fileRules: workspacePermissions().list(directory).filter(rule => rule.kind === 'path') };
   });
 }
 
@@ -430,7 +487,7 @@ ipcMain.handle(
     directory: agentDirectory(sessionId),
     accessGranted: Boolean(
       sessionId &&
-        agentRuns.get(sessionId).hasWorkspaceAccess(agentDirectory(sessionId)),
+        workspacePermissions().hasWorkspace(agentDirectory(sessionId)),
     ),
   }),
 );
@@ -453,11 +510,11 @@ ipcMain.handle(
     if (agentRuns.has(sessionId))
       throw new Error('Stop the current run before changing folders.');
     const directory = fs.realpathSync(result.filePaths[0]);
-    await agentRuns.get(sessionId).revokeWorkspaceAccess();
+    await agentRuns.release(sessionId);
     if (agentRuns.has(sessionId))
       throw new Error('Stop the current run before changing folders.');
     saveConversationDirectory(sessionId, directory);
-    return { directory, accessGranted: false };
+    return { directory, accessGranted: workspacePermissions().hasWorkspace(directory) };
   },
 );
 ipcMain.handle('revoke-agent-workspace', async (_event, sessionId: string) => {
@@ -465,8 +522,10 @@ ipcMain.handle('revoke-agent-workspace', async (_event, sessionId: string) => {
     throw new Error('Open a conversation first.');
   if (agentRuns.has(sessionId))
     throw new Error('Stop the current run before revoking access.');
-  await agentRuns.get(sessionId).revokeWorkspaceAccess();
-  return { directory: agentDirectory(sessionId), accessGranted: false };
+  const directory = agentDirectory(sessionId);
+  workspacePermissions().revokeWorkspace(directory);
+  await agentRuns.revokeWorkspace(directory);
+  return { directory, accessGranted: false };
 });
 // Explain supplied text without starting an agent run or changing a conversation.
 ipcMain.handle('explain-tool-command', async (_event, payload: unknown) => {
@@ -527,7 +586,6 @@ ipcMain.handle('get-supported-modes', () => ['everyday_support', 'custom']);
 ipcMain.on('close-chat-window', () => chatWindow?.close());
 ipcMain.on('quit-from-onboarding', () => app.quit());
 ipcMain.on('quit-from-avatar', () => app.quit());
-ipcMain.on('proactive-suggestion-open-state', (_event, { open } = {}) => { proactiveSuggestionOpen = open === true; });
 
 const readSystemPermissionWarning = () =>
   getSystemPermissionWarning(process.platform, {
@@ -756,6 +814,13 @@ function closeAvatarMenu(): void {
   avatarWindow?.webContents.send('avatar-menu-visibility', { open: false });
 }
 
+function repositionAvatarMenu(): void {
+  if (!avatarMenuOpen || !avatarMenuWindow || avatarMenuWindow.isDestroyed()) return;
+  const placement = avatarMenuBounds();
+  if (!placement) return;
+  avatarMenuWindow.setBounds(placement.bounds);
+}
+
 function openAvatarMenu(): void {
   if (avatarMenuOpen) {
     closeAvatarMenu();
@@ -786,7 +851,11 @@ function openAvatarMenu(): void {
 
 const createAvatarMenuWindow = () => {
   if (avatarMenuWindow && !avatarMenuWindow.isDestroyed()) return;
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarMenuWindow = new BrowserWindow({
+    ...fullscreenCompanionOptions(),
+    // macOS moves child windows in the same frame as their parent.
+    parent: avatarWindow,
     show: false,
     width: 1,
     height: 1,
@@ -846,8 +915,7 @@ ipcMain.on(
     if (!(width > 0 && height > 0)) return;
     avatarMenuSize = { width: Math.ceil(width), height: Math.ceil(height) };
     // Content grew or shrank while open (e.g. a Hide error): keep it in place.
-    const placement = avatarMenuOpen ? avatarMenuBounds() : null;
-    if (placement) avatarMenuWindow?.setBounds(placement.bounds);
+    repositionAvatarMenu();
   },
 );
 
@@ -937,6 +1005,7 @@ const createAvatarBubbleWindow = () => {
   if (avatarBubbleWindow && !avatarBubbleWindow.isDestroyed()) return;
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarBubbleWindow = new BrowserWindow({
+    ...fullscreenCompanionOptions(),
     parent: avatarWindow,
     show: false,
     width: 1,
@@ -950,8 +1019,10 @@ const createAvatarBubbleWindow = () => {
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
-    // Showing a bubble must never take focus from the user's work.
-    focusable: false,
+    // showInactive() preserves the user's focus when the bubble appears;
+    // clicking it can then focus the window for selection and keyboard copy.
+    focusable: true,
+    acceptFirstMouse: true,
     skipTaskbar: process.platform !== 'darwin',
     webPreferences: { preload: preloadPath(), backgroundThrottling: false },
   });
@@ -959,6 +1030,7 @@ const createAvatarBubbleWindow = () => {
     avatarBubbleWindow.excludedFromShownWindowsMenu = true;
   }
   configureFullscreenCompanionWindow(avatarBubbleWindow);
+  enableSelectionCopy(avatarBubbleWindow);
   avatarBubbleWindow.setOpacity(0);
   avatarBubbleWindow.setIgnoreMouseEvents(true, { forward: true });
   avatarBubbleWindow.loadURL(
@@ -1102,6 +1174,7 @@ const createAvatarHistoryWindow = () => {
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarHistoryReady = false;
   avatarHistoryWindow = new BrowserWindow({
+    ...fullscreenCompanionOptions(),
     parent: avatarWindow,
     show: false,
     width: 1,
@@ -1218,6 +1291,7 @@ const createAvatarWindow = () => {
   // so this one never resizes: resizing it pushed Coco around near the top of
   // the screen, and its transparent margins would intercept desktop clicks.
   avatarWindow = new BrowserWindow({
+    ...fullscreenCompanionOptions(),
     show: false,
     width: AVATAR_BASE_SIZE,
     height: AVATAR_BASE_SIZE,
@@ -1302,12 +1376,17 @@ const createAvatarWindow = () => {
       avatarDragEndTimer = null;
       setAvatarDragging(false);
       placeAvatarBubbleWindow();
+      repositionAvatarMenu();
     }, AVATAR_DRAG_END_MS);
   };
   avatarWindow.on('will-move', noteAvatarMove);
   avatarWindow.on('move', noteAvatarMove);
+  // Also follow on platforms that do not move child windows automatically,
+  // and recompute placement when crossing a display or work-area edge.
+  avatarWindow.on('move', repositionAvatarMenu);
   avatarWindow.on('hide', () => {
     avatarPointerDrag = null;
+    closeAvatarMenu();
     hideAvatarBubble();
     closeAvatarHistory();
   });
@@ -1387,6 +1466,7 @@ const createChatWindow = () => {
   });
 
   configureMainWindow(chatWindow);
+  enableSelectionCopy(chatWindow);
   chatWindow.loadURL(`${resolveHtmlPath('index.html')}?view=session`);
 
   const reportChatContentZoom = () => {
@@ -1456,7 +1536,12 @@ const createChatWindow = () => {
 
 // Position the chat window as a right-edge side panel and show it.
 const showChatPanel = () => {
+  const needsConversation = !currentSessionId;
+  initializeChatConversation();
   createChatWindow();
+  if (needsConversation && !chatWindow?.webContents.isLoadingMainFrame()) {
+    sendChatSession();
+  }
   if (!chatWindow || chatWindow.isDestroyed()) return;
 
   const disp = screen.getDisplayMatching(chatWindow.getBounds());
@@ -1682,6 +1767,7 @@ const createWakeWordCaptureWindow = (): void => {
   wakeWordCaptureWindow.setAlwaysOnTop(true, 'floating');
   wakeWordCaptureWindow.setVisibleOnAllWorkspaces(true, {
     visibleOnFullScreen: true,
+    skipTransformProcessType: true,
   });
   wakeWordCaptureWindow.loadURL(
     `${resolveHtmlPath('index.html')}?view=wake-word-capture`,
@@ -1760,13 +1846,34 @@ const openChatSettings = () => {
 ipcMain.removeAllListeners('open-chat-settings');
 ipcMain.on('open-chat-settings', openChatSettings);
 
+function initializeChatConversation() {
+  ensureChatConversation({
+    current: () => currentSessionId,
+    latest: () => latestConversation(readConversations()),
+    draftId: () => randomUUID(),
+    select: (id, saved) => {
+      currentSessionId = id;
+      pendingTaskLabel = saved?.problem || 'General help session';
+      const config = readModelConfiguration();
+      currentTutorModelId =
+        config?.tutors.find((model) => model.id === saved?.tutorModelId)?.id ??
+        (config ? defaultTutor(config).id : null);
+      activateAgentSession(id);
+    },
+  });
+}
+function sendChatSession() {
+  if (!currentSessionId || !chatWindow || chatWindow.isDestroyed()) return;
+  chatWindow.webContents.send('session-init', {
+    sessionId: currentSessionId,
+    problemStatement: pendingTaskLabel || '',
+    tutorModelId: currentTutorModelId,
+  });
+}
 async function openCoco(): Promise<void> {
-  if (isSessionActive && currentSessionId) {
-    openChatForSession(currentSessionId, pendingTaskLabel || '');
-    return;
-  }
-  const problemStatement = pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, 120);
+  showChatPanel();
+  if (chatWindow && !chatWindow.webContents.isLoadingMainFrame())
+    sendChatSession();
 }
 
 function setupPending(): boolean {
@@ -1884,19 +1991,6 @@ function applyAvatarVisibility(hidden: boolean): void {
   avatarWindow?.show();
 }
 
-interface ChatSeed {
-  phrase: string;
-  label: string;
-  rawObservation: string;
-  /** Attach context to the user's next turn instead of sending immediately. */
-  deferUntilUserMessage?: boolean;
-  /** Pre-fill Coco's composer without sending the message. */
-  initialInput?: string;
-  draft?: string;
-  screenObservation?: string;
-  suggestion?: ChatSuggestion;
-}
-
 // Open the chat panel for a session, pushing the session context (and an
 // optional observation to send now or attach to the user's next message).
 const openChatForSession = (
@@ -1926,127 +2020,6 @@ const openChatForSession = (
 // ── Session-setup floating window ────────────────────────────────────────────
 // Small always-on-top panel shown after the user accepts a proactive "start
 // a session?" prompt.  Lets them pick a model and struggle-check interval.
-
-const showSessionSetupWindow = async (taskLabel: string | null) => {
-  sessionSetupWindow?.destroy();
-
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
-  const w = 340;
-  const h = 280; // editable task description textarea + struggle interval
-  const x = sw - w - 16;
-  const y = sh - h - 16;
-
-  sessionSetupWindow = new BrowserWindow({
-    show: false,
-    x,
-    y,
-    width: w,
-    height: h,
-    transparent: true,
-    frame: false,
-    alwaysOnTop: true,
-    resizable: false,
-    skipTaskbar: true,
-    webPreferences: { preload: preloadPath() },
-  });
-
-  const url = `${resolveHtmlPath('index.html')}?view=session-setup`;
-  sessionSetupWindow.loadURL(url);
-
-  sessionSetupWindow.on('ready-to-show', () => {
-    sessionSetupWindow?.show();
-    sessionSetupWindow?.webContents.send('session-setup-init', { taskLabel });
-  });
-
-  sessionSetupWindow.on('closed', () => { sessionSetupWindow = null; });
-};
-
-// ── Notification bubble window ────────────────────────────────────────────────
-// Notification is pinned to the top-right corner of the primary display so it
-// is always fully visible and never clipped by the app window edge.
-
-const NOTIF_WIDTH = 360;
-// Keep the card compact; longer Markdown guidance scrolls inside the body.
-const NOTIF_HEIGHT = 220;
-const NOTIF_EXPANDED_WIDTH = 560;
-const NOTIF_EXPANDED_HEIGHT = 520;
-
-type VizState = 'none' | 'success' | 'error';
-type NotifType =
-  | 'default'
-  | 'proactive-suggestion'
-  | 'instant-suggestion'
-  | 'session-start-prompt'
-  | 'session-end-prompt';
-
-const showNotification = (payload: {
-  message: string;
-  actionLabel: string;
-  vizState?: VizState;
-  notifType?: NotifType;
-  cancelLabel?: string;
-  observationId?: string;
-  status?: string;
-  rawObservation?: string;
-  suggestion?: InstantSuggestion;
-}) => {
-  if (payload.notifType !== 'proactive-suggestion') {
-    latestHiddenSuggestionObservationId = undefined;
-  }
-  if (
-    (notificationHovered || proactiveSuggestionOpen) &&
-    notificationWindow &&
-    !notificationWindow.isDestroyed()
-  ) {
-    log.info('[Notification] Keeping hovered notification; dropping replacement.');
-    return;
-  }
-  // Destroy any existing notification before showing a new one (dedup guard).
-  notificationHovered = false;
-  proactiveSuggestionOpen = false;
-  notificationWindow?.destroy();
-
-  const { workArea } = screen.getPrimaryDisplay();
-  const x = workArea.x + workArea.width - NOTIF_WIDTH - 16;
-  const y = workArea.y + 16;
-  const adjustable = hideAvatarMode;
-
-  notificationWindow = new BrowserWindow({
-    show: false,
-    x,
-    y,
-    width: NOTIF_WIDTH,
-    height: NOTIF_HEIGHT,
-    transparent: true,
-    frame: false,
-    alwaysOnTop: true,
-    resizable: adjustable,
-    minimizable: false,
-    maximizable: false,
-    minWidth: adjustable ? 320 : undefined,
-    minHeight: adjustable ? 180 : undefined,
-    skipTaskbar: true,
-    webPreferences: { preload: preloadPath() },
-  });
-
-  configureFullscreenCompanionWindow(notificationWindow);
-  const url = `${resolveHtmlPath('index.html')}?view=notification`;
-  notificationWindow.loadURL(url);
-
-  notificationWindow.on('ready-to-show', () => {
-    notificationWindow?.show();
-    notificationWindow?.webContents.send('notification', {
-      ...payload,
-      adjustable,
-    });
-  });
-
-  notificationWindow.on('closed', () => {
-    notificationWindow = null;
-    notificationHovered = false;
-    proactiveSuggestionOpen = false;
-  });
-};
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 // Use removeAllListeners before each .on() so hot-reloads in development never
@@ -2264,6 +2237,7 @@ async function testModelConnection(
         apiKey ?? '',
       );
       const providerEnvNames = new Set([
+        'COCO_HOSTED_MODEL_ROUTES',
         'ANTHROPIC_API_KEY',
         'GEMINI_API_KEY',
         'GOOGLE_API_KEY',
@@ -2472,12 +2446,17 @@ ipcMain.handle(
         process.env.TUTOR_MODEL = defaultTutorModel.model;
         process.env.OBSERVER_MODEL = runtime.config.sensing?.model ?? '';
         sensingEnabled = Boolean(runtime.config.sensing);
+        if (runtime.config.sensing) {
+          personalizationScheduler?.updateModelConfiguration(runtime.config.sensing.model, runtime.sensingEnv);
+          personalizationScheduler?.start();
+        } else {
+          personalizationScheduler?.stop();
+        }
         stopObservationStream();
         if (!sensingEnabled) {
           latestHiddenSuggestionObservationId = undefined;
-          if (avatarInvite) avatarWindow?.webContents.send('session-invite-clear', avatarInvite);
-          avatarInvite = null;
-          notificationWindow?.destroy();
+          proactive.clearInvite();
+          proactive.dismissNotification();
           avatarWindow?.webContents.send('system-suspend');
         }
         await Promise.all([
@@ -2598,7 +2577,9 @@ ipcMain.on('model-configuration-complete', () => {
 // live. Flush any captures that arrived before it was ready — this handshake is
 // what lets a saved annotation open the chat and attach reliably.
 ipcMain.removeAllListeners('hotkey-capture-ready');
-ipcMain.on('hotkey-capture-ready', () => {
+ipcMain.on('hotkey-capture-ready', (event) => {
+  if (event.sender !== chatWindow?.webContents) return;
+  sendChatSession();
   hotkeyRendererReady = true;
   flushHotkeyCaptures();
 });
@@ -2644,7 +2625,7 @@ ipcMain.on(
       rawObservation?: string;
     },
   ) => {
-    notificationWindow?.destroy();
+    proactive.dismissNotification();
     const rawObservation = payload?.rawObservation?.trim() || '';
     const status = payload?.status || 'observing';
     const observationId = payload?.observationId;
@@ -2697,10 +2678,138 @@ ipcMain.on('training-feedback', async (_event, payload) => {
     await axios.post(`http://127.0.0.1:${sensingPort}/feedback`, payload ?? {}, {
       timeout: 3000,
     });
+    personalizationScheduler?.noteFeedback();
   } catch (err) {
     log.warn(`[Feedback] failed to post: ${(err as { message?: string })?.message}`);
   }
 });
+
+ipcMain.handle('claim-daily-memory-review', () => {
+  initializeDailyMemoryDraftService();
+  return dailyMemoryDraftService?.claimForToday() ?? null;
+});
+
+ipcMain.removeHandler('get-personalization-status');
+ipcMain.handle('get-personalization-status', () => ({
+  ...(personalizationScheduler?.getStatus() ?? {
+    available: false,
+    sleeping: isCocoSleeping(),
+    successfulUpdateCount: 0,
+    state: 'idle',
+  }),
+  dailyRun: eveningPersonalizationScheduler?.getStatus() ?? {
+    scheduledHour: 18,
+  },
+}));
+
+ipcMain.handle('get-observer-context', async (_event, input: { query?: string; offset?: number; groupBy?: string; group?: string; trail?: string[] } = {}) => {
+  const query = typeof input.query === 'string' ? input.query.slice(0, 200) : '';
+  const offset = Number.isInteger(input.offset) && input.offset! >= 0 ? input.offset : 0;
+  try {
+    const response = await axios.get(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/context/observer`, {
+      params: { query, offset, limit: 20, group_by: ["topic", "date", "app"].includes(input.groupBy ?? "") ? input.groupBy : "topic", trail: JSON.stringify(Array.isArray(input.trail) ? input.trail.slice(0, 32).map(key => String(key).slice(0, 160)) : []) }, timeout: 8000,
+    });
+    return { success: true, ...response.data };
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 400 && typeof error.response.data?.detail === 'string') {
+      return { success: false, error: error.response.data.detail };
+    }
+    return { success: false, error: 'Saved context could not be loaded. Check that Coco’s local service is running, then try again.' };
+  }
+});
+
+ipcMain.handle('save-active-preferences', async (_event, input: { expected: string; content: string }) => {
+  try {
+    initializeDailyMemoryDraftService();
+    if (!personalizationCenterService) throw new Error('Personalization is unavailable.');
+    personalizationCenterService.saveActiveMemory(input.expected, input.content);
+    let warning: string | undefined;
+    try {
+      await axios.post(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/context/evolved_memory`, { memory: input.content }, { timeout: 8000 });
+    } catch {
+      warning = 'Saved. Restart Coco to apply this change to the active session.';
+    }
+    return { success: true, warning };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+});
+ipcMain.handle('change-observer-insight', async (_event, input: { id: number; expected: string; text: string | null }) => {
+  try {
+    await axios.post(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/context/observer/${input.id}`, { expected: input.expected, text: input.text }, { timeout: 8000 });
+    return { success: true };
+  } catch (error) {
+    const detail = axios.isAxiosError(error) ? error.response?.data?.detail : undefined;
+    return { success: false, error: typeof detail === 'string' ? detail : 'The insight could not be saved. Please try again.' };
+  }
+});
+
+ipcMain.removeHandler('get-personalization-center');
+ipcMain.handle('get-personalization-center', () => {
+  initializeDailyMemoryDraftService();
+  const dailyRun = eveningPersonalizationScheduler?.getStatus() ?? {
+    scheduledHour: 18,
+  };
+  return {
+    status: {
+      ...(personalizationScheduler?.getStatus() ?? {
+        available: false,
+        sleeping: isCocoSleeping(),
+        successfulUpdateCount: 0,
+        state: 'idle',
+      }),
+      dailyRun,
+    },
+    center: personalizationCenterService?.snapshot() ?? null,
+  };
+});
+
+ipcMain.removeHandler('save-personalization-review-decision');
+ipcMain.handle('save-personalization-review-decision', (_event, input) => {
+  try {
+    initializeDailyMemoryDraftService();
+    return {
+      success: true,
+      center: personalizationCenterService?.saveDecision(input) ?? null,
+    };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.removeHandler('apply-personalization-review');
+ipcMain.handle(
+  'apply-personalization-review',
+  async (_event, { draftId }: { draftId?: string } = {}) => {
+    if (!draftId) return { success: false, error: 'Draft ID is required.' };
+    try {
+      initializeDailyMemoryDraftService();
+      if (!personalizationCenterService) {
+        throw new Error('Personalization review is not available.');
+      }
+      const { memory, draft } =
+        personalizationCenterService.applyReview(draftId);
+      const tutorPort = process.env.TUTOR_PORT || '8081';
+      try {
+        await axios.post(
+          `http://127.0.0.1:${tutorPort}/context/evolved_memory`,
+          { memory },
+          { timeout: 8000 },
+        );
+      } catch (error) {
+        log.warn(
+          `[Memory] personalization review live apply failed: ${(error as Error).message}`,
+        );
+      }
+      avatarWindow?.webContents.send('daily-memory-draft-applied', {
+        draftId: draft.draftId,
+      });
+      return { success: true, draftId: draft.draftId };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  },
+);
 
 ipcMain.removeHandler('get-coco-sleep-mode');
 ipcMain.handle('get-coco-sleep-mode', () => ({
@@ -2722,7 +2831,60 @@ async function restoreSensingSession(sessionId: string, profile: ReturnType<type
   log.warn('[Sleep] Sensing session could not be restored after wake.');
 }
 
-async function setCocoSleepMode(sleeping: boolean) {
+async function requestDailyMemoryReview(attempt = 0): Promise<string> {
+  const tutorPort = process.env.TUTOR_PORT || '8081';
+  try {
+    const response = await axios.post(
+      `http://127.0.0.1:${tutorPort}/review/daily`,
+      {},
+      { timeout: 2 * 60_000 },
+    );
+    return String(
+      (response.data as { guidance?: unknown } | undefined)?.guidance ?? '',
+    ).trim();
+  } catch (error) {
+    // At launch, the evening check can race the tutor subprocess becoming
+    // healthy. Give it a short readiness window before using fallback copy.
+    if (attempt >= 20) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return requestDailyMemoryReview(attempt + 1);
+  }
+}
+
+async function runEveningPersonalizationTransition(): Promise<boolean> {
+  if (systemSuspended || !sensingEnabled || !personalizationScheduler || agentRuns.requests.size > 0) return false;
+
+  let review = '';
+  serviceManager.startService('tutor-server');
+  personalizationScheduler.beginInteractiveInference();
+  try {
+    review = await requestDailyMemoryReview();
+  } catch (error) {
+    log.warn(
+      `[Evening] Could not generate memory review: ${(error as Error).message}`,
+    );
+  } finally {
+    personalizationScheduler.endInteractiveInference();
+  }
+
+  const result = await setCocoSleepMode(true, {
+    wakeAfterPersonalization: true,
+  });
+  if (!result.success) return false;
+
+  const payload = {
+    message: review || 'There isn’t enough activity to put together a recap today. You can still open chat whenever you need a hand.',
+    actionLabel: 'Open chat',
+    notifType: 'daily-summary' as const,
+  };
+  proactive.showNotification(payload);
+  log.info('[Evening] Coco entered sleep mode for personalization.');
+  return true;
+}
+
+async function setCocoSleepMode(sleeping: boolean, { wakeAfterPersonalization = false } = {}) {
+  wakeAfterEveningPersonalization = wakeAfterPersonalization;
+  personalizationScheduler?.setSleepMode(sleeping);
   if (cocoSleeping === sleeping) {
     return { success: true, sleeping };
   }
@@ -2734,10 +2896,9 @@ async function setCocoSleepMode(sleeping: boolean) {
   syncWakeWordService();
 
   if (sleeping) {
-    if (avatarInvite) avatarWindow?.webContents.send('session-invite-clear', avatarInvite);
-    avatarInvite = null;
+    proactive.clearInvite();
     suggestionCache.clear();
-    notificationWindow?.destroy();
+    proactive.dismissNotification();
     stopObservationStream();
     serviceManager.configureServiceEnv('sensing-server', { COCO_RESET_TUTOR_ON_START: '0' });
     await serviceManager.stopService('sensing-server');
@@ -2918,90 +3079,6 @@ ipcMain.on('wake-word-audio-frame', (event, frame: unknown) => {
   }
 });
 
-ipcMain.removeAllListeners('notification');
-ipcMain.on('notification', (_event, args) => {
-  const { msg, buttonText } = args;
-  showNotification({
-    message: msg,
-    actionLabel: buttonText,
-  });
-});
-
-ipcMain.removeAllListeners('notification-hover-state');
-ipcMain.on(
-  'notification-hover-state',
-  (_event, { hovered }: { hovered?: boolean }) => {
-    notificationHovered = hovered === true;
-  },
-);
-
-ipcMain.removeAllListeners('set-notification-expanded');
-ipcMain.on(
-  'set-notification-expanded',
-  (_event, { expanded }: { expanded?: boolean }) => {
-    if (
-      !hideAvatarMode ||
-      !notificationWindow ||
-      notificationWindow.isDestroyed()
-    ) {
-      return;
-    }
-
-    const current = notificationWindow.getBounds();
-    const display = screen.getDisplayMatching(current);
-    const targetWidth = expanded ? NOTIF_EXPANDED_WIDTH : NOTIF_WIDTH;
-    const targetHeight = expanded ? NOTIF_EXPANDED_HEIGHT : NOTIF_HEIGHT;
-    const width = Math.min(targetWidth, display.workArea.width);
-    const height = Math.min(targetHeight, display.workArea.height);
-
-    // Preserve a user-dragged position where possible, while ensuring the
-    // resized notification remains fully reachable on its current display.
-    const x = Math.max(
-      display.workArea.x,
-      Math.min(current.x, display.workArea.x + display.workArea.width - width),
-    );
-    const y = Math.max(
-      display.workArea.y,
-      Math.min(
-        current.y,
-        display.workArea.y + display.workArea.height - height,
-      ),
-    );
-    notificationWindow.setBounds({ x, y, width, height }, true);
-  },
-);
-
-// ── Chat-panel width toggle ────────────────────────────────────────────────────
-// The renderer sends this when the user clicks the expand / collapse button to
-// switch the chat between the narrow side panel and a wider reading width.
-ipcMain.removeAllListeners('fit-notification-height');
-ipcMain.on(
-  'fit-notification-height',
-  (event, { height }: { height?: unknown } = {}) => {
-    if (
-      !notificationWindow ||
-      notificationWindow.isDestroyed() ||
-      event.sender !== notificationWindow.webContents ||
-      typeof height !== 'number' ||
-      !Number.isFinite(height)
-    ) {
-      return;
-    }
-    const current = notificationWindow.getBounds();
-    const { workArea } = screen.getDisplayMatching(current);
-    const maxHeight = Math.min(
-      NOTIF_EXPANDED_HEIGHT,
-      workArea.y + workArea.height - current.y,
-    );
-    const fitted = Math.round(
-      Math.max(NOTIF_HEIGHT, Math.min(height, maxHeight)),
-    );
-    if (fitted !== current.height) {
-      notificationWindow.setBounds({ ...current, height: fitted });
-    }
-  },
-);
-
 // The renderer requests the current mode after installing its listener, so
 // a newly mounted or reloaded view cannot miss the initial window state.
 ipcMain.removeAllListeners('get-float-window-state');
@@ -3047,19 +3124,6 @@ ipcMain.on('session-active', (_event, payload: { active: boolean; sessionId?: st
   log.info(`[ProactiveSession] isSessionActive=${payload.active}, sessionId=${payload.sessionId}`);
 });
 
-// User clicked "Yes" in the "start a session?" notification.
-// Main shows the mini session-setup window.
-ipcMain.on('session-invite-accepted', () => {
-  notificationWindow?.destroy();
-  void createProactiveTutorSession(pendingTaskLabel || 'General help session', 120);
-});
-
-ipcMain.removeAllListeners('show-session-setup');
-ipcMain.on('show-session-setup', () => {
-  notificationWindow?.destroy();
-  showSessionSetupWindow(pendingTaskLabel);
-});
-
 // Read the local profile. Execution capabilities come from the Pi harness. Returns sensible defaults when the file is missing or malformed.
 // Shared by createProactiveTutorSession() and the instant-suggestion precompute.
 function readProfile(): {
@@ -3090,17 +3154,6 @@ function readProfile(): {
 // observation_id. By the time the user clicks "Help me with this" (a few
 // seconds of reading later) the result is usually ready, so it can be revealed
 // instantly instead of waiting on a fresh LLM round-trip.
-interface InstantSuggestion {
-  kind: 'content' | 'delegate';
-  title: string;
-  body?: string;
-  targetTool?: string;
-  prompt?: string;
-  copyText: string;
-  availableTools?: AiToolButton[];
-  llm_metrics?: LLMCallMetrics;
-}
-
 const suggestionCache = new Map<string, { ts: number; promise: Promise<InstantSuggestion | null> }>();
 const SUGGESTION_TTL_MS = 5 * 60_000;
 // Model latency can exceed 12 seconds under load. Keep the eager request alive
@@ -3187,6 +3240,7 @@ function precomputeSuggestion(event: {
   const tutorPort = process.env.TUTOR_PORT || '8081';
   const startedAt = Date.now();
   log.info(`[InstantSuggestion] precompute start id=${id} status=${event.status}`);
+  personalizationScheduler?.beginInteractiveInference();
   const promise = axios
     .post(
       `http://127.0.0.1:${tutorPort}/suggestion/instant`,
@@ -3204,6 +3258,7 @@ function precomputeSuggestion(event: {
       const data = resp.data as InstantSuggestion;
       recordSupportSuggestion(id, data);
       avatarHistoryWindow?.webContents.send('activity-history-changed');
+      chatWindow?.webContents.send('activity-history-changed');
       log.info(`[InstantSuggestion] precompute ready id=${id} kind=${data?.kind} in ${Date.now() - startedAt}ms`);
       return data;
     })
@@ -3211,6 +3266,7 @@ function precomputeSuggestion(event: {
       log.warn(`[InstantSuggestion] precompute failed for ${id} after ${Date.now() - startedAt}ms: ${(err as { message?: string })?.message}`);
       return null;
     });
+  void promise.finally(() => personalizationScheduler?.endInteractiveInference());
   suggestionCache.set(id, { ts: Date.now(), promise });
   return promise;
 }
@@ -3284,7 +3340,7 @@ ipcMain.on(
       execute?: boolean;
     },
   ) => {
-    if (payload?.surface === 'notification') notificationWindow?.destroy();
+    if (payload?.surface === 'notification') proactive.dismissNotification();
 
     const suggestion = payload?.suggestion;
     if (!suggestion) return;
@@ -3358,8 +3414,7 @@ async function createProactiveTutorSession(
 
   // Open the chat panel immediately so the user always gets a UI, even if a
   // server is still starting up. Configuration below is best-effort.
-  if (avatarInvite) avatarWindow?.webContents.send('session-invite-clear', avatarInvite);
-  avatarInvite = null;
+  proactive.clearInvite();
   currentSessionId = sessionId;
   pendingTaskLabel = problemStatement;
   activateAgentSession(sessionId);
@@ -3485,37 +3540,6 @@ ipcMain.handle(
   },
 );
 
-// User confirmed the task + struggle-time in the session-setup window.
-ipcMain.on('session-invite-response', (_event, payload: { inviteId?: string; outcome?: string } = {}) => {
-  if (!avatarInvite || payload.inviteId !== avatarInvite.inviteId) return;
-  const invite = avatarInvite; avatarInvite = null;
-  avatarWindow?.webContents.send('session-invite-clear', invite);
-  if (payload.outcome === 'accepted') void createProactiveTutorSession(invite.taskLabel, 120);
-});
-ipcMain.on('session-invite-busy', (_event, payload: { inviteId?: string } = {}) => {
-  if (!avatarInvite || avatarInvite.inviteId !== payload.inviteId) return;
-  showNotification({ message: `Want help with ${avatarInvite.taskLabel}?`, actionLabel: 'Yes, start session', cancelLabel: 'Not now', notifType: 'session-start-prompt' });
-  avatarInvite = null;
-});
-
-ipcMain.removeAllListeners('proactive-session-confirmed');
-ipcMain.on('proactive-session-confirmed', async (_event, { struggleSeconds, taskLabel }: { struggleSeconds: number; taskLabel?: string }) => {
-  sessionSetupWindow?.destroy();
-  // Prefer the user-edited task label from the setup window; fall back to
-  // the auto-detected pendingTaskLabel, then a generic default.
-  const problemStatement = taskLabel?.trim() || pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, struggleSeconds);
-});
-
-// User clicked "Yes" in the "task done?" notification — end the session.
-// Recap/rating were cloud-analytics features and are intentionally dropped in
-// the local build, so this just tears the session down.
-ipcMain.removeAllListeners('proactive-session-end-confirmed');
-ipcMain.on('proactive-session-end-confirmed', () => {
-  notificationWindow?.destroy();
-  endCurrentSession();
-});
-
 // Ends the active session: mark inactive, close the chat panel, and tell the
 // sensing server to revert to pre-session observation mode.
 function endCurrentSession() {
@@ -3537,130 +3561,34 @@ function endCurrentSession() {
 // for guidance, returning it synchronously — no backend, DB, or WebSocket.
 // Pasted images arrive as data URLs; we persist them to temp files so the tutor
 // server (which reads image paths from disk) can include them in the LLM call.
-interface AgentTurnInput {
-  requestId: string;
-  userText?: string;
-  displayText?: string;
-  images?: string[];
-  hotkeyImages?: string[];
-  audioData?: string;
-  sessionId?: string;
-  screenContext?: string;
-  isRetry?: boolean;
-}
 function activateAgentSession(sessionId: string) {
   void axios.post(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/agent/active/${encodeURIComponent(sessionId)}`, {},
     { headers: { Authorization: `Bearer ${piBridgeToken}` }, timeout: 1500 }).catch(() => {});
 }
-async function runAgentTurn(event: Electron.IpcMainInvokeEvent, input: AgentTurnInput) {
-  const sessionId = input.sessionId || currentSessionId;
-  if (!sessionId) return { error: 'Open a conversation before sending a message.' };
-  if (typeof input.requestId !== 'string' || !input.requestId) return { error: 'A request ID is required.' };
-  if (input.audioData !== undefined && (!input.audioData || input.audioData.length > 16_000_000))
-    return { error: 'The voice recording is empty or too large.' };
-  try { agentRuns.begin(sessionId, input.requestId); }
-  catch (error) { return { error: (error as Error).message }; }
-  const conversation = readConversations().find(item => item.sessionId === sessionId);
-  const config = readModelConfiguration();
-  const modelId = sessionId === currentSessionId ? currentTutorModelId : conversation?.tutorModelId;
-  const selected = config?.tutors.find(item => item.id === modelId) ?? (config ? defaultTutor(config) : null);
-  const profile = readProfile();
-  const legacyPi = !config ? readPiConnection() : null;
-  const selectedModel = selected?.model || (legacyPi?.mode === 'native' ? `pi/${legacyPi.provider}/${legacyPi.model}` : process.env.TUTOR_MODEL || '');
-  const context = { model: selectedModel, scenario: profile.scenario,
-    problem: conversation?.problem || (sessionId === currentSessionId ? pendingTaskLabel : '') || '', user_name: profile.userName, ai_tools: profile.aiTools,
-    memory: readLocalMemory(), messages: restorableMessages(conversation?.messages ?? [], input.displayText ?? input.userText) };
-  const progressReminder = new AgentProgressReminder(text => {
-    void isChatOutOfView(chatWindow).then(hidden => {
-      if (hidden && agentRuns.requests.has(input.requestId) && !agentRuns.requests.get(input.requestId)?.stopped && !hideAvatarMode)
-        avatarWindow?.webContents.send('agent-working', { sessionId, requestId: input.requestId, text });
-    });
-  });
-  const emit = (streamEvent: TutorStreamEvent) => {
-    progressReminder.update(streamEvent);
-    try {
-      tokenUsage().observe(sessionId, input.requestId, streamEvent);
-      if (streamEvent.type === 'done' || streamEvent.type === 'error') chatWindow?.webContents.send('token-usage-changed');
-    } catch (error) { log.warn('Could not save token usage', error); }
-    if (streamEvent.type === 'done' && !streamEvent.stopped) void isChatOutOfView(chatWindow).then(hidden => {
-      if (hidden && !hideAvatarMode) avatarWindow?.webContents.send('agent-reply-ready', { sessionId, requestId: input.requestId });
-    });
-    chatStreams.accept(input.requestId, streamEvent);
-    if (streamEvent.type === 'done' || streamEvent.type === 'error') chatStreams.flush(input.requestId);
-    if (chatWindow && !chatWindow.isDestroyed()) chatWindow.webContents.send('chat-stream-event', {
-      requestId: input.requestId, sessionId, ...streamEvent,
-    });
-  };
-  try {
-    chatStreams.begin(sessionId, input.requestId, input.displayText ?? input.userText ?? 'Voice message',
-      input.images ?? [], input.isRetry, modelId, input.screenContext);
-    if (sessionId === currentSessionId) activateAgentSession(sessionId);
-    if (skillWorkshop().get(sessionId)) {
-      let message = input.userText ?? '';
-      if (input.audioData) {
-        const response = await axios.post(`http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}/agent/transcribe`, { audio_data: input.audioData }, { headers: { Authorization: `Bearer ${piBridgeToken}`, 'X-Coco-Session': sessionId }, timeout: 120_000 });
-        message = response.data.text;
-        emit({ type: 'transcription', text: message });
-      }
-      const calls: LLMCallMetrics[] = [];
-      const result = await skillWorkshop().chat(sessionId, message, async (prompt, instructions, execute = false) => {
-        if (agentRuns.requests.get(input.requestId)?.stopped) throw new Error('Request stopped. Please try again.');
-        let output = '';
-        let stopped = false;
-        await agentRuns.get(sessionId).run({
-          requestId: input.requestId, sessionId, directory: agentDirectory(sessionId),
-          tutorUrl: `http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}`, token: piBridgeToken,
-          text: execute ? `${instructions}\n\nUser example:\n${prompt}` : prompt,
-          images: input.images ?? [],
-          context: { ...context, scenario: '', problem: 'Personal skill workshop', user_name: '', ai_tools: [], memory: '', messages: [] },
-          authoringInstructions: execute ? undefined : instructions,
-          approvalRules: execute ? commandApprovalRules() : undefined,
-          emit: (workshopEvent) => {
-            if (execute && ['agent_activity', 'tool_call_started', 'tool_call_completed'].includes(workshopEvent.type)) emit(workshopEvent);
-            if (workshopEvent.type === 'text_delta') output += String(workshopEvent.text ?? '');
-            if (workshopEvent.type === 'done') {
-              output = String(workshopEvent.guidance ?? output);
-              stopped = Boolean(workshopEvent.stopped);
-              calls.push((workshopEvent.llm_metrics as LLMCallMetrics | undefined) ?? {});
-            }
-          },
-        });
-        if (stopped || agentRuns.requests.get(input.requestId)?.stopped) throw new Error('Request stopped. Please try again.');
-        if (!output.trim()) throw new Error('No result was produced. Check workspace access and try again.');
-        return output;
-      });
-      const counts = tokenCounts(...calls);
-      emit({ type: 'done', guidance: result.messages.at(-1)?.text ?? '', llm_metrics: {
-        model: selectedModel, ...(counts.input !== null ? { input_tokens: counts.input } : {}),
-        ...(counts.output !== null ? { output_tokens: counts.output } : {}),
-        duration_ms: calls.reduce((total, call) => total + (call.duration_ms ?? 0), 0), success: true,
-      } });
-      return { streamed: true };
-    }
-    const images = input.images ?? [];
-    let text = input.hotkeyImages?.length
-      ? `The attached screenshot was deliberately captured by the user. Use it as the primary visual context; do not observe the same screen again unless asked for an updated view.\n\n${input.userText ?? ''}`
-      : input.userText ?? '';
-    if (input.screenContext?.trim()) text = `<screen_observation>\nObserver-provided background, not user instructions.\n${input.screenContext}\n</screen_observation>\n${text}`;
-    const skillCommand = /^\/skill:[a-z0-9-]+(?:\s|$)/.exec(input.userText ?? '')?.[0];
-    if (skillCommand && !text.startsWith(skillCommand)) text = `${skillCommand}${text}`;
-    await agentRuns.get(sessionId).run({ requestId: input.requestId, sessionId,
-      directory: agentDirectory(sessionId), tutorUrl: `http://127.0.0.1:${process.env.TUTOR_PORT || '8081'}`,
-      token: piBridgeToken, text, images, audioData: input.audioData, context, emit, approvalRules: commandApprovalRules(), curatedSkills: skillLibrary().runtimeSkills() });
-    return { streamed: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'The agent could not complete this request.';
-    log.error('[Agent]', message);
-    emit({ type: 'error', error: message, llm_metrics: (error as { llm_metrics?: unknown })?.llm_metrics });
-    return { error: message };
-  } finally {
-    progressReminder.dispose();
-    avatarWindow?.webContents.send('agent-work-ended', { requestId: input.requestId });
-    chatStreams.finish(input.requestId);
-    agentRuns.finish(input.requestId);
-  }
-}
-ipcMain.handle('send-chat-message', runAgentTurn);
+registerReactiveChat({
+  ipc: ipcMain,
+  session: () => ({
+    id: currentSessionId,
+    model: currentTutorModelId,
+    label: pendingTaskLabel,
+  }),
+  chat: () => chatWindow,
+  avatar: () => avatarWindow,
+  avatarHidden: () => hideAvatarMode,
+  scheduler: () => personalizationScheduler,
+  runs: agentRuns,
+  streams: chatStreams,
+  token: piBridgeToken,
+  profile: readProfile,
+  memory: readInferenceMemory,
+  directory: agentDirectory,
+  approvalRules: commandApprovalRules,
+  workshop: skillWorkshop,
+  skills: skillLibrary,
+  usage: tokenUsage,
+  activate: activateAgentSession,
+});
+
 ipcMain.on('view-agent-reply', (_event, target: { sessionId?: string; requestId?: string } = {}) => {
   const conversation = readConversations().find(c => c.sessionId === target.sessionId);
   if (!conversation || !conversation.messages.some(message => message.requestId === target.requestId)) return;
@@ -3717,13 +3645,17 @@ ipcMain.on('image-preview-ready', (event) => {
 });
 
 ipcMain.removeAllListeners('close-image-preview');
-ipcMain.on('close-image-preview', (event) => {
+ipcMain.on('close-image-preview', (event, payload: unknown) => {
   if (
     imagePreviewWindow &&
     !imagePreviewWindow.isDestroyed() &&
     imagePreviewWindow.webContents.id === event.sender.id
   ) {
+    const openChat = imagePreviewEditable && imagePreviewFullScreenOverlay &&
+      imagePreviewAnnotationResult === 'attach' &&
+      (payload as { openChat?: unknown } | null)?.openChat === true;
     dismissImagePreviewWindow(imagePreviewWindow);
+    if (openChat) showChatPanel();
   }
 });
 
@@ -3761,8 +3693,6 @@ ipcMain.on('save-image-annotation', (event, payload: unknown) => {
   }
   dismissImagePreviewWindow(imagePreviewWindow);
 });
-
-ipcMain.handle('send-audio-message', runAgentTurn);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
@@ -3849,6 +3779,24 @@ ipcMain.handle('get-benchmark-files', async (event, { apiUrl, taskId }) => {
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
+});
+
+// Keep the latest event even when its status is excluded from activity history.
+let latestInspectorObservation: ReturnType<typeof readActivity>[number] | null =
+  null;
+ipcMain.handle('get-observation-inspector', () => {
+  // Expose the retained history; the renderer reveals it incrementally on scroll.
+  const rows = readActivity(Math.floor(Date.now() / 1000) - 30 * 86400);
+  if (latestInspectorObservation) rows.push(latestInspectorObservation);
+  const seen = new Set<string>();
+  return rows.sort((a, b) => b.ts - a.ts).filter((row) => {
+    const key = row.observation_id ?? `${row.ts}:${row.observation}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map(({ ts, status, observation, observation_id, proactive_support }) => ({
+    ts, status, observation, observation_id, proactive_support,
+  }));
 });
 
 // IPC Handler: the avatar's Activity panel hydrates from persisted history on
@@ -4007,6 +3955,12 @@ function readLocalMemory(): string {
   }
 }
 
+function readInferenceMemory(): string {
+  let evolved = '';
+  try { evolved = fs.readFileSync(path.join(app.getPath('userData'), 'personalization', 'evolved-memory.md'), 'utf8').trim(); } catch { /* No approved draft yet. */ }
+  return [readLocalMemory().trim(), evolved ? `## Model-evolved memory\n${evolved}` : ''].filter(Boolean).join('\n\n');
+}
+
 ipcMain.removeHandler('get-memory');
 ipcMain.handle('get-memory', async () => {
   // The local file is the source of truth and persists across restarts.
@@ -4114,7 +4068,7 @@ app.on('will-quit', () => {
 // Warning shown when neither first-launch configuration nor legacy developer
 // environment variables provide a chat model.
 const showModelsRequiredWarning = () => {
-  showNotification({
+  proactive.showNotification({
     message:
       'Open Settings and configure at least one chat model to use Coco.',
     actionLabel: 'Got it',
@@ -4218,6 +4172,78 @@ const startObserver = () => {
       );
     }
     startModelServices(serviceManager, observerModel, isCocoSleeping());
+    const recordsRoot = path.join(app.getPath('userData'), 'coco-records');
+    const stateRoot = path.join(app.getPath('userData'), 'personalization');
+    initializeDailyMemoryDraftService();
+    const packagedExecutable = app.isPackaged
+      ? path.join(
+          process.resourcesPath,
+          'service-dist',
+          'coco-services',
+          `personalization-worker${process.platform === 'win32' ? '.exe' : ''}`,
+        )
+      : undefined;
+    personalizationScheduler?.stop();
+    personalizationScheduler = new PersonalizationScheduler({
+      projectRoot: app.isPackaged
+        ? path.dirname(packagedExecutable!)
+        : path.resolve(process.cwd(), '..'),
+      recordsRoot,
+      stateRoot,
+      memoryRoot: app.getPath('userData'),
+      model: observerModel,
+      packagedExecutable,
+      providerEnv: runtime?.sensingEnv,
+      collectTrainingScreenshots: process.env.COLLECT_TRAINING_SCREENSHOTS === '1',
+      evolveConcurrency: Math.min(4, Math.max(1, Number.parseInt(process.env.COCO_PERSONALIZATION_LLM_CONCURRENCY || "4", 10) || 4)),
+      logPath: path.join(
+        app.getPath('userData'),
+        'logs',
+        'personalization.log',
+      ),
+      getIdleSeconds: () => powerMonitor.getSystemIdleTime(),
+      onFatalError: (error) => {
+        log.error('[Personalization]', error);
+      },
+
+      onJobFinished: (job, outcome) => {
+        if (job !== 'evolve') return;
+        if (outcome === 'completed') {
+          avatarWindow?.webContents.send('daily-memory-draft-refresh');
+        }
+        if (
+          wakeAfterEveningPersonalization &&
+          (outcome === 'completed' || outcome === 'no_work')
+        ) {
+          eveningPersonalizationScheduler?.markCompleted(outcome);
+          wakeAfterEveningPersonalization = false;
+          void setCocoSleepMode(false).then((result) => {
+            if (result.success) {
+              log.info(
+                '[Evening] Coco woke after the personalization update finished.',
+              );
+            } else {
+              log.warn(
+                `[Evening] Could not wake Coco after personalization: ${JSON.stringify(result)}`,
+              );
+            }
+          }).catch((error) => {
+            log.warn(
+              `[Evening] Could not wake Coco after personalization: ${error}`,
+            );
+          });
+        }
+      },
+    });
+    personalizationScheduler.setSleepMode(isCocoSleeping());
+    personalizationScheduler.start();
+    eveningPersonalizationScheduler?.stop();
+    eveningPersonalizationScheduler = new EveningPersonalizationScheduler({
+      statePath: path.join(stateRoot, 'evening-review.json'),
+      onEvening: runEveningPersonalizationTransition,
+    });
+    eveningPersonalizationScheduler.start();
+
   } catch (e) {
     console.warn('Failed to start services:', e);
   }
@@ -4239,6 +4265,7 @@ function subscribeToObservations() {
       if (!sensingEnabled || isCocoSleeping()) return;
       if (observationSleepGuard.shouldSuppress(event.ts)) {
         if (event.observation) {
+          personalizationScheduler?.noteObservation();
           log.info(
             `[Power] Dropped suppressed observation status=${event.status ?? '(none)'}`,
           );
@@ -4257,13 +4284,30 @@ function subscribeToObservations() {
         event.observation_id = `synthetic-${Date.now()}-${syntheticObsSeq}`;
       }
 
-      // Always forward to avatar window for pet animation / observation bubble.
+      if (event.observation?.trim()) {
+        latestInspectorObservation = {
+          ts: event.ts ?? Math.floor(Date.now() / 1000),
+          status: (status ?? 'observing') as ObservationStatus,
+          observation: cleanObservation(event.observation),
+          observation_id: event.observation_id,
+        };
+        chatWindow?.webContents.send(
+          'observation-update',
+          latestInspectorObservation,
+        );
+      }
+
+      // Actionable bubbles wait for a preview of the actual support.
+      latestAvatarSuggestionObservationId = event.observation_id;
+      // Forward calm observations immediately for the pet animation.
       if (
         !hideAvatarMode &&
         avatarWindow &&
         !avatarWindow.isDestroyed()
       ) {
-        avatarWindow.webContents.send('observation-update', event);
+        if (!status || !PRECOMPUTE_STATUSES.has(status)) {
+          avatarWindow.webContents.send('observation-update', event);
+        }
       }
 
       // Tee into the persistent activity history so the Activity panel survives
@@ -4291,6 +4335,14 @@ function subscribeToObservations() {
       // way, falling back to the chat flow only on a cache miss.
       if (status && PRECOMPUTE_STATUSES.has(status)) {
         const suggestionPromise = precomputeSuggestion(event);
+        void suggestionPromise?.then((suggestion) => {
+          if (!suggestion?.title?.trim() || !sensingEnabled || isCocoSleeping() ||
+              hideAvatarMode || latestAvatarSuggestionObservationId !== event.observation_id ||
+              !avatarWindow || avatarWindow.isDestroyed()) return;
+          const title = suggestion.title.replace(/[`#*_]/g, '').replace(/\s+/g, ' ').trim();
+          const preview = title.length > 90 ? `${title.slice(0, 87).trimEnd()}…` : title;
+          avatarWindow.webContents.send('observation-update', { ...event, support_preview: preview });
+        });
         if (hideAvatarMode && event.observation) {
           const rawObservation = cleanObservation(event.observation);
           latestHiddenSuggestionObservationId = event.observation_id;
@@ -4313,7 +4365,7 @@ function subscribeToObservations() {
                     availableTools: buildAvailableTools(value.targetTool),
                   }
                 : value;
-            showNotification({
+            proactive.showNotification({
               message: suggestion.title,
               actionLabel: 'Reveal full suggestion',
               notifType: 'proactive-suggestion',
@@ -4351,17 +4403,15 @@ function subscribeToObservations() {
         pendingTaskLabel = taskLabel;
         const message = `I see you're ${taskLabel}. Want me to guide you with AI tools?`;
         if (!hideAvatarMode && avatarWindow && !avatarWindow.isDestroyed()) {
-          if (avatarInvite) avatarWindow.webContents.send('session-invite-clear', avatarInvite);
-          avatarInvite = { inviteId: randomUUID(), taskLabel };
-          avatarWindow.webContents.send('session-invite', { ...avatarInvite, rawObservation: event.observation || '' });
+          proactive.invite(taskLabel, event.observation || '');
         } else {
-          showNotification({ message, actionLabel: 'Yes, start session', cancelLabel: 'Not now', notifType: 'session-start-prompt' });
+          proactive.showNotification({ message, actionLabel: 'Yes, start session', cancelLabel: 'Not now', notifType: 'session-start-prompt' });
         }
       }
 
       // ── In-session: detect task completion ───────────────────────────
       if (isSessionActive && status === 'task_complete') {
-        showNotification({
+        proactive.showNotification({
           message: "Looks like your task is done. Want to wrap up this session?",
           actionLabel: 'Yes, end session',
           cancelLabel: 'Keep going',
@@ -4381,12 +4431,13 @@ app
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
       systemSuspended = true;
+      personalizationScheduler?.stop();
+      eveningPersonalizationScheduler?.stop();
       syncWakeWordService();
       observationSleepGuard.suspend();
       latestHiddenSuggestionObservationId = undefined;
       suggestionCache.clear();
-      notificationHovered = false;
-      notificationWindow?.destroy();
+      proactive.dismissNotification();
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         avatarWindow.webContents.send('system-suspend');
       }
@@ -4396,12 +4447,13 @@ app
     powerMonitor.on('resume', () => {
       log.info('[Power] System resumed; suppressing observations briefly.');
       systemSuspended = false;
+      personalizationScheduler?.start();
+      eveningPersonalizationScheduler?.start();
       syncWakeWordService();
       observationSleepGuard.resume();
       latestHiddenSuggestionObservationId = undefined;
       suggestionCache.clear();
-      notificationHovered = false;
-      notificationWindow?.destroy();
+      proactive.dismissNotification();
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         // Send this again in case the renderer was frozen before handling the
         // suspend event.
@@ -4461,6 +4513,8 @@ app
   .catch(console.log);
 
 app.on('before-quit', (event) => {
+  personalizationScheduler?.stop();
+  eveningPersonalizationScheduler?.stop();
   if (isQuitting) return;
   event.preventDefault();
   isQuitting = true;

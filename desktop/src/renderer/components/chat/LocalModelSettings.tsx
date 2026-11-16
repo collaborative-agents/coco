@@ -14,19 +14,34 @@ export default function LocalModelSettings() {
         Connect models for Coco chat through Pi or add another model service.
         Screen sensing is optional.
       </p>
+      {models.hasUnsavedChanges && (
+        <p className="model-settings-reminder">
+          You have pending changes. Save your model settings below to apply them.
+        </p>
+      )}
       <ModelsStep {...models.modelProps} />
-      <button
-        className="coco-button coco-button--primary"
-        type="button"
-        disabled={models.savingModels}
-        onClick={async () => {
-          setSaved(false);
-          setSaved(await models.saveModels());
-        }}
-      >
-        {models.savingModels ? 'Saving…' : 'Save model settings'}
-      </button>
-      {saved && <span role="status"> Saved</span>}
+      <div className="model-settings-save-bar">
+        <button
+          className="coco-button coco-button--primary"
+          type="button"
+          disabled={models.savingModels}
+          onClick={async () => {
+            setSaved(false);
+            setSaved(await models.saveModels());
+          }}
+        >
+          {models.savingModels ? 'Saving…' : 'Save model settings'}
+        </button>
+        <span role="status" className="model-settings-save-status">
+          {models.savingModels
+            ? 'Saving changes…'
+            : models.hasUnsavedChanges
+              ? 'Unsaved changes — save to apply.'
+              : saved
+                ? 'Saved'
+                : ''}
+        </span>
+      </div>
     </section>
   );
 }

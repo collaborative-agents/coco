@@ -95,6 +95,53 @@ describe('model configuration', () => {
     });
   });
 
+  it('keeps hosted tutor endpoints and keys separate regardless of list order', () => {
+    const local = { ...sensing, id: 'local', baseUrl: 'http://local.test/v1' };
+    const cloud = {
+      ...local,
+      id: 'cloud',
+      model: 'hosted_vllm/cloud/chat',
+      baseUrl: 'https://cloud.test/v1',
+    };
+    for (const connections of [
+      [local, cloud],
+      [cloud, local],
+    ]) {
+      const { tutorEnv, sensingEnv } = buildRoleModelEnvironments(
+        validateModelConfiguration({
+          sensing: local,
+          tutors: connections,
+          defaultTutorId: local.id,
+          instantSuggestionModelId: cloud.id,
+        }),
+        {
+          'sensing:hosted_vllm': 'sensing-key',
+          'tutor:hosted_vllm': 'legacy-key',
+          'tutor:hosted_vllm:local': 'local-key',
+          'tutor:hosted_vllm:cloud': 'cloud-key',
+        },
+      );
+      expect(JSON.parse(tutorEnv.COCO_HOSTED_MODEL_ROUTES)).toEqual({
+        [local.model]: { api_base: local.baseUrl, api_key: 'local-key' },
+        [cloud.model]: { api_base: cloud.baseUrl, api_key: 'cloud-key' },
+      });
+      expect(tutorEnv.COCO_INSTANT_SUGGESTION_MODEL).toBe(cloud.model);
+      expect(sensingEnv.HOSTED_VLLM_API_KEY).toBe('sensing-key');
+      expect(sensingEnv).not.toHaveProperty('COCO_HOSTED_MODEL_ROUTES');
+    }
+    const { tutorEnv } = buildRoleModelEnvironments(
+      validateModelConfiguration({
+        sensing: null,
+        tutors: [local],
+        defaultTutorId: local.id,
+      }),
+      { 'tutor:hosted_vllm': 'legacy-key' },
+    );
+    expect(
+      JSON.parse(tutorEnv.COCO_HOSTED_MODEL_ROUTES)[local.model].api_key,
+    ).toBe('legacy-key');
+  });
+
   it('adds the internal routing prefix to raw endpoint model IDs', () => {
     const config = validateModelConfiguration({
       sensing: {

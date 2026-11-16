@@ -750,7 +750,7 @@ async def record_feedback(req: FeedbackRequest):
     # Keep an in-memory reaction for this observation so the observer can avoid
     # re-raising a just-dismissed suggestion (injected into its next prompt).
     if ai_proc is not None and req.observation_id:
-        ai_proc.record_reaction(req.observation_id, req.kind)
+        ai_proc.record_reaction(req.observation_id, req.kind, req.text)
     rec = getattr(ai_proc, "_recorder", None) if ai_proc is not None else None
     if rec is None:
         # No recorder (e.g. ai_tutoring disabled) — accept but no-op.
@@ -944,7 +944,8 @@ async def main_async(
         # decision is logged (observations.jsonl / decisions.jsonl / episodes.jsonl)
         # into the same per-run directory as progress_judgments.jsonl.
         ai_processor._recorder = TrainingRecorder(
-            out_dir=_os.path.dirname(_progress_log_path)
+            out_dir=_os.path.dirname(_progress_log_path),
+            retain_screenshots=True,
         )
         # Reset the tutor server's per-session state at startup so any conversation
         # history or curriculum state left over from a previous run doesn't bleed

@@ -250,7 +250,9 @@ function PetView() {
         // recording new observations in main, but do not replace the accepted
         // suggestion on the avatar surface.
         if (bubblePinnedRef.current) return;
-        if (repeatsCalm) {
+        // Watching is background activity, not a notification. Keep recording
+        // it and animating the pet without showing a passive status bubble.
+        if (incomingStatus === 'observing' || repeatsCalm) {
           // Leave the fox alone while another bubble is on screen.
           if (bubbleShownRef.current) return;
           setMood(STATUS_TO_MOOD[incomingStatus]);
@@ -262,7 +264,7 @@ function PetView() {
         }
         // Seed phrase choice on the event timestamp so re-renders are stable.
         const seed = Math.floor((event.ts ?? Date.now() / 1000) * 1000);
-        const phrase = pickPhrase(incomingStatus, seed);
+        const phrase = event.support_preview?.trim() || pickPhrase(incomingStatus, seed);
 
         // Clear any in-flight timers — we're starting a fresh visible window.
         if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -606,6 +608,12 @@ function PetView() {
   const handleDismiss = () => {
     if (!bubble) return;
     bubblePinnedRef.current = false;
+    if (bubble.showHelpButton && !bubble.suggestion && !bubble.invite && bubble.observationId) {
+      window.electron?.ipcRenderer.sendMessage('training-feedback', {
+        kind: 'dismiss', surface: 'bubble', observation_id: bubble.observationId,
+        status: bubble.status, text: bubble.phrase,
+      });
+    }
     if (bubble.invite) {
       window.electron?.ipcRenderer.sendMessage('session-invite-response', {
         inviteId: bubble.invite.inviteId,

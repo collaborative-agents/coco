@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /desktop/release/app
+    schedule:
+      interval: weekly
+      day: monday
+    versioning-strategy: increase
+    open-pull-requests-limit: 3
+    allow:
+      - dependency-name: "@earendil-works/*"
+      - dependency-name: "@juicesharp/rpiv-ask-user-question"
+      - dependency-name: "pi-context-view"
+    groups:
+      pi-runtime:
+        patterns:
+          - "@earendil-works/*"
+          - "@juicesharp/rpiv-ask-user-question"
+          - "pi-context-view"
+    commit-message:
+      prefix: "chore(deps)"

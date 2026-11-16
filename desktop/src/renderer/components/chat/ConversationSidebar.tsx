@@ -19,6 +19,9 @@ export default function ConversationSidebar({
   onRetry,
   onCurrent,
 }: Props) {
+  const history = conversations.filter(
+    (conversation) => conversation.messages.length > 0,
+  );
   return (
     <section
       className="workspace-history"
@@ -43,12 +46,12 @@ export default function ConversationSidebar({
             </button>
           </div>
         )}
-        {!loading && !error && conversations.length === 0 && (
+        {!loading && !error && history.length === 0 && (
           <p>Your past conversations will appear here.</p>
         )}
         {!loading &&
           !error &&
-          conversations.map((conversation) => (
+          history.map((conversation) => (
             <button
               type="button"
               className="workspace-conversation"
@@ -61,14 +64,19 @@ export default function ConversationSidebar({
               <strong>
                 {conversation.title ||
                   conversation.problem ||
-                  'General help session'}
+                  'New conversation'}
               </strong>
               {conversation.messages.some((message) => message.isStreaming) && (
                 <span>Working…</span>
               )}
               <span>
                 {conversation.messages.find((message) => message.text.trim())
-                  ?.text || 'No messages'}
+                  ?.text ||
+                  (conversation.messages.some(
+                    (message) => message.images?.length,
+                  )
+                    ? 'Screenshot'
+                    : 'Working…')}
               </span>
               <time dateTime={new Date(conversation.updatedAt).toISOString()}>
                 {new Date(conversation.updatedAt).toLocaleDateString([], {

@@ -1,9 +1,10 @@
+import type WorkspacePermissions from './workspace-permissions';
 import { readPiConnection } from './pi-provider';
 import { retryOperation } from './retry-operation';
 import type CommandApprovalRules from './command-approval-rules';
 import fs from 'fs';
 import path from 'path';
-import { pathToFileURL } from 'url';
+import { loadPiRuntime } from './pi-runtime-loader';
 import { app } from 'electron';
 import type { AgentContextSnapshot } from '../../shared/agent-context';
 import PiEventTranslator from './pi-events';
@@ -38,23 +39,34 @@ interface Runtime {
 }
 
 export default class PiHarness {
+  constructor(private readonly workspacePermissions?: WorkspacePermissions) {}
+
   private runtime?: Runtime;
 
   private key = '';
 
   private workspaceGrant?: string;
 
+  private workspaceDirectory?: string;
+
   private revokingWorkspace = false;
 
   hasWorkspaceAccess(directory: string) {
     try {
-      return this.workspaceGrant === fs.realpathSync(directory);
+      return this.workspacePermissions
+        ? this.workspacePermissions.hasWorkspace(directory)
+        : this.workspaceGrant === fs.realpathSync(directory);
     } catch {
       return false;
     }
   }
 
-  async revokeWorkspaceAccess() {
+  usesWorkspace(directory: string) {
+    return this.workspaceDirectory === fs.realpathSync(directory);
+  }
+
+  async revokeWorkspaceAccess(directory = this.workspaceGrant) {
+    if (directory) this.workspacePermissions?.revokeWorkspace(directory);
     this.revokingWorkspace = true;
     try {
       this.workspaceGrant = undefined;
@@ -69,6 +81,7 @@ export default class PiHarness {
     stopped: boolean;
     controller: AbortController;
     permissions: AgentPermissions;
+    workspaceApproval?: Promise<boolean>;
   };
 
   getContextSnapshot(sessionId: string) {
@@ -103,6 +116,7 @@ export default class PiHarness {
 
   async dispose() {
     this.workspaceGrant = undefined;
+    this.workspaceDirectory = undefined;
     await this.abort();
     this.runtime?.dispose();
     this.runtime = undefined;
@@ -136,6 +150,7 @@ export default class PiHarness {
       permissions: new AgentPermissions(
         (request) => translator.permission(request),
         options.approvalRules,
+        this.workspacePermissions,
       ),
     };
     this.active = active;
@@ -169,26 +184,7 @@ export default class PiHarness {
       const cwd = fs.realpathSync(options.directory);
       if (!fs.statSync(cwd).isDirectory())
         throw new Error('Choose an existing working folder.');
-      if (!options.authoringInstructions && this.workspaceGrant !== cwd) {
-        this.workspaceGrant = undefined;
-        if (
-          !(await active.permissions.request(
-            { kind: 'workspace', directory: cwd },
-            active.controller.signal,
-          ))
-        ) {
-          options.emit({
-            type: 'done',
-            guidance: '',
-            stopped: active.stopped,
-            tool_calls: [],
-            activity: translator.activity,
-          });
-          return;
-        }
-        if (active.stopped) throw new Error('Operation aborted');
-        this.workspaceGrant = cwd;
-      }
+      this.workspaceDirectory = cwd;
       const selectedModel = options.context.model;
       const [, provider, ...modelParts] = selectedModel.split('/');
       const connection = selectedModel.startsWith('pi/')
@@ -263,9 +259,7 @@ export default class PiHarness {
               'agent',
               'pi-runtime.mjs',
             );
-        const { createRuntime } = await import(
-          /* webpackIgnore: true */ pathToFileURL(runtimePath).href
-        );
+        const { createRuntime } = await loadPiRuntime(runtimePath);
         this.runtime = await createRuntime({
           cwd,
           sessionId: options.sessionId,
@@ -276,6 +270,32 @@ export default class PiHarness {
           connection,
           authoring: Boolean(options.authoringInstructions),
           skillPaths: options.curatedSkills?.paths ?? [],
+          requestWorkspaceAccess: async (signal?: AbortSignal) => {
+            const run = this.active;
+            if (!run || run.stopped || signal?.aborted) return false;
+            if (this.hasWorkspaceAccess(cwd)) return true;
+            const workspaceSignal = signal
+              ? AbortSignal.any([signal, run.controller.signal])
+              : run.controller.signal;
+            // Concurrent file calls share one workspace prompt for this run.
+            run.workspaceApproval ??= run.permissions
+              .request({ kind: 'workspace', directory: cwd }, workspaceSignal)
+              .then((allowed) => {
+                if (
+                  !allowed ||
+                  this.active !== run ||
+                  run.stopped ||
+                  workspaceSignal.aborted
+                )
+                  return false;
+                this.workspaceGrant = cwd;
+                return true;
+              });
+            const allowed = await run.workspaceApproval;
+            return (
+              allowed && this.active === run && !run.stopped && !signal?.aborted
+            );
+          },
           requestApproval: async (
             action: ActionApproval,
             signal?: AbortSignal,
@@ -283,14 +303,14 @@ export default class PiHarness {
             // Runtime instances survive turns: always bind approval to the
             // currently active run, never the run that created the runtime.
             const run = this.active;
-            if (!run || run.stopped || this.workspaceGrant !== cwd)
-              return false;
+            if (!run || run.stopped) return false;
             const approvalSignal = signal
               ? AbortSignal.any([signal, run.controller.signal])
               : run.controller.signal;
             const allowed = await run.permissions.request(
               {
-                kind: 'action',
+                kind: action.fileAccess ? 'path' : 'action',
+                fileAccess: action.fileAccess,
                 directory: action.directory,
                 tool: action.tool,
                 arguments: action.arguments,

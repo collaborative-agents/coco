@@ -81,14 +81,14 @@ it('shows a retryable history error and loads saved sessions on retry', async ()
   ).toBeNull();
 });
 
-it('keeps the local agent available without accounts, training, or personalization', async () => {
+it('keeps the local agent available without accounts or training', async () => {
   render(<SessionChatView />);
   expect(screen.getByPlaceholderText(/Ask Coco/)).toBeVisible();
   expect(
     screen.getByRole('button', { name: 'Start a new session' }),
   ).toBeEnabled();
   expect(
-    screen.queryByRole('button', { name: /Training|Personalization|Sign in/i }),
+    screen.queryByRole('button', { name: /Training|Sign in/i }),
   ).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   fireEvent.click(screen.getByRole('button', { name: 'Models' }));
@@ -152,4 +152,21 @@ it('groups settings by category and retains memory edits when switching sections
   expect(memory).toBeVisible();
   expect(memory).toHaveValue('Keep replies concise.');
   await act(async () => {});
+});
+
+
+it('opens personalization as a separate panel and preserves the chat draft', async () => {
+  render(<SessionChatView />);
+  const draft = screen.getByPlaceholderText(/Ask Coco/);
+  fireEvent.change(draft, { target: { value: 'Keep my draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Personalization' }));
+  expect(screen.getByRole('region', { name: 'Personalization panel' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Personalization' })).toHaveAttribute('aria-current', 'page');
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('get-personalization-center'));
+  expect(draft).not.toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+  expect(draft).toBeVisible();
+  expect(draft).toHaveValue('Keep my draft');
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  expect(screen.getByRole('region', { name: 'Settings panel' })).toBeVisible();
 });

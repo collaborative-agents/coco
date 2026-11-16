@@ -54,7 +54,7 @@ export const S: Record<string, React.CSSProperties> = {
   userRow: { alignSelf: 'flex-end', maxWidth: 'min(85%, 68ch)', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' },
   tutorRow: { alignSelf: 'flex-start', maxWidth: 'min(92%, 88ch)', display: 'flex', gap: 8 },
   tutorAvatar: { width: 24, height: 24, borderRadius: '50%', background: ACCENT, color: 'var(--coco-color-surface)', fontSize: 'var(--coco-text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 },
-  userBubble: { background: ACCENT, color: 'var(--coco-color-surface)', padding: 'var(--coco-space-3) var(--coco-space-4)', borderRadius: '16px 16px 4px 16px', fontSize: 'var(--coco-text-body)', lineHeight: 'var(--coco-leading-body)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  userBubble: { userSelect: 'text', WebkitUserSelect: 'text', background: ACCENT, color: 'var(--coco-color-surface)', padding: 'var(--coco-space-3) var(--coco-space-4)', borderRadius: '16px 16px 4px 16px', fontSize: 'var(--coco-text-body)', lineHeight: 'var(--coco-leading-body)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   tutorBubble: { background: 'var(--coco-color-surface-muted)', color: 'var(--coco-color-text-secondary)', padding: 'var(--coco-space-3) var(--coco-space-4)', borderRadius: '4px 16px 16px 16px', fontSize: 'var(--coco-text-body)', lineHeight: 'var(--coco-leading-body)' },
   suggestionHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 2 },
   suggestionLabel: { color: ACCENT, fontSize: 'var(--coco-text-control)', fontWeight: 700 },

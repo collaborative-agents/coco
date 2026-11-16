@@ -151,3 +151,188 @@ test('hides commands automatically allowed by a saved workspace rule', () => {
   expect(screen.queryByText('git push origin main')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
 });
+
+test('outside file prompt shows read scope and offers workspace-specific persistence', async () => {
+  render(
+    <PermissionCard
+      request={{
+        ...request,
+        kind: 'path',
+        tool: 'read',
+        arguments: { path: '/other/report.txt' },
+        fileAccess: { path: '/other/report.txt', scope: 'file', mode: 'read' },
+      }}
+      requestId="run-1"
+      interactive
+    />,
+  );
+  expect(screen.getByText('Allow read access?')).toBeTruthy();
+  expect(screen.getByText('/other/report.txt')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Always allow in this workspace' }),
+  );
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      'answer-agent-permission',
+      'run-1',
+      'approval-1',
+      'always',
+    ),
+  );
+});
+
+test('workspace prompt explains that the grant survives chats and restarts', () => {
+  render(
+    <PermissionCard
+      request={{ ...request, kind: 'workspace', tool: undefined }}
+      requestId="run-1"
+      interactive
+    />,
+  );
+  expect(screen.getByText(/remembered across chats and restarts/)).toBeTruthy();
+});
+
+test.each([
+  ['Enter', true],
+  ['Escape', false],
+])(
+  '%s answers a pending permission from an empty composer',
+  async (key, allow) => {
+    render(
+      <>
+        <textarea aria-label="Message" />
+        <PermissionCard request={request} requestId="run-1" interactive />
+      </>,
+    );
+    fireEvent.keyDown(screen.getByRole('textbox'), { key });
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'answer-agent-permission',
+        'run-1',
+        request.id,
+        allow,
+      ),
+    );
+  },
+);
+
+test('shortcuts preserve drafts, composition, modifiers, and focused buttons', () => {
+  render(
+    <>
+      <textarea aria-label="Message" defaultValue="draft" />
+      <PermissionCard request={request} requestId="run-1" interactive />
+    </>,
+  );
+  fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+  fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Deny' }), {
+    key: 'Enter',
+  });
+  for (const modifier of [
+    'repeat',
+    'isComposing',
+    'shiftKey',
+    'ctrlKey',
+    'altKey',
+    'metaKey',
+  ]) {
+    fireEvent.keyDown(document.body, { key: 'Enter', [modifier]: true });
+  }
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+test('one keypress answers only the first pending request and cannot double-submit', () => {
+  invoke.mockImplementation(() => new Promise(() => {}));
+  render(
+    <>
+      <PermissionCard request={request} requestId="run-1" interactive />
+      <PermissionCard
+        request={{ ...request, id: 'approval-2' }}
+        requestId="run-2"
+        interactive
+      />
+    </>,
+  );
+  fireEvent.keyDown(document.body, { key: 'Enter' });
+  fireEvent.keyDown(document.body, { key: 'Enter' });
+  expect(invoke).toHaveBeenCalledTimes(1);
+  expect(invoke).toHaveBeenCalledWith(
+    'answer-agent-permission',
+    'run-1',
+    request.id,
+    true,
+  );
+});
+
+test('historical prompts do not respond to shortcuts', () => {
+  render(
+    <PermissionCard request={request} requestId="run-1" interactive={false} />,
+  );
+  fireEvent.keyDown(document.body, { key: 'Enter' });
+  fireEvent.keyDown(document.body, { key: 'Escape' });
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+test('auto mode requires an explicit click and explains the run scope', async () => {
+  render(<PermissionCard request={request} requestId="run-1" interactive />);
+  expect(
+    screen.getByText(/all remaining tool actions in this run/),
+  ).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Enable Auto mode' }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      'answer-agent-permission',
+      'run-1',
+      request.id,
+      'auto',
+    ),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('status').textContent).toContain(
+      'Auto mode enabled',
+    ),
+  );
+  expect(screen.queryByRole('button')).toBeNull();
+});
+
+test.each(['workspace', 'path'] as const)(
+  'does not offer auto mode for %s access',
+  (kind) => {
+    render(
+      <PermissionCard
+        request={{
+          ...request,
+          kind,
+          fileAccess: { path: '/other', scope: 'file', mode: 'read' },
+        }}
+        requestId="run-1"
+        interactive
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Enable Auto mode' }),
+    ).toBeNull();
+  },
+);
+
+test('retains the auto-mode decision in history without live-run controls', () => {
+  render(
+    <PermissionCard
+      request={{
+        ...request,
+        status: 'allowed',
+        approvalSource: 'auto-mode',
+        autoModeEnabled: true,
+      }}
+      requestId="run-1"
+      interactive={false}
+    />,
+  );
+  expect(screen.getByRole('status').textContent).toContain(
+    'Auto mode enabled for this run',
+  );
+  expect(screen.queryByText(/Use Stop/)).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+});

@@ -285,6 +285,63 @@ export function NotificationBubble({
   onFrameworkPageChange?: (page: 0 | 1) => void;
   rawObservation?: string;
 }) {
+  if (notifType === 'daily-summary') {
+    return (
+      <div
+        className="toast-card daily-review-card"
+        onMouseEnter={() => onHoverChange?.(true)}
+        onMouseLeave={() => onHoverChange?.(false)}
+      >
+        <header className="daily-review-header">
+          <div>
+            <time
+              className="daily-review-date"
+              dateTime={new Date().toISOString()}
+            >
+              {new Date().toLocaleDateString([], {
+                weekday: 'long',
+                month: 'short',
+                day: 'numeric',
+              })}
+            </time>
+            <h1>Your day, in review</h1>
+          </div>
+          <button
+            type="button"
+            className="daily-review-close"
+            aria-label="Dismiss"
+            onClick={onDismiss}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4 4 8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </header>
+        <div
+          className="daily-review-body toast-markdown"
+          role="region"
+          aria-label="Daily review"
+        >
+          <Markdown
+            remarkPlugins={[remarkGfm]}
+            skipHtml
+            components={markdownComponents}
+          >
+            {resolveMessage(message)}
+          </Markdown>
+        </div>
+        {actionLabel && (
+          <footer className="daily-review-footer">
+            <button type="button" onClick={onAction}>
+              {actionLabel}
+              <span aria-hidden="true">↗</span>
+            </button>
+          </footer>
+        )}
+      </div>
+    );
+  }
+
   const isSessionInvite = notifType === 'session-start-prompt';
   const isPrompt = isSessionInvite || notifType === 'session-end-prompt';
   const isSuggestionPreview =
@@ -334,10 +391,7 @@ export function NotificationBubble({
   // card doesn't overflow with a multi-paragraph response.
   const resolvedMessage = resolveMessage(message);
   const displayMessage =
-    expanded ||
-    isPrompt ||
-    notifType === 'instant-suggestion' ||
-    notifType === 'daily-summary'
+    expanded || isPrompt || notifType === 'instant-suggestion'
       ? resolvedMessage
       : truncateForPreview(resolvedMessage);
 

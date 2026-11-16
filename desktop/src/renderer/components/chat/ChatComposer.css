@@ -1,3 +1,8 @@
+.chat-composer-surface textarea {
+  field-sizing: content;
+  overflow-y: auto;
+}
+
 .chat-composer-surface textarea:focus,
 .chat-composer-surface textarea:focus-visible {
   outline: none;

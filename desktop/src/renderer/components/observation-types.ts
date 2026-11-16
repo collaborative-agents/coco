@@ -90,6 +90,8 @@ export interface TutorToolCall {
 }
 
 export interface ObservationEvent {
+  /** Short preview of generated support, before the user reveals it. */
+  support_preview?: string;
   type: string;
   observation?: string;
   status?: ObservationStatus;
@@ -113,6 +115,14 @@ export interface ObservationEvent {
   llm_metrics?: LLMCallMetrics;
 }
 
+/** Support categories shared with the trajectory annotation schema. */
+export type SupportDimension =
+  | 'execution'
+  | 'judgment'
+  | 'learning'
+  | 'attention'
+  | 'motivation';
+
 /**
  * A pre-computed, ready-to-use suggestion revealed instantly when the user
  * clicks "Help me with this". Mirrors the InstantSuggestion type in main.ts and
@@ -130,6 +140,8 @@ export interface InstantSuggestion {
   targetTool?: string;
   prompt?: string;
   copyText: string;
+  /** Most relevant support categories first; absent on older suggestions. */
+  dimensions?: SupportDimension[];
   llm_metrics?: LLMCallMetrics;
   fourDDimension?:
     | 'delegation'
@@ -287,11 +299,9 @@ export const PHRASES: Record<ObservationStatus, string[]> = {
     'Flowing nicely',
   ],
   stuck: [
-    'Looks like a tricky spot — you can ask me for help',
-    'Seems like you might be stuck — feel free to ask me',
-    'Taking a while here — I\'m here if you need a hint',
-    'Hitting a wall? You can always ask me directly',
-    'Tough moment. Take your time. If you want a hand, just ask!',
+    'I have a suggestion you can explore',
+    'Here’s an option for your next step',
+    'A fresh perspective is available',
   ],
   mistake: [
     'Something looks worth double-checking',
@@ -332,7 +342,7 @@ export const PHRASES: Record<ObservationStatus, string[]> = {
 
 export const STATUS_LABEL: Record<ObservationStatus, string> = {
   progress: 'Progress',
-  stuck: 'Stuck?',
+  stuck: 'Support available',
   mistake: 'Heads up',
   inefficient: 'AI could help',
   ai_struggle: 'AI hiccup',

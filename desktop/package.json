@@ -42,7 +42,8 @@
     "start:renderer": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack serve --config ./.erb/configs/webpack.config.renderer.dev.ts",
     "test": "jest",
     "typecheck": "tsc --noEmit",
-    "test:agent": "node --test tests/pi-runtime.test.mjs tests/question-channel.test.mjs tests/pi-auth.test.mjs tests/permission-tools.test.mjs"
+    "test:agent": "node --test tests/pi-runtime.test.mjs tests/question-channel.test.mjs tests/pi-auth.test.mjs tests/permission-tools.test.mjs tests/pi-inference.test.mjs tests/pi-thinking.test.mjs",
+    "test:agent-host": "jest --runInBand src/main/services/pi-harness.test.ts src/main/services/pi-events.test.ts src/main/services/agent-permissions.test.ts src/main/services/workspace-permissions.test.ts src/main/services/command-approval-rules.test.ts src/main/agent-preferences.test.ts src/__tests__/AgentWorkspace.test.tsx src/renderer/components/chat/PermissionCard.test.tsx src/renderer/components/chat/CommandPermissions.test.tsx"
   },
   "browserslist": [
     "chrome >= 134"

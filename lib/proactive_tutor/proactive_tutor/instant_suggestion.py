@@ -26,6 +26,7 @@ _PROMPT_PATH = Path(__file__).parent / "prompts_everyday" / "instant_suggestion.
 INSTANT_SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
 _VALID_KINDS = {"content", "delegate"}
+_VALID_DIMENSIONS = {"execution", "judgment", "learning", "attention", "motivation"}
 
 # Matches <tag>...</tag>, dot-all and case-insensitive — mirrors the parsing
 # convention used for guidance output in tutor_server._process_guidance.
@@ -102,6 +103,7 @@ def _parse_instant_suggestion(raw: str) -> dict:
     body = _xml_tag("body", raw)
     target_tool = _xml_tag("targetTool", raw)
     prompt = _xml_tag("prompt", raw)
+    dimensions = _xml_tag("dimensions", raw)
 
     # Fallback: model returned a JSON object instead of XML tags.
     if kind is None and body is None and prompt is None:
@@ -115,6 +117,17 @@ def _parse_instant_suggestion(raw: str) -> dict:
             body = obj.get("body") or body
             target_tool = obj.get("targetTool") or obj.get("target_tool") or target_tool
             prompt = obj.get("prompt") or prompt
+            dimensions = obj.get("dimensions")
+
+    # Accept the XML comma-separated field and JSON arrays. Ignore unknown
+    # labels without discarding an otherwise useful suggestion.
+    candidates = dimensions.split(",") if isinstance(dimensions, str) else dimensions
+    support_dimensions = []
+    for value in candidates if isinstance(candidates, list) else []:
+        dimension = value.strip().lower() if isinstance(value, str) else ""
+        if dimension in _VALID_DIMENSIONS and dimension not in support_dimensions:
+            support_dimensions.append(dimension)
+    support_dimensions = support_dimensions[:2]
 
     kind = (kind or "").strip().lower()
     if kind not in _VALID_KINDS:
@@ -144,6 +157,7 @@ def _parse_instant_suggestion(raw: str) -> dict:
         "targetTool": target_tool,
         "prompt": prompt,
         "copyText": copy_text,
+        "dimensions": support_dimensions,
     }
 
 

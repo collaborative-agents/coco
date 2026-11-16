@@ -80,3 +80,26 @@ it('retains token usage across saved snapshots and reopening a conversation', ()
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it('replaces a legacy generic title when reading saved conversations', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coco-titles-'));
+  (app.getPath as jest.Mock).mockReturnValue(directory);
+  try {
+    fs.writeFileSync(
+      path.join(directory, 'chat-conversations.json'),
+      JSON.stringify([
+        {
+          sessionId: 'legacy',
+          title: 'General help session',
+          problem: 'General help session',
+          createdAt: 1,
+          updatedAt: 1,
+          messages: [{ role: 'user', text: 'Improve my resume' }],
+        },
+      ]),
+    );
+    expect(readConversations()[0].title).toBe('Improve my resume');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

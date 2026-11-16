@@ -4,9 +4,12 @@ import path from 'path';
 import { createHash } from 'crypto';
 import type { CuratedSkill } from '../../shared/skills';
 
-/** Only explicitly imported packages are exposed to the agent. */
+/** Expose Coco's bundled skills and explicitly imported packages only. */
 export default class SkillLibrary {
-  constructor(private readonly root: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly bundledRoot?: string,
+  ) {}
 
   private package(folder: string): CuratedSkill {
     const skillFile = path.join(folder, 'SKILL.md');
@@ -52,17 +55,28 @@ export default class SkillLibrary {
     return { id: name, name, description, markdown, files };
   }
 
-  list(): CuratedSkill[] {
-    if (!fs.existsSync(this.root)) return [];
+  private listFrom(root?: string): CuratedSkill[] {
+    if (!root || !fs.existsSync(root)) return [];
     return fs
-      .readdirSync(this.root, { withFileTypes: true })
+      .readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => {
-        const skill = this.package(path.join(this.root, entry.name));
+        const skill = this.package(path.join(root, entry.name));
         if (skill.name !== entry.name)
           throw new Error('The skill name must match its library folder.');
         return skill;
       });
+  }
+
+  list(): CuratedSkill[] {
+    // An explicitly imported version takes precedence over a bundled skill.
+    return [
+      ...new Map(
+        [...this.listFrom(this.bundledRoot), ...this.listFrom(this.root)].map(
+          (skill) => [skill.id, skill],
+        ),
+      ).values(),
+    ];
   }
 
   create(input: {
@@ -140,13 +154,16 @@ export default class SkillLibrary {
   directory(id: string) {
     const skill = this.list().find((item) => item.id === id);
     if (!skill) throw new Error('Skill not found.');
-    return path.join(this.root, skill.name);
+    const imported = path.join(this.root, skill.name);
+    return fs.existsSync(imported)
+      ? imported
+      : path.join(this.bundledRoot!, skill.name);
   }
 
   runtimeSkills() {
     const skills = this.list();
     return {
-      paths: skills.map((skill) => path.join(this.root, skill.name)),
+      paths: skills.map((skill) => this.directory(skill.id)),
       revision: createHash('sha256')
         .update(JSON.stringify(skills))
         .digest('hex'),

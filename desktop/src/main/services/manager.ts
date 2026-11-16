@@ -6,6 +6,7 @@ import { app } from 'electron';
 import log from 'electron-log';
 
 const PROVIDER_ENV_NAMES = new Set([
+  'COCO_HOSTED_MODEL_ROUTES',
   'ANTHROPIC_API_KEY',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',

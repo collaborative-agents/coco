@@ -1,5 +1,3 @@
-import WorkspaceIcon from './chat/WorkspaceIcon';
-
 export default function PetMenuIcon({
   name,
 }: {
