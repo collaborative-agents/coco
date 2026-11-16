@@ -1,67 +1,34 @@
-<p align="center">
-  <img src="assets/github-logo.svg" width="40%">
+<p align="center" style="text-align: center;">
+  <img src="assets/github-logo.svg" alt="Coco" width="360">
 </p>
 
+<h3 align="center" style="text-align: center;">
+Proactive agent that grows with you
+</h3>
+<p align="center" style="text-align: center;">
+| <a href="https://nvlabs.github.io/deep-personalization/"><b>Blog</b></a> | <a href="https://arxiv.org/abs/2611.13457"><b>Paper</b></a> | <a href="https://github.com/mit-han-lab/cti-engine"><b>On-device Engine</b></a> | <a href="https://huggingface.co/collaborative-agents"><b>Data</b></a> |
+</p>
 
-**Proactive Co-Assistant Through Continuous Context Observation**
+---
 
-Coco quietly senses your computer-use context and steps in with the right help at the right moment — a nudge when you're stuck, a better AI tool to delegate to, or a hint to learn something yourself. Runs **fully on your machine** as a lightweight desktop app.
+Coco is a desktop agent that observes your computer-use context and offers help when you need it. It spots repetitive work, brings together context across apps, and suggests useful next steps without waiting for a prompt.
 
-## What it solves?
-Working with AI today puts most of the burden on the human: you have to notice when AI could help, know what to ask, and supply all the context yourself. Coco inverts that:
+Coco uses a **dual-agent architecture**:
 
-- **Proactively identifies opportunities** — recognizes repetitive work and generates a ready-to-send prompt so you can delegate in one shot
-- **Accumulates context across apps** — infers your intent from browsing, reading, and editing history rather than waiting for you to explain it
-- **Helps you discover what you don't know** — surfaces concrete questions when you're struggling with unfamiliar territory, so you can ask the right things
+- **Always-on Observer Agent** follows your activity across apps, builds context, and identifies when help would be useful.
+- **Execution Agent**, built on [pi](https://github.com/earendil-works/pi), turns that context into action, with **computer-use and browser-use support**.
 
-Coco is a *collaboration layer* that sits between you and the AI tools you already use. We keep it intentionally lightweight in order to decouple proactive co-assistance from the execution capabilities provided by various general and vertical agents.
+**Deploy local models with one command** using [CTI-engine](https://github.com/mit-han-lab/cti-engine) on **RTX 5090, RTX PRO 6000, and DGX Spark**, running Linux with **NVIDIA driver 580 or newer** and the **NVIDIA Container Toolkit**. See the [personalization and local deployment guide](lib/personalization/README.md) for commands and configuration.
 
-## Three ways to “Ask Coco”
+### You can Use Coco to
 
-Besides receiving proactive support, you can ask Coco for help at any time:
-
-1. **Click the avatar or toolbar button** to open Coco and type your question.
-2. **Press Command + Shift + Space** to open Coco and attach a screenshot as visual context.
-3. **Say “Hey Coco”** for the lowest-friction, voice-first entry point. Voice activation must first be enabled in Settings.
-
-You can ask for help through text, voice, or visual context and get assistance instantly.
-
-## Local computer control with Cua Driver
-
-Coco's Pi agent includes a `cua-driver` skill for operating applications on your current computer. Install [Cua Driver](https://cua.ai/docs/cua-driver/quickstart) on the same computer as Coco and grant its Accessibility and Screen Recording permissions on macOS. Cua Spaces and remote computer pairing are not required.
-
-```bash
-cua-driver permissions grant
-cua-driver doctor
-cua-driver call list_apps
-```
-
-Restart Coco after updating the app, select `cua-driver` from the skill picker, and ask: “Open Calculator, compute 6 × 7, and verify the displayed result.” Pi can also select the skill for relevant desktop tasks. Commands use Coco's existing approval flow. Screenshots and app content used by the agent are sent to your selected model provider; use local inference if you want that processing to stay on your hardware.
-
-When a tool asks for approval, choose **Allow once** or **Enable Auto mode**. Auto mode approves this and subsequent tool actions for the current run, including shell commands and desktop control. It resets when the run finishes or you press Stop. File-tool and folder-access permissions remain separate; shell commands still have access beyond the working folder. Auto mode does not classify actions by risk.
-
-## Demos
-
-**Automating repetitive work**
-
-![automating repetitive work demo video](assets/teaser_automating_repetitive_work.webp)
-
-> The user is skimming a paper's Related Work section to find datasets about proactive agents. Coco recognizes the repetitive lookup pattern and generates a detailed prompt the user can send to ChatGPT in one shot.
-
-**Summarizing browsing content based on inferred intent**
-
-![summarizing browsing content demo video](assets/teaser_browsing_summary.webp)
-
-> The user searches for a church in San Diego, checks travel time, and reads Yelp reviews. Coco infers a potential day-trip and surfaces a plan — no prompt needed.
-
-**Helping user to navigate unknown unknowns**
-
-![navigating unknown unknowns demo video](assets/teaser_searching_unknown_unknown.webp)
-
-> The user wants to run Nemotron-3-Nano-Omni locally but doesn't know what hardware specs matter. Coco senses the struggle and suggests concrete questions that are at the core of the space.
-
+- **Get help in the moment:** receive proactive suggestions when you're stuck, summarize what you're working on, and automate repetitive tasks.
+- **Build a local personal agent:** turn local compute into an AI agent that can grows with you
+- **Study proactive assistance:** export training data and derive workflow from daily usage (more documentation to come)
 
 ## Quickstart
+
+Install [uv](https://docs.astral.sh/uv/) and [Node.js](https://nodejs.org/), then run:
 
 ```bash
 # 1. Clone
@@ -77,53 +44,40 @@ npm install
 npm start
 ```
 
+Choose your model provider in onboarding or Settings. Coco supports local and hosted models.
 
-## How it works
+## Three ways to “Ask Coco”
 
-<p align="center">
-  <img src="assets/coco-overview-github.svg" width="100%">
-</p>
+Besides receiving proactive support, you can ask Coco for help at any time:
 
-Coco continuously observes user actions and decides when to offer proactive suggestions using a VLM. It has three main components:
+1. **Click the avatar or toolbar button** to open Coco and type your question.
+2. **Press Command + Shift + Space** to open Coco and attach a screenshot as visual context.
+3. **Say “Hey Coco”** for the lowest-friction, voice-first entry point. Voice activation must first be enabled in Settings.
 
-- **Desktop app (Electron)** — the avatar that lives on your desktop. Assistance surfaces as a small bubble with minimal screen footprint.
-- **Sensing service (`:8080`)** — the observer. `lib/sensing` implements the Computer Use Behavior Observation Protocol, which specifies how behavioral signals from your desktop are captured, classified, and forwarded to downstream agents.
-- **Tutor service (`:8081`)** — the helper. `lib/proactive_tutor` implements the Tutor Agent, which diagnoses each observation and decides what to do — a hint, a nudge, or a delegation prompt — then returns the guidance shown in the bubble or chat.
+You can ask for help through text, voice, or visual context and get assistance instantly.
 
+## Documentation
 
-## Data & privacy
+- [Desktop app and development](desktop/README.md)
+- [Personalization and local deployment](lib/personalization/README.md)
 
-Coco collects nothing — no telemetry, no analytics, no Coco servers. For a full breakdown of each component's inputs/outputs, the data-flow diagram, every file Coco writes to disk, and exactly what is sent to the VLM, see [PRIVACY.md](PRIVACY.md).
+## Privacy
 
-### What stays on your machine
-
-
-Everything Coco stores about you (settings, activity history, session records) lives in the app's user-data folder:
-
-- **macOS**: `~/Library/Application Support/coco`
-- **Windows**: `%APPDATA%\coco` (e.g. `C:\Users\<you>\AppData\Roaming\coco`)
-- **Linux**: `$XDG_CONFIG_HOME/coco` or `~/.config/coco`
-
-Screenshots are deleted the moment the observer has read them, so nothing accumulates on disk. If you want to save the screenshots for potential training purposes, set `COLLECT_TRAINING_SCREENSHOTS=1` in `.env`, and they'll be copied into the records folder before deletion (disk-heavy — enable it deliberately).
-
-### VLM Calls
-
-While Coco application is fully local, the observer involves the VLM call: it sends **screenshots of your screen** to whichever VLM you select, so your provider choice determines where those pixels go. We are working on making Coco on-device naitive. Right now, we recommend:
-- Self-hosted VLMs, e.g., via [CTI-engine](https://github.com/mit-han-lab/cti-engine), [vLLM](https://github.com/vllm-project/vllm), or [LM Studio](https://lmstudio.ai/). CTI-engine is optimized for consumer hardware and AI PCs and makes it easy to run local models through Docker. See the [personalization privacy and local deployment guide](lib/personalization/README.md#privacy-and-local-deployment) for Docker commands to serve Qwen3.5 with [DFlash](https://github.com/z-lab/dflash) using CTI-engine and keep personalization processing on hardware you control.
-- Trusted Execution Environment (TEE) providers — open-weight models hosted on attested secure hardware, e.g. [Tinfoil](https://tinfoil.sh/)
-- [Unlinkable inference](https://openanonymity.ai/blog/unlinkable-inference/) — relays requests to any model provider while adding confidentiality, e.g. [Open Anonymity](https://chat.openanonymity.ai/)
-
-See [lib/external_api/README.md](lib/external_api/README.md) for model provider configuration.
+Coco runs locally and has no telemetry or analytics. Settings and activity history stay on your machine. Screen understanding sends screenshots to your selected model provider; use a local model to keep that processing on your hardware. See [PRIVACY.md](PRIVACY.md) for details.
 
 
-## Acknowledgement
+## Acknowledgments
 
-We thank Long Lin for designing the avatar. The screen-capture and observation-storage core builds on the [GUM (General User Models) project](https://github.com/GeneralUserModels/gum). The execution agent builts on [pi](https://github.com/earendil-works/pi) which is an amazing open-source agent harness.
+Thanks to Long Lin for the avatar design. Coco is built upon [GUM](https://github.com/GeneralUserModels/gum) and [pi](https://github.com/earendil-works/pi).
 
+
+## License
+
+[Apache License 2.0](LICENSE).
 
 ## Citation
 
-If you find Coco useful in your research or work, please consider citing it:
+If you use Coco in your research, please cite:
 
 ```bibtex
 @article{shao2026deep,
@@ -141,14 +95,3 @@ If you find Coco useful in your research or work, please consider citing it:
   note         = {Proactive co-assistant that senses computer-use context and offers timely help, running fully on-device.}
 }
 ```
-
-
-## Contact
-
-Coco is under active development — we'd love to hear from you.
-
-Whether you've found a bug, have a feature idea, or want to collaborate, reach out at [`shaoyj@stanford.edu`](mailto:shaoyj@stanford.edu).
-
-## License
-
-Apache License 2.0 — see [LICENSE](LICENSE).
