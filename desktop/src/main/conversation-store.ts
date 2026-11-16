@@ -15,6 +15,7 @@ import type { ChatSuggestion } from '../shared/chat-suggestion';
 import { parseAgentActivity } from '../shared/agent-execution';
 import type { AgentActivity } from '../shared/agent-execution';
 import type { LLMCallMetrics } from '../renderer/components/observation-types';
+import { THINKING_SETTINGS, type ModelThinking } from '../shared/model-thinking';
 
 export interface StoredChatMessage {
   tutorMetrics?: LLMCallMetrics | null;
@@ -92,6 +93,7 @@ export interface StoredConversation {
   createdAt: number;
   updatedAt: number;
   tutorModelId?: string;
+  thinking?: ModelThinking;
   workingDirectory?: string;
   /** Set when the session ended through its end-of-session recap. */
   endedAt?: number;
@@ -309,6 +311,7 @@ export function saveConversation(input: {
   sessionId?: unknown;
   problem?: unknown;
   tutorModelId?: unknown;
+  thinking?: unknown;
   messages?: unknown;
 }): void {
   if (
@@ -384,6 +387,8 @@ export function saveConversation(input: {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     ...(tutorModelId ? { tutorModelId } : {}),
+    thinking: THINKING_SETTINGS.includes(input.thinking as ModelThinking)
+      ? input.thinking as ModelThinking : existing?.thinking,
     ...(existing?.workingDirectory
       ? { workingDirectory: existing.workingDirectory }
       : {}),

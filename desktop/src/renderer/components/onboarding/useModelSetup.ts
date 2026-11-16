@@ -7,7 +7,7 @@ export default function useModelSetup() {
   const [sensingEnabled, setSensingEnabled] = useState(false);
   const [sensingModel, setSensingModel] = useState<ModelDraft>({
     id: 'sensing',
-    label: 'Sensing',
+    label: 'Screen understanding',
     provider: 'pi',
     model: '',
     apiKey: '',
@@ -54,7 +54,7 @@ export default function useModelSetup() {
         role,
         connection: {
           id: model.id,
-          label: model.label || (role === 'sensing' ? 'Sensing' : 'Chat'),
+          label: model.label || (role === 'sensing' ? 'Screen understanding' : 'Chat'),
           provider: model.provider,
           model: model.model,
           baseUrl: model.baseUrl,
@@ -91,7 +91,7 @@ export default function useModelSetup() {
             setTutorModels([
               {
                 id: 'legacy-pi-chat',
-                label: `Pi · ${model}`,
+                label: model,
                 provider: 'pi',
                 model: `pi/${provider}/${model}`,
                 apiKey: '',
@@ -132,12 +132,12 @@ export default function useModelSetup() {
   const saveModels = async () => {
     try {
       if (sensingEnabled && !sensingModel.model.trim()) {
-        setModelError('Enter a vision-capable sensing model.');
+        setModelError('Enter a vision-capable screen understanding model.');
         return false;
       }
       if (!tutorModels.length) {
         setModelError(
-          'Add a Pi model or an additional model connection for chat.',
+          'Add a model for chat.',
         );
         return false;
       }
@@ -167,7 +167,7 @@ export default function useModelSetup() {
           sensing: sensingEnabled
             ? {
                 id: 'sensing',
-                label: 'Sensing',
+                label: 'Screen understanding',
                 provider: sensingModel.provider,
                 model: sensingModel.model,
                 baseUrl: sensingModel.baseUrl,

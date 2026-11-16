@@ -1,5 +1,6 @@
 import {
   getSystemPermissionWarning,
+  readSystemPermissionWarning,
   needsWindowsMicrophoneSettings,
   systemPermissionButtonLabel,
   systemPermissionExplanation,
@@ -72,4 +73,24 @@ describe('system permission warning', () => {
     expect(needsWindowsMicrophoneSettings('win32', 'granted')).toBe(false);
     expect(needsWindowsMicrophoneSettings('darwin', 'denied')).toBe(false);
   });
+});
+
+
+it.each(['win32', 'linux'] as const)(
+  'does not evaluate macOS permission APIs on %s',
+  (platform) => {
+    const readState = jest.fn(() => { throw new Error('macOS API unavailable'); });
+    expect(readSystemPermissionWarning(platform, readState)).toBeNull();
+    expect(readState).not.toHaveBeenCalled();
+  },
+);
+
+it('reads macOS permission state before reporting missing access', () => {
+  const readState = jest.fn(() => ({
+    accessibilityTrusted: false,
+    screenCaptureStatus: 'granted' as const,
+  }));
+  expect(readSystemPermissionWarning('darwin', readState)?.settingsTargets)
+    .toEqual(['accessibility']);
+  expect(readState).toHaveBeenCalledTimes(1);
 });

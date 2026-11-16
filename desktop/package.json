@@ -281,7 +281,13 @@
       "./assets/**",
       "./service-dist/**"
     ],
-    "publish": null
+    "publish": {
+      "provider": "github",
+      "owner": "collaborative-agents",
+      "repo": "coco"
+    },
+    "artifactName": "coco-${version}-${arch}.${ext}",
+    "afterPack": "./.erb/scripts/after-pack.cjs"
   },
   "devEngines": {
     "runtime": {

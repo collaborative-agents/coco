@@ -4,6 +4,8 @@ import os
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
+from external_api.model_thinking import is_hosted_qwen
+from external_api.qwen_thinking import QwenThinkingParser
 from external_api.types import TokenUsage
 from litellm import completion
 from pydantic import BaseModel, Field
@@ -60,6 +62,7 @@ def get_litellm_completion(
     extra_body: dict[str, Any] | None = None,
     stream: bool = False,
     on_chunk: Callable[[str], None] | None = None,
+    on_reasoning_chunk: Callable[[str], None] | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
 ) -> tuple[LiteLLMMessage, TokenUsage]:
@@ -119,10 +122,27 @@ def get_litellm_completion(
         kwargs["tool_choice"] = tool_choice
 
     response = completion(**kwargs)
+    template_options = (extra_body or {}).get("chat_template_kwargs", {})
+    parser = (
+        QwenThinkingParser(template_options.get("enable_thinking", False))
+        if is_hosted_qwen(model)
+        else None
+    )
     if stream:
         text_parts: list[str] = []
         tool_call_parts: dict[int, dict[str, str]] = {}
         usage_data: Any = {}
+        structured_reasoning = False
+
+        def emit(delta: dict) -> None:
+            if text := delta.get("content"):
+                text_parts.append(text)
+                if on_chunk is not None:
+                    on_chunk(text)
+            if thought := delta.get("reasoning_content"):
+                if on_reasoning_chunk is not None:
+                    on_reasoning_chunk(thought)
+
         for chunk in response:
             chunk_usage = getattr(chunk, "usage", None)
             if chunk_usage is not None:
@@ -132,10 +152,24 @@ def get_litellm_completion(
                 continue
             delta = getattr(choices[0], "delta", None)
             content = getattr(delta, "content", None) if delta is not None else None
+            reasoning = next(
+                (
+                    getattr(delta, key, None)
+                    for key in ("reasoning_content", "reasoning", "reasoning_text")
+                    if getattr(delta, key, None)
+                ),
+                None,
+            )
+            if reasoning:
+                structured_reasoning = True
+                emit({"reasoning_content": reasoning})
             if content:
-                text_parts.append(content)
-                if on_chunk is not None:
-                    on_chunk(content)
+                for parsed in (
+                    parser.feed(content)
+                    if parser and not structured_reasoning
+                    else [{"content": content}]
+                ):
+                    emit(parsed)
             for call in getattr(delta, "tool_calls", None) or []:
                 index = int(getattr(call, "index", 0) or 0)
                 part = tool_call_parts.setdefault(
@@ -153,6 +187,9 @@ def get_litellm_completion(
                         part["name"] += name
                     if arguments:
                         part["arguments"] += arguments
+        if parser and not structured_reasoning:
+            for parsed in parser.feed("", final=True):
+                emit(parsed)
         raw_content = "".join(text_parts)
         raw_tool_calls = [
             ToolCall(
@@ -168,6 +205,14 @@ def get_litellm_completion(
         # print(f"Raw LiteLLM response: {response}")
         response_message = response["choices"][0]["message"]  # type: ignore
         raw_content = response_message["content"]
+        if parser and not any(
+            response_message.get(key)
+            for key in ("reasoning_content", "reasoning", "reasoning_text")
+        ):
+            raw_content = "".join(
+                delta.get("content", "")
+                for delta in parser.feed(raw_content or "", final=True)
+            )
         raw_tool_calls = [
             ToolCall(
                 id=call["id"],
@@ -182,6 +227,8 @@ def get_litellm_completion(
     # Thinking models (e.g. gemini-2.5-pro) may return None for the visible
     # content field when only reasoning tokens are emitted.  Fall back to the
     # reasoning_content field so callers always get a non-empty string.
+    if raw_content is None and parser is not None:
+        raw_content = ""
     if raw_content is None:
         raw_content = (
             getattr(response["choices"][0]["message"], "reasoning_content", None)  # type: ignore

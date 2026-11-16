@@ -12,7 +12,7 @@ Keys and unlinkability
 A minted key is spent from a ticket pool and is *time-limited* (it carries an
 ``expires_at_unix`` but no per-request budget). Minting a fresh key per request
 maximizes unlinkability but burns one ticket every call, which is too expensive
-for high-frequency callers like screen sensing.
+for high-frequency callers like screen understanding.
 
 So this wrapper **reuses a single key until it is used up** — i.e. until it
 expires or the relay rejects it (a spent-ticket / auth / quota error) — then

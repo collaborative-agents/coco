@@ -180,3 +180,43 @@ def test_only_foreground_execution_updates_coaching_history(bridge):
         )
     assert any("reply-b" in message for message in foreground.conversation_history)
     assert not any("reply-a" in message for message in foreground.conversation_history)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_qwen_thinking_options_and_response_separation(bridge, monkeypatch, enabled):
+    client, tutor, _ = bridge
+    tutor.tutor_agent.model = "hosted_vllm/nvidia/Qwen3.8-27B-NVFP4"
+    client.headers["Authorization"] = "Bearer secret"
+    received = {}
+
+    def completion(messages, **kwargs):
+        received.update(kwargs)
+        kwargs["on_reasoning_chunk"]("Private reasoning.")
+        kwargs["on_chunk"]("Final answer.")
+        return LiteLLMMessage(
+            role="assistant",
+            tool_calls=[
+                ToolCall(
+                    id="call-1", function=FunctionCall(name="read", arguments="{}")
+                )
+            ],
+        ), {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+
+    monkeypatch.setattr(pi_bridge, "chat_completion", completion)
+    request = {"messages": [{"role": "user", "content": "Hi"}]}
+    if enabled:
+        request["chat_template_kwargs"] = {"enable_thinking": True}
+    response = client.post("/agent/v1/chat/completions", json=request)
+    assert received["extra_body"]["chat_template_kwargs"]["enable_thinking"] is enabled
+    events = [
+        json.loads(line[6:])
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    deltas = [event["choices"][0]["delta"] for event in events]
+    assert "".join(d.get("content", "") for d in deltas) == "Final answer."
+    assert (
+        "".join(d.get("reasoning_content", "") for d in deltas) == "Private reasoning."
+    )
+    assert any(d.get("tool_calls") for d in deltas)
+    assert events[-1]["usage"]["total_tokens"] == 15

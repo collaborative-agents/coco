@@ -38,6 +38,7 @@ import PreferencesSettings from './chat/PreferencesSettings';
 import LocalModelSettings from './chat/LocalModelSettings';
 import LocalProfileSettings from './chat/LocalProfileSettings';
 import LocalModelPicker from './chat/LocalModelPicker';
+import type { ModelThinking } from '../../shared/model-thinking';
 import MemorySettings from './chat/MemorySettings';
 
 export { ToolCallCard } from './chat/ToolCallCard';
@@ -99,6 +100,7 @@ export default function SessionChatView() {
     return () => { disposed = true; window.clearInterval(timer); };
   }, []);
   const [showSettings, setShowSettings] = useState(false);
+  const [hasPendingModelSave, setHasPendingModelSave] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(false);
@@ -114,6 +116,12 @@ export default function SessionChatView() {
     hideAvatar: false,
   });
   const [currentTutorModelId, setCurrentTutorModelId] = useState('');
+  const [thinking, setThinking] = useState<ModelThinking>('default');
+  const thinkingRef = useRef<ModelThinking>('default');
+  const updateThinking = useCallback((value: ModelThinking) => {
+    thinkingRef.current = value;
+    setThinking(value);
+  }, []);
   const [serviceHealth, setServiceHealth] = useState<ServiceHealthView | null>(
     null,
   );
@@ -303,11 +311,12 @@ export default function SessionChatView() {
           sessionId: savedSessionId,
           problem,
           messages,
+          thinking,
         })
         .catch(() => {});
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [messages, problem]);
+  }, [messages, problem, thinking]);
 
   // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
   // same pipeline as the bubble reactions.
@@ -552,6 +561,7 @@ export default function SessionChatView() {
           hotkeyImages,
           screenContext,
           sessionId: targetSessionId,
+          thinking: thinkingRef.current,
         })
         .catch((error: Error) => ({ error: error.message }));
       if (targetSessionId !== sessionIdRef.current) return;
@@ -602,6 +612,7 @@ export default function SessionChatView() {
           requestId,
           audioData,
           sessionId: targetSessionId,
+          thinking: thinkingRef.current,
         })
         .catch((error: Error) => ({ error: error.message }));
       if (targetSessionId !== sessionIdRef.current) return;
@@ -820,10 +831,12 @@ export default function SessionChatView() {
                 sessionId: sessionIdRef.current,
                 problem: problemRef.current,
                 messages: messagesRef.current,
+                thinking: thinkingRef.current,
               })
               .catch(() => {});
           }
           sessionIdRef.current = sessionId;
+          updateThinking('default');
           setMessages([]);
           setRatings({});
           setSending(false);
@@ -846,6 +859,7 @@ export default function SessionChatView() {
                 (candidate) => candidate.sessionId === sessionId,
               );
               if (!conversation) return;
+              updateThinking(conversation.thinking ?? 'default');
               const savedSuggestionIds = new Set(
                 conversation.messages
                   .map((m) => m.suggestion?.observationId)
@@ -1313,6 +1327,7 @@ export default function SessionChatView() {
     sessionIdRef.current = conversation.sessionId;
     setProblem(conversation.problem);
     const restored = result.conversation ?? conversation;
+    updateThinking(restored.thinking ?? 'default');
     setMessages(restored.messages);
     setSending(restored.messages.some((m: ChatMessage) => m.isStreaming));
     setInput('');
@@ -1449,10 +1464,21 @@ export default function SessionChatView() {
     if (startingNewSession || checkingUnderstanding) return;
     preserveDraftRef.current = true;
     setStartingNewSession(true);
+    setUnderstandingError('');
     try {
-      await window.electron?.ipcRenderer.invoke('start-new-chat-session', {
+      const result = await window.electron?.ipcRenderer.invoke('start-new-chat-session', {
         problemStatement: problem,
       });
+      if (!result?.success)
+        setUnderstandingError(
+          result?.error || 'Could not start a new conversation.',
+        );
+    } catch (error) {
+      setUnderstandingError(
+        error instanceof Error
+          ? error.message
+          : 'Could not start a new conversation.',
+      );
     } finally {
       preserveDraftRef.current = false;
       setStartingNewSession(false);
@@ -1580,6 +1606,7 @@ export default function SessionChatView() {
           )}
           {showSettings && !showPersonalization && (
             <SettingsPanel
+              hasPendingModelSave={hasPendingModelSave}
               sections={{
                 general: (
                   <>
@@ -1603,7 +1630,7 @@ export default function SessionChatView() {
                     />
                   </>
                 ),
-                models: <LocalModelSettings />,
+                models: <LocalModelSettings onUnsavedChanges={setHasPendingModelSave} />,
                 memory: (
                   <MemorySettings
                     {...{
@@ -1697,7 +1724,9 @@ export default function SessionChatView() {
                   disabled={
                     sending || Boolean(reviewing) || voiceState !== 'idle'
                   }
-                  onChange={setCurrentTutorModelId}
+                  onChange={(id) => { setCurrentTutorModelId(id); updateThinking('default'); }}
+                  thinking={thinking}
+                  onThinkingChange={updateThinking}
                   refreshKey={showSettings}
                 />
               }

@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import {
+  getSupportedThinkingLevels,
+  clampThinkingLevel,
+} from '@earendil-works/pi-ai';
+import { chatThinkingLevel } from './pi-thinking.mjs';
 
 export function createModelRuntime(dataDir) {
   const dir = path.join(dataDir, 'pi');
@@ -27,9 +32,14 @@ export function createAuthController(runtime, openExternal) {
           oauth: p.auth.oauth?.loginLabel || p.auth.oauth?.name,
           apiKey: p.auth.apiKey?.login ? p.auth.apiKey.name : undefined,
         })),
-        models: runtime
-          .getModels()
-          .map((m) => ({ provider: m.provider, id: m.id, name: m.name, input: m.input })),
+        models: runtime.getModels().map((m) => ({
+          provider: m.provider,
+          id: m.id,
+          name: m.name,
+          input: m.input,
+          thinkingLevels: m.reasoning ? getSupportedThinkingLevels(m) : [],
+          defaultThinking: clampThinkingLevel(m, chatThinkingLevel(m)),
+        })),
         flow: flow
           ? { busy: flow.busy, message: flow.message, prompt: flow.prompt }
           : null,

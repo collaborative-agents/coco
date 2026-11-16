@@ -186,7 +186,7 @@ describe('deferred suggestion context', () => {
 
     expect(
       await screen.findByLabelText(
-        'Sensing server: Connected (service); Connected (model)',
+        'Screen understanding server: Connected (service); Connected (model)',
       ),
     ).toBeInTheDocument();
     expect(
@@ -244,7 +244,7 @@ describe('deferred suggestion context', () => {
     fireEvent.click(screen.getByTitle('Settings'));
     expect(
       await screen.findByText(
-        'Sleeping intentionally stops the sensing server and tutor agent.',
+        'Sleeping intentionally stops the screen understanding server and tutor agent.',
       ),
     ).toBeInTheDocument();
     expect(
@@ -845,7 +845,7 @@ describe('deferred suggestion context', () => {
         return {
           sensing: {
             id: 'sensing',
-            label: 'Sensing',
+            label: 'Screen understanding',
             provider: 'gemini',
             model: 'gemini/vision',
           },
@@ -1124,4 +1124,64 @@ test('restores another conversation when revealing its background reply', async 
   });
   expect(invoke).toHaveBeenCalledWith('resume-chat-conversation', { sessionId: 'background-session' });
   expect(await screen.findByText('Background task finished.')).toBeInTheDocument();
+});
+
+
+it.each(['response', 'rejection'])(
+  'shows new-conversation failures from a %s and keeps the draft',
+  async (failure) => {
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async (channel: string) => {
+          if (channel === 'start-new-chat-session') {
+            if (failure === 'rejection') throw new Error('Service unavailable');
+            return { success: false, error: 'Service unavailable' };
+          }
+          return null;
+        }),
+      },
+    };
+    render(<SessionChatView />);
+    fireEvent.change(screen.getByPlaceholderText(/Ask Coco/), {
+      target: { value: 'Keep my draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start a new session' }));
+    expect(await screen.findByText('Service unavailable')).toBeVisible();
+    expect(screen.getByPlaceholderText(/Ask Coco/)).toHaveValue('Keep my draft');
+    expect(screen.getByRole('button', { name: 'Start a new session' })).toBeEnabled();
+  },
+);
+
+it('changes thinking between messages and resets it for a new conversation', async () => {
+  const listeners = new Map<string, (data: any) => void>();
+  const invoke = jest.fn(async (channel: string) => {
+    if (channel === 'get-model-configuration') return {
+      defaultTutorId: 'qwen', tutors: [{ id: 'qwen', label: 'Qwen', provider: 'hosted_vllm', model: 'Qwen/Qwen3.8-27B' }],
+    };
+    if (channel === 'send-chat-message') return { guidance: 'Done.' };
+    return null;
+  });
+  (window as any).electron = { ipcRenderer: {
+    on: jest.fn((channel, listener) => { listeners.set(channel, listener); return jest.fn(); }),
+    sendMessage: jest.fn(), invoke,
+  } };
+  render(<SessionChatView />);
+  await act(async () => listeners.get('session-init')?.({ sessionId: 'first', tutorModelId: 'qwen' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Qwen, thinking: Off' }));
+  fireEvent.change(screen.getByRole('slider'), { target: { value: '1' } });
+  fireEvent.keyDown(screen.getByRole('slider'), { key: 'Escape' });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message Coco' }), { target: { value: 'Solve this' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('send-chat-message', expect.objectContaining({ thinking: 'on', sessionId: 'first' })));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Qwen, thinking: On' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Qwen, thinking: On' }));
+  fireEvent.change(screen.getByRole('slider'), { target: { value: '0' } });
+  fireEvent.keyDown(screen.getByRole('slider'), { key: 'Escape' });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message Coco' }), { target: { value: 'Quick reply' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('send-chat-message', expect.objectContaining({ thinking: 'off', sessionId: 'first' })));
+  await act(async () => listeners.get('session-init')?.({ sessionId: 'second', tutorModelId: 'qwen' }));
+  expect(screen.getByRole('button', { name: 'Qwen, thinking: Off' })).toBeEnabled();
 });

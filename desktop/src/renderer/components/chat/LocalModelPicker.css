@@ -11,11 +11,12 @@
 .tutor-model-picker select {
   max-width: 240px;
   padding: 6px 10px;
-  border: 1px solid var(--coco-color-border);
-  border-radius: var(--coco-radius-control);
-  background: var(--coco-color-surface);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
   color: var(--coco-color-text);
   font: inherit;
+  cursor: pointer;
 }
 
 .tutor-model-picker select:focus {

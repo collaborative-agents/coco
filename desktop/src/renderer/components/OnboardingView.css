@@ -403,3 +403,18 @@
     gap: 10px;
   }
 }
+
+.ob-voice-status {
+  margin-top: 14px;
+  padding: var(--coco-space-3) 14px;
+  border-radius: var(--coco-radius-control);
+  color: var(--coco-color-text);
+  background: var(--coco-color-surface-subtle);
+  font-size: var(--coco-text-body);
+  line-height: var(--coco-leading-body);
+}
+.ob-voice-status-heard {
+  color: var(--coco-color-success);
+  background: rgba(var(--coco-color-success-rgb), 0.1);
+  font-weight: 600;
+}

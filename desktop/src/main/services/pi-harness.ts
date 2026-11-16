@@ -7,12 +7,14 @@ import path from 'path';
 import { loadPiRuntime } from './pi-runtime-loader';
 import { app } from 'electron';
 import type { AgentContextSnapshot } from '../../shared/agent-context';
+import type { ModelThinking } from '../../shared/model-thinking';
 import PiEventTranslator from './pi-events';
 import type { TutorStreamEvent } from './tutor-stream';
 import AgentPermissions, { type ActionApproval } from './agent-permissions';
 
 export interface SessionContextInput {
   model: string;
+  thinking?: ModelThinking;
   scenario: string;
   problem: string;
   user_name: string;
@@ -23,6 +25,7 @@ export interface SessionContextInput {
 
 interface AgentContext {
   model: string;
+  thinking?: ModelThinking;
   instructions: string;
   profile: string;
   history: string[];
@@ -219,6 +222,7 @@ export default class PiHarness {
             });
       if (connection.mode === 'native')
         context.model = `${connection.provider}/${connection.model}`;
+      context.thinking = options.context.thinking;
       if (options.authoringInstructions) {
         context.instructions = options.authoringInstructions;
         context.profile = '';
@@ -240,6 +244,7 @@ export default class PiHarness {
         options.sessionId,
         cwd,
         context.model,
+        context.thinking,
         context.instructions,
         context.tools,
         options.tutorUrl,

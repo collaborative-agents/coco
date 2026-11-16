@@ -196,6 +196,7 @@ export type Channels =
   | 'wake-word-settings-changed'
   | 'wake-word-status'
   | 'wake-word-audio-frame'
+  | 'onboarding-wake-word-detected'
   | 'wake-word-detected'
   | 'wake-word-detection-ack'
   | 'set-wake-word-capture-paused'

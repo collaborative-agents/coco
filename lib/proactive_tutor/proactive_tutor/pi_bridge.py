@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -17,12 +18,18 @@ from proactive_tutor.tutor_system import TutorSystem
 from pydantic import BaseModel, Field
 
 
+class ThinkingOptions(BaseModel):
+    enable_thinking: bool = False
+    preserve_thinking: bool = True
+
+
 class CompletionRequest(BaseModel):
     messages: list[dict]
     tools: list[dict] | None = None
     # The configured Coco model is authoritative, never a renderer-supplied ID.
     model: str = "coco"
     stream: bool = True
+    chat_template_kwargs: ThinkingOptions | None = None
 
 
 class ToolRequest(BaseModel):
@@ -171,16 +178,24 @@ def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
         model = tutor.tutor_agent.model
         if not req.stream:
             raise HTTPException(400, "The agent bridge requires streaming")
+        qwen = bool(re.match(r"hosted_vllm/(?:.*/)?qwen3[.\-]", model, re.I))
+        thinking = req.chat_template_kwargs or ThinkingOptions()
 
         async def stream():
             loop = asyncio.get_running_loop()
-            queue: asyncio.Queue[str] = asyncio.Queue()
+            queue: asyncio.Queue[dict] = asyncio.Queue()
             chunks: list[str] = []
             completion_id = f"chatcmpl-{uuid.uuid4().hex}"
 
             def publish(text: str):
                 if text:
-                    loop.call_soon_threadsafe(queue.put_nowait, text)
+                    loop.call_soon_threadsafe(queue.put_nowait, {"content": text})
+
+            def publish_reasoning(text: str):
+                if text:
+                    loop.call_soon_threadsafe(
+                        queue.put_nowait, {"reasoning_content": text}
+                    )
 
             def event(delta: dict, finish_reason=None, usage=None):
                 payload = {
@@ -207,18 +222,32 @@ def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
                     tool_choice="auto" if req.tools else None,
                     operation="pi_agent",
                     on_chunk=publish,
+                    **(
+                        {
+                            "extra_body": {
+                                "chat_template_kwargs": thinking.model_dump()
+                            },
+                            "on_reasoning_chunk": publish_reasoning,
+                        }
+                        if qwen
+                        else {}
+                    ),
                 )
             )
             try:
                 yield event({"role": "assistant"})
                 while not worker.done() or not queue.empty():
                     try:
-                        text = await asyncio.wait_for(queue.get(), timeout=1)
+                        delta = await asyncio.wait_for(queue.get(), timeout=1)
                     except TimeoutError:
                         yield ": keep-alive\n\n"
                         continue
-                    chunks.append(text)
-                    yield event({"content": text})
+                    if "reasoning_content" in delta:
+                        yield event(delta)
+                    else:
+                        text = delta["content"]
+                        chunks.append(text)
+                        yield event({"content": text})
                 response, metrics = await worker
                 # Some providers only return text when they also request tools.
                 full_text = "".join(

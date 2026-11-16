@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import { createModelRuntime } from './pi-auth.mjs';
 import { contextWindowForModel } from './pi-context-window.mjs';
-import { chatThinkingLevel } from './pi-thinking.mjs';
+import { chatThinkingLevel, isHostedQwen } from './pi-thinking.mjs';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { fileURLToPath } from 'node:url';
 import { ANSWER_CHANNEL, CANCEL_CHANNEL } from './question-channel.mjs';
 import path from 'node:path';
@@ -121,7 +122,7 @@ export async function createRuntime({
         {
           id: 'coco',
           name: context.model,
-          reasoning: false,
+          reasoning: isHostedQwen(context.model),
           input: ['text', 'image'],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: contextWindowForModel(context.model, modelRuntime.getModels()),
@@ -130,6 +131,9 @@ export async function createRuntime({
             supportsDeveloperRole: false,
             supportsStore: false,
             supportsReasoningEffort: false,
+            ...(isHostedQwen(context.model)
+              ? { thinkingFormat: 'qwen-chat-template' }
+              : {}),
           },
         },
       ],
@@ -142,6 +146,12 @@ export async function createRuntime({
     throw new Error(
       'Selected Pi model is unavailable. Choose a model in settings.',
     );
+  if (context.thinking && context.thinking !== 'default') {
+    const supported = isHostedQwen(context.model)
+      ? ['off', 'on'] : getSupportedThinkingLevels(model);
+    if (!supported.includes(context.thinking))
+      throw new Error('This model does not support the selected thinking amount.');
+  }
   const contextReadTools = new Set([
     'observe_screen',
     'get_user_context',
@@ -196,7 +206,7 @@ export async function createRuntime({
     settingsManager,
     sessionManager,
     model,
-    thinkingLevel: chatThinkingLevel(model),
+    thinkingLevel: chatThinkingLevel(model, context.thinking),
     customTools: authoring ? [] : [...guardedTools, ...customTools],
     tools: authoring
       ? []

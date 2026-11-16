@@ -412,11 +412,16 @@ def _chat_completion_provider(
     | None = None,
     extra_body: dict[str, Any] | None = None,
     on_chunk: Callable[[str], None] | None = None,
+    on_reasoning_chunk: Callable[[str], None] | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
 ) -> tuple[LiteLLMMessage, TokenUsage]:
     """Run a completion, dispatching by ``model`` prefix (LM Studio, NV, OA,
     Tinfoil, LiteLLM)."""
+    from external_api.model_thinking import is_hosted_qwen
+
+    if is_hosted_qwen(model) and extra_body is None:
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
     if model.startswith("pi/"):
         from external_api.pi_api import get_pi_completion
 
@@ -535,6 +540,7 @@ def _chat_completion_provider(
         top_p=top_p,
         reasoning_effort=reasoning_effort,
         extra_body=extra_body,
+        on_reasoning_chunk=on_reasoning_chunk,
         stream=on_chunk is not None,
         on_chunk=on_chunk,
         tools=tools,
@@ -553,6 +559,7 @@ def chat_completion(
     extra_body: dict[str, Any] | None = None,
     operation: str | None = None,
     on_chunk: Callable[[str], None] | None = None,
+    on_reasoning_chunk: Callable[[str], None] | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
 ) -> tuple[LiteLLMMessage, LLMCallMetrics]:
@@ -570,6 +577,7 @@ def chat_completion(
             top_p=top_p,
             reasoning_effort=reasoning_effort,
             extra_body=extra_body,
+            on_reasoning_chunk=on_reasoning_chunk,
             on_chunk=on_chunk,
             tools=tools,
             tool_choice=tool_choice,

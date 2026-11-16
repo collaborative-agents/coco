@@ -39,7 +39,7 @@ export default function HealthSettings({
       </h2>
       <div style={S.helpText}>
         {cocoSleeping
-          ? 'Coco is asleep. Screen sensing is paused. Manual chats and agent runs remain available.'
+          ? 'Coco is asleep. Screen understanding is paused. Manual chats and agent runs remain available.'
           : 'Checks services and models with short test requests, including a test image.'}
       </div>
       {serviceHealth?.sensing.status !== 'disabled' &&
@@ -86,14 +86,14 @@ export default function HealthSettings({
         )}
       {cocoSleeping && (
         <div role="status" style={S.healthDetail}>
-          Sleeping intentionally stops the sensing server and tutor agent.
+          Sleeping intentionally stops the screen understanding server and tutor agent.
         </div>
       )}
       {!cocoSleeping && (
         <div style={S.healthList}>
           {(
             [
-              ['sensing', 'Sensing server', serviceHealth?.sensing],
+              ['sensing', 'Screen understanding server', serviceHealth?.sensing],
               ['tutor', 'Tutor agent', serviceHealth?.tutor],
             ] as const
           ).map(([key, label, health]) => {

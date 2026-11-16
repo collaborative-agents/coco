@@ -4,7 +4,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from '@testing-library/react';
 import LocalModelSettings from '../renderer/components/chat/LocalModelSettings';
 
@@ -48,7 +47,7 @@ it('saves separate keys for hosted tutor connections', async () => {
   );
 });
 
-it('selects connected Pi models for sensing and suggestions and saves through the shared configuration', async () => {
+it('selects connected Pi models for screen understanding and suggestions and saves through the shared configuration', async () => {
   const invoke = jest.fn(async (channel, action) => {
     if (channel === 'pi-provider')
       return {
@@ -69,7 +68,7 @@ it('selects connected Pi models for sensing and suggestions and saves through th
       return {
         sensing: {
           id: 'sensing',
-          label: 'Sensing',
+          label: 'Screen understanding',
           provider: 'pi',
           model: 'pi/test/vision',
         },
@@ -91,17 +90,17 @@ it('selects connected Pi models for sensing and suggestions and saves through th
   (window as any).electron = { ipcRenderer: { invoke } };
   const view = render(<LocalModelSettings />);
   await waitFor(() =>
-    expect(screen.getByLabelText('Sensing Pi model')).toHaveValue(
+    expect(screen.getByLabelText('Screen understanding model')).toHaveValue(
       'pi/test/vision',
     ),
   );
   await waitFor(() =>
     expect(
-      screen.getByRole('heading', { name: 'Pi connections' }),
+      screen.getByRole('heading', { name: 'Chat models' }),
     ).toBeInTheDocument(),
   );
   const sensing = screen.getByLabelText(
-    'Sensing Pi model',
+    'Screen understanding model',
   ) as HTMLSelectElement;
   expect(
     [...sensing.options].some((option) => option.value === 'pi/test/text'),
@@ -177,7 +176,7 @@ it.each([false, true])(
     const view = render(<LocalModelSettings />);
     await screen.findByDisplayValue('My chat');
     const toggle = screen.getByRole('checkbox', {
-      name: 'Enable screen sensing (optional)',
+      name: 'Enable screen understanding (optional)',
     });
     if (previouslyEnabled) fireEvent.click(toggle);
     expect(toggle).not.toBeChecked();
@@ -186,7 +185,7 @@ it.each([false, true])(
         /proactive suggestions and self-evolving memory are unavailable/,
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByLabelText('Sensing Pi model')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Screen understanding model')).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole('button', { name: 'Save model settings' }),
     );
@@ -219,37 +218,19 @@ it('adds Pi and additional models to one chat list with only four additional pro
   });
   (window as any).electron = { ipcRenderer: { invoke } };
   const view = render(<LocalModelSettings />);
-  await screen.findByRole('option', { name: 'Pi chat · test' });
-  fireEvent.change(screen.getByLabelText('Add a Pi model to chat'), {
-    target: { value: 'pi/test/chat' },
-  });
-  expect(
-    within(
-      screen.getByRole('region', { name: 'Pi connections' }),
-    ).getByDisplayValue('Pi chat'),
-  ).toBeInTheDocument();
-  fireEvent.click(
-    screen.getByRole('button', { name: '+ Add model connection' }),
-  );
-  const additional = within(
-    screen.getByRole('region', { name: 'Additional model connections' }),
-  );
-  const providers = additional.getByLabelText(
-    'Additional provider',
-  ) as HTMLSelectElement;
+  await screen.findByRole('option', { name: 'Test — connected' });
+  fireEvent.click(screen.getByRole('button', { name: '+ Add model' }));
+  fireEvent.change(screen.getByLabelText('Chat provider'), { target: { value: 'catalog:test' } });
+  fireEvent.change(screen.getByLabelText('Chat model'), { target: { value: 'pi/test/chat' } });
+  expect(screen.getByDisplayValue('Pi chat')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '+ Add model' }));
+  const providers = screen.getAllByLabelText('Chat provider')[1] as HTMLSelectElement;
   expect([...providers.options].map((option) => option.value)).toEqual([
-    'tinker',
-    'tinfoil',
-    'hosted_vllm',
-    'lm_studio',
+    'hosted_vllm', 'lm_studio', 'tinfoil', 'tinker', 'catalog:test',
   ]);
   fireEvent.change(providers, { target: { value: 'lm_studio' } });
-  fireEvent.change(additional.getByLabelText('Model display name'), {
-    target: { value: 'Local chat' },
-  });
-  fireEvent.change(additional.getByLabelText('Additional model ID'), {
-    target: { value: 'lm_studio/local' },
-  });
+  fireEvent.change(screen.getAllByLabelText('Model display name')[1], { target: { value: 'Local chat' } });
+  fireEvent.change(screen.getByLabelText('Chat model ID'), { target: { value: 'lm_studio/local' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save model settings' }));
   await screen.findByText('Saved');
   const saved = invoke.mock.calls.find(
@@ -295,7 +276,7 @@ it('keeps an existing direct provider editable without offering it on new connec
   const view = render(<LocalModelSettings />);
   await screen.findByDisplayValue('Existing OpenAI');
   expect(
-    screen.getByRole('option', { name: 'OpenAI (existing connection)' }),
+    screen.getByRole('option', { name: 'OpenAI (saved API connection)' }),
   ).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Save model settings' }));
   await screen.findByText('Saved');

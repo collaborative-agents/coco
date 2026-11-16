@@ -15,7 +15,7 @@ export const MODEL_ENDPOINT_PROVIDERS = new Set(['hosted_vllm', 'lm_studio']);
 
 export const blankSensingModel = (): TutorModelOption => ({
   id: 'sensing',
-  label: 'Sensing',
+  label: 'Screen understanding',
   provider: 'gemini',
   model: '',
 });

@@ -6,7 +6,7 @@ const config = {
   version: 1,
   sensing: {
     id: 'sensing',
-    label: 'Sensing',
+    label: 'Screen understanding',
     provider: 'gemini',
     model: 'gemini/vision',
   },

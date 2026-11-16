@@ -215,8 +215,8 @@ def _observe(
     ):
         completion_kwargs["reasoning_effort"] = "none"
     elif model.startswith("hosted_vllm/"):
-        # Disable thinking for compatible sensing endpoints independently of
-        # checkpoint name. Inkling uses reasoning_effort above instead.
+        # Keep sensing independent of the conversation’s thinking setting.
+        # Inkling uses reasoning_effort above instead.
         completion_kwargs["extra_body"] = {
             "chat_template_kwargs": {"enable_thinking": False}
         }

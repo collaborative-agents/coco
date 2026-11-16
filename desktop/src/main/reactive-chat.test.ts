@@ -125,3 +125,14 @@ it('releases the run and personalization pause when the agent fails', async () =
   expect(test.runs.finish).toHaveBeenCalledWith('failed');
   expect(test.scheduler.endInteractiveInference).toHaveBeenCalledTimes(1);
 });
+
+it('uses the conversation’s selected thinking amount on each turn', async () => {
+  const test = setup();
+  test.open();
+  for (const thinking of ['low', 'high']) {
+    await test.handlers.get('send-chat-message')!({}, { requestId: thinking, userText: 'Help', thinking });
+    expect(test.run).toHaveBeenLastCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ thinking }),
+    }));
+  }
+});

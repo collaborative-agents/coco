@@ -1,5 +1,4 @@
 .skill-picker-dialog {
-  width: min(540px, 100%);
   border-radius: 16px;
 }
 .skill-picker-dialog .workspace-dialog-header {

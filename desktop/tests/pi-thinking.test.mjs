@@ -25,3 +25,29 @@ test('other providers and non-reasoning models keep thinking off', () => {
     assert.equal(chatThinkingLevel(model), 'off');
   }
 });
+
+test('only hosted Qwen3-family models use Qwen template thinking controls', async () => {
+  const { isHostedQwen } = await import('../release/app/agent/pi-thinking.mjs');
+  for (const model of [
+    'hosted_vllm/nvidia/Qwen3.8-27B-NVFP4',
+    'hosted_vllm/Qwen/Qwen3.5-9B',
+    'hosted_vllm/Qwen3-8B',
+  ]) {
+    assert.equal(isHostedQwen(model), true);
+  }
+  for (const model of [
+    'hosted_vllm/llama',
+    'pi/anthropic/claude',
+    'tinfoil/Qwen3-8B',
+  ]) {
+    assert.equal(isHostedQwen(model), false);
+  }
+});
+
+test('explicit model preferences override the chat defaults', () => {
+  const model = { api: 'openai-completions', id: 'qwen', reasoning: true };
+  assert.equal(chatThinkingLevel(model, 'on'), 'medium');
+  assert.equal(chatThinkingLevel(model, 'off'), 'off');
+  assert.equal(chatThinkingLevel(model, 'high'), 'high');
+  assert.equal(chatThinkingLevel(model, 'default'), 'off');
+});

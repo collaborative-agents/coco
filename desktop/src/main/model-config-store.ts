@@ -56,7 +56,7 @@ export const PROVIDERS: Record<
   ProviderId,
   { label: string; requiresKey: boolean; privacy: string }
 > = {
-  pi: { label: 'Connected through Pi', requiresKey: false, privacy: 'cloud' },
+  pi: { label: 'Connected provider', requiresKey: false, privacy: 'cloud' },
   gemini: { label: 'Google Gemini', requiresKey: true, privacy: 'cloud' },
   openai: { label: 'OpenAI', requiresKey: true, privacy: 'cloud' },
   anthropic: { label: 'Anthropic', requiresKey: true, privacy: 'cloud' },
@@ -146,7 +146,7 @@ export function validateModelConfiguration(
         .filter((item): item is ModelConnection => item !== null)
     : [];
   if (input?.sensing != null && !sensing)
-    throw new Error('A sensing provider and vision model are required.');
+    throw new Error('A screen understanding provider and vision model are required.');
   if (tutors.length === 0) throw new Error('Add at least one tutor model.');
   if (new Set(tutors.map((item) => item.id)).size !== tutors.length) {
     throw new Error('Tutor model IDs must be unique.');
@@ -217,7 +217,7 @@ export function readModelConfiguration(): ModelConfiguration | null {
           config.instantSuggestionModelId ??= config.defaultTutorId;
           config.tutors.push({
             id,
-            label: `Pi · ${legacy.model}`,
+            label: legacy.model,
             provider: 'pi',
             model: `pi/${legacy.provider}/${legacy.model}`,
           });

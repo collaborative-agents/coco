@@ -75,10 +75,11 @@ export async function validatePiModel(
   const model = runtime.getModel(provider, parts.join('/'));
   if (!model || !runtime.hasConfiguredAuth(provider))
     throw new Error(
-      'Connect the Pi provider and select an available model first.',
+      'Connect the provider and select an available model first.',
     );
   if (vision && !model.input.includes('image'))
-    throw new Error('Choose a vision-capable Pi model for sensing.');
+    throw new Error('Choose a vision-capable model for screen understanding.');
+
 }
 
 export function registerPiProvider(

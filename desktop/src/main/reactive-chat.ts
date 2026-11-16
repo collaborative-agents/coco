@@ -7,6 +7,7 @@ import { readConversations, restorableMessages } from './conversation-store';
 import { readModelConfiguration, defaultTutor } from './model-config-store';
 import { readPiConnection } from './services/pi-provider';
 import { tokenCounts } from '../shared/token-usage';
+import { THINKING_SETTINGS, type ModelThinking } from '../shared/model-thinking';
 import type { TutorStreamEvent } from './services/tutor-stream';
 import type { LLMCallMetrics } from '../renderer/components/observation-types';
 import type AgentRuns from './services/agent-runs';
@@ -40,6 +41,7 @@ interface Dependencies {
   activate: (id: string) => void;
 }
 interface AgentTurnInput {
+  thinking?: ModelThinking;
   requestId: string;
   userText?: string;
   displayText?: string;
@@ -61,6 +63,8 @@ export default function registerReactiveChat(deps: Dependencies) {
       return { error: 'Open a conversation before sending a message.' };
     if (typeof input.requestId !== 'string' || !input.requestId)
       return { error: 'A request ID is required.' };
+    if (input.thinking !== undefined && !THINKING_SETTINGS.includes(input.thinking))
+      return { error: 'Choose a supported thinking amount.' };
     if (
       input.audioData !== undefined &&
       (!input.audioData || input.audioData.length > 16_000_000)
@@ -92,6 +96,7 @@ export default function registerReactiveChat(deps: Dependencies) {
         : process.env.TUTOR_MODEL || '');
     const context = {
       model: selectedModel,
+      thinking: input.thinking ?? conversation?.thinking ?? 'default',
       scenario: profile.scenario,
       problem:
         conversation?.problem ||

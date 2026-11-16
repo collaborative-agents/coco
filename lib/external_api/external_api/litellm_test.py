@@ -200,3 +200,84 @@ def test_streaming_completion_collects_chunks_and_usage(monkeypatch) -> None:
     assert usage["completion_tokens"] == 2
     assert captured["stream"] is True
     assert captured["stream_options"] == {"include_usage": True}
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning", "reasoning_text"])
+def test_qwen_bridge_preserves_structured_reasoning(monkeypatch, field):
+    from external_api.llm import chat_completion
+
+    monkeypatch.delenv("COCO_HOSTED_MODEL_ROUTES", raising=False)
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                **{
+                                    field: "Think first.",
+                                    "content": None,
+                                }
+                            )
+                        )
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="Answer."))]
+                ),
+            ]
+        )
+
+    monkeypatch.setattr(litellm_api, "completion", fake_completion)
+    text, reasoning = [], []
+    response, _ = chat_completion(
+        [{"role": "user", "content": "Hi"}],
+        model="hosted_vllm/nvidia/Qwen3.8-27B-NVFP4",
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        on_chunk=text.append,
+        on_reasoning_chunk=reasoning.append,
+    )
+    assert text == ["Answer."]
+    assert reasoning == ["Think first."]
+    assert response.content[0].text == "Answer."
+    assert captured["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("opening", ["", "<think>"])
+def test_configured_qwen_thinking_is_removed_from_answer(monkeypatch, stream, opening):
+    from external_api.llm import chat_completion
+
+    model = "hosted_vllm/nvidia/Qwen3.8-27B-NVFP4"
+    monkeypatch.delenv("COCO_HOSTED_MODEL_ROUTES", raising=False)
+    raw = opening + "Plan carefully.</think>Final answer."
+
+    def fake_completion(**kwargs):
+        assert kwargs["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        if not stream:
+            return {"choices": [{"message": {"content": raw}}], "usage": {}}
+        return iter(
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=char))]
+            )
+            for char in raw
+        )
+
+    monkeypatch.setattr(litellm_api, "completion", fake_completion)
+    chunks, reasoning = [], []
+    response, _ = chat_completion(
+        [],
+        model=model,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+        on_chunk=chunks.append if stream else None,
+        on_reasoning_chunk=reasoning.append,
+    )
+    assert response.content[0].text == "Final answer."
+    if stream:
+        assert "".join(chunks) == "Final answer."
+        assert "".join(reasoning) == "Plan carefully."

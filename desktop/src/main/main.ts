@@ -53,6 +53,7 @@ import {
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { DesktopAppUpdater } from './app-updater';
+import { installDockUpdateMenu } from './dock-menu';
 import log from 'electron-log';
 import axios from 'axios';
 import { resolveHtmlPath } from './util';
@@ -105,7 +106,7 @@ import PiHarness from './services/pi-harness';
 import WorkspacePermissions from './services/workspace-permissions';
 import ChatStreamStore from './services/chat-stream-store';
 import { parseAgentActivity } from '../shared/agent-execution';
-import { getSystemPermissionWarning, systemPermissionButtonLabel, systemPermissionExplanation } from './system-permission-warning';
+import { readSystemPermissionWarning as readPlatformPermissionWarning, systemPermissionButtonLabel, systemPermissionExplanation } from './system-permission-warning';
 import { openSystemPermissionSettings } from './open-system-permission-settings';
 import configureFullscreenCompanionWindow, { fullscreenCompanionOptions } from './services/fullscreen-companion-window';
 import { ObservationSleepGuard } from './observation-sleep-guard';
@@ -588,10 +589,10 @@ ipcMain.on('quit-from-onboarding', () => app.quit());
 ipcMain.on('quit-from-avatar', () => app.quit());
 
 const readSystemPermissionWarning = () =>
-  getSystemPermissionWarning(process.platform, {
+  readPlatformPermissionWarning(process.platform, () => ({
     accessibilityTrusted: systemPreferences.isTrustedAccessibilityClient(false),
     screenCaptureStatus: systemPreferences.getMediaAccessStatus('screen'),
-  });
+  }));
 
 const readSystemPermissionHealth = () => {
   const warning = readSystemPermissionWarning();
@@ -1821,6 +1822,10 @@ const initializeWakeWordService = (): void => {
     onDetected: (keyword) => {
       if (!wakeWordEnabled || isCocoSleeping() || systemSuspended) return;
       log.info(`[Wake word] Detected ${keyword}`);
+      if (setupPending()) {
+        onboardingWindow?.webContents.send('onboarding-wake-word-detected');
+        return;
+      }
       queueWakeWordDetection(keyword);
     },
   });
@@ -1891,6 +1896,22 @@ function openPrimaryTrayAction(): void {
     return;
   }
   openCoco().catch((err) => log.warn(`[Tray] Could not open Coco: ${err}`));
+}
+
+// Reopening the app restores the current page without resetting the conversation.
+function revealCoco(): void {
+  if (isQuitting) return;
+  if (!setupPending() && chatWindow && !chatWindow.isDestroyed()) {
+    if (!currentSessionId) {
+      showChatPanel();
+      return;
+    }
+    if (chatWindow.isMinimized()) chatWindow.restore();
+    chatWindow.show();
+    chatWindow.focus();
+    return;
+  }
+  openPrimaryTrayAction();
 }
 
 function handleTrayClick(): void {
@@ -2116,7 +2137,7 @@ ipcMain.handle(
       }
     }
     if (role === 'sensing' && savedConfig && !savedConfig.sensing) {
-      return { status: 'not_configured', detail: 'Sensing is optional. Chat is available; proactive suggestions and self-evolving memory are off.' };
+      return { status: 'not_configured', detail: 'Screen understanding is optional. Chat is available; proactive suggestions and self-evolving memory are off.' };
     }
     const legacyModel = role === 'sensing'
       ? process.env.OBSERVER_MODEL
@@ -2198,7 +2219,7 @@ ipcMain.handle(
     assessModelConfiguration('tutor'),
   ]);
   const [sensing, tutor] = await Promise.all([
-    savedConfig && !savedConfig.sensing ? Promise.resolve({ connected: false, status: 'disabled', detail: 'Sensing is turned off.', modelAssessment: sensingAssessment }) : checkService(
+    savedConfig && !savedConfig.sensing ? Promise.resolve({ connected: false, status: 'disabled', detail: 'Screen understanding is turned off.', modelAssessment: sensingAssessment }) : checkService(
       `http://127.0.0.1:${sensingPort}/health`,
       'coco-sensing',
       sensingAssessment,
@@ -4047,17 +4068,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('second-instance', () => {
-  if (onboardingWindow && !onboardingWindow.isDestroyed()) {
-    onboardingWindow.show();
-    onboardingWindow.focus();
-  } else if (chatWindow && !chatWindow.isDestroyed()) {
-    showChatPanel();
-  } else if (avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.show();
-    avatarWindow.focus();
-  } else {
-    openPrimaryTrayAction();
-  }
+  revealCoco();
 });
 
 app.on('will-quit', () => {
@@ -4477,6 +4488,7 @@ app
     }
 
     createWindow();
+    installDockUpdateMenu(desktopAppUpdater);
     createWakeWordCaptureWindow();
     // Keep chat state alive while its panel is closed.
     createChatWindow();
@@ -4505,9 +4517,7 @@ app
     });
 
     app.on('activate', () => {
-      // On macOS it's common to re-create a window in the app when the
-      // dock icon is clicked and there are no other windows open.
-      if (avatarWindow === null && chatWindow === null) createWindow();
+      revealCoco();
     });
   })
   .catch(console.log);

@@ -12,8 +12,10 @@ type Category = (typeof categories)[number]['id'];
 
 export default function SettingsPanel({
   sections,
+  hasPendingModelSave = false,
 }: {
   sections: Record<Category, ReactNode>;
+  hasPendingModelSave?: boolean;
 }) {
   const [active, setActive] = useState<Category>('general');
   const content = useRef<HTMLDivElement>(null);
@@ -36,19 +38,28 @@ export default function SettingsPanel({
           </button>
         ))}
       </nav>
-      <div className="settings-content" ref={content}>
-        {categories.map(({ id, label }) => (
-          <div
-            key={id}
-            id={`settings-page-${id}`}
-            className="settings-category"
-            role="region"
-            aria-label={`${label} settings`}
-            hidden={active !== id}
-          >
-            {sections[id]}
+      <div className="settings-main">
+        {active === 'models' && hasPendingModelSave && (
+          <div className="settings-notice">
+            <p className="model-settings-reminder" role="status">
+              You have pending changes. Save your model settings below to apply them.
+            </p>
           </div>
-        ))}
+        )}
+        <div className="settings-content" ref={content}>
+          {categories.map(({ id, label }) => (
+            <div
+              key={id}
+              id={`settings-page-${id}`}
+              className="settings-category"
+              role="region"
+              aria-label={`${label} settings`}
+              hidden={active !== id}
+            >
+              {sections[id]}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

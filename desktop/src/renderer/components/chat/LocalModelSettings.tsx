@@ -1,24 +1,27 @@
 import './Settings.css';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ModelsStep from '../onboarding/ModelsStep';
 import useModelSetup from '../onboarding/useModelSetup';
 
 /** Model credentials stay in the desktop's existing local configuration store. */
-export default function LocalModelSettings() {
+export default function LocalModelSettings({
+  onUnsavedChanges,
+}: {
+  onUnsavedChanges?: (pending: boolean) => void;
+}) {
   const models = useModelSetup();
   const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    onUnsavedChanges?.(models.hasUnsavedChanges);
+  }, [models.hasUnsavedChanges, onUnsavedChanges]);
+  useEffect(() => () => onUnsavedChanges?.(false), [onUnsavedChanges]);
   return (
     <section className="workspace-settings-section local-settings">
       <h2>Models &amp; providers</h2>
       <p>
-        Connect models for Coco chat through Pi or add another model service.
-        Screen sensing is optional.
+        Choose a provider and model for Coco chat. Sign in, use an API key, or
+        connect a local model. Screen understanding is optional.
       </p>
-      {models.hasUnsavedChanges && (
-        <p className="model-settings-reminder">
-          You have pending changes. Save your model settings below to apply them.
-        </p>
-      )}
       <ModelsStep {...models.modelProps} />
       <div className="model-settings-save-bar">
         <button

@@ -103,3 +103,18 @@ it('replaces a legacy generic title when reading saved conversations', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it('persists thinking per conversation without losing it on background transcript saves', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coco-thinking-'));
+  (app.getPath as jest.Mock).mockReturnValue(directory);
+  try {
+    for (const [sessionId, thinking] of [['a', 'high'], ['b', 'off']]) {
+      saveConversation({ sessionId, thinking, messages: [{ role: 'user', text: 'Help' }] });
+    }
+    saveConversation({ sessionId: 'a', messages: [{ role: 'tutor', text: 'Done' }] });
+    expect(readConversations().find((item) => item.sessionId === 'a')?.thinking).toBe('high');
+    expect(readConversations().find((item) => item.sessionId === 'b')?.thinking).toBe('off');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

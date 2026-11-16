@@ -1,10 +1,10 @@
-name: Package & Release
+name: Package & Release (standalone)
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "auto = latest stable tag + next patch; or enter a newer version manually"
+        description: "auto = next stable version (starting at 0.2.0); or enter a newer version"
         required: true
         default: "auto"
         type: string
@@ -36,7 +36,15 @@ jobs:
       matrix: ${{ steps.matrix.outputs.result }}
       version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Require main branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Standalone releases must be dispatched from main." >&2
+          exit 1
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -115,12 +123,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: "npm"
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: |
+            desktop/package-lock.json
+            desktop/release/app/package-lock.json
 
       # Run-scoped checkpoints intentionally have no fallback keys: never mix releases.
       - name: Identify package checkpoint
@@ -135,9 +147,8 @@ jobs:
           node -e '
             const { createHash } = require("node:crypto");
             const { appendFileSync } = require("node:fs");
-            const values = ["v1", process.env.CHECKPOINT_RUN, process.env.CHECKPOINT_SOURCE,
-              process.env.CHECKPOINT_PLATFORM, process.env.RELEASE_VERSION,
-              process.env.COCO_GATEWAY_URL, process.env.LLM_ROUTER_URL];
+            const values = ["standalone-v2", process.env.CHECKPOINT_RUN, process.env.CHECKPOINT_SOURCE,
+              process.env.CHECKPOINT_PLATFORM, process.env.RELEASE_VERSION];
             const key = createHash("sha256").update(JSON.stringify(values)).digest("hex");
             appendFileSync(process.env.GITHUB_OUTPUT, `key=${key}\n`);
           '
@@ -187,9 +198,26 @@ jobs:
         if: steps.signed.outputs.cache-hit != 'true'
         run: uv run --locked python -m external_api.dependency_smoke
 
-      - name: Install desktop dependencies
+      - name: Install locked desktop dependencies
         working-directory: ./desktop
-        run: node scripts/retry-command.mjs bash -c "npm ci"
+        run: node scripts/retry-command.mjs bash -c "npm ci --ignore-scripts"
+
+      - name: Install locked agent runtime dependencies
+        working-directory: ./desktop
+        run: node scripts/retry-command.mjs bash -c "npm --prefix release/app ci --ignore-scripts"
+
+      - name: Prepare Electron dependencies
+        working-directory: ./desktop
+        run: node scripts/retry-command.mjs bash -c "npm run postinstall"
+
+      - name: Check embedded agent runtime
+        if: steps.signed.outputs.cache-hit != 'true'
+        working-directory: ./desktop
+        run: |
+          npm --prefix release/app ls --depth=0
+          npm run test:agent
+          npm run typecheck
+          node --test scripts/after-pack.test.cjs
 
       - name: Save Electron downloads before later steps can fail
         if: steps.electron-cache.outputs.cache-hit != 'true'
@@ -285,6 +313,7 @@ jobs:
         run: |
           app_path="$(find release/build -maxdepth 2 -name 'coco.app' -print -quit)"
           test -n "$app_path"
+          test -f "$app_path/Contents/Resources/app-update.yml"
           codesign --verify --deep --strict --verbose=2 "$app_path"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "$RUNNER_TEMP/coco-signed.zip"
 
@@ -377,9 +406,11 @@ jobs:
         with:
           name: coco-installer-${{ matrix.platform }}
           path: |
-            desktop/release/build/**/*.dmg
-            desktop/release/build/**/*.zip
-            desktop/release/build/**/*.exe
+            desktop/release/build/*.dmg
+            desktop/release/build/*.zip
+            desktop/release/build/*.exe
+            desktop/release/build/*.blockmap
+            desktop/release/build/latest*.yml
           overwrite: true
           retention-days: 7
           compression-level: 6
@@ -390,12 +421,31 @@ jobs:
     if: ${{ success() }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install artifact tooling
+        working-directory: ./desktop
+        run: npm ci --ignore-scripts
+
+      - name: Test artifact assembly
+        run: node --test desktop/scripts/prepare-release-artifacts.test.mjs
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: coco-installer-*
-          path: artifacts
-          merge-multiple: true
+          path: downloaded-artifacts
+
+      - name: Combine installers and update metadata
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: node desktop/scripts/prepare-release-artifacts.mjs downloaded-artifacts artifacts "$RELEASE_VERSION"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -407,6 +457,6 @@ jobs:
           files: artifacts/**
           draft: false
           prerelease: false
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

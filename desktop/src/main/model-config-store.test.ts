@@ -221,7 +221,7 @@ describe('shared Pi model assignments', () => {
         tutors: [pi],
         defaultTutorId: pi.id,
       }),
-    ).toThrow('sensing');
+    ).toThrow('screen understanding');
   });
 });
 

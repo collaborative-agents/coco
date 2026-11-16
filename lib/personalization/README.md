@@ -47,9 +47,25 @@ docker run --rm --gpus all --ipc=host \
 
 **Enable FP8:** in the Qwen3.5-35B-A3B command above, replace the model-path line with `--model.path Qwen/Qwen3.5-35B-A3B-FP8` CTI-engine detects quantization from the checkpoint and no extra FP8 flag is needed. For other models, select a compatible FP8 checkpoint using `--model.path`; see [CTI-engine's supported checkpoint formats](https://github.com/mit-han-lab/cti-engine/blob/main/docs/features.md#supported-models).
 
+**Qwen3.8-27B (NVFP4)**
+
+```bash
+docker run --rm --gpus all --ipc=host \
+    -p 1919:1919 \
+    -v cti-engine-cache:/root/.cache \
+    ghcr.io/mit-han-lab/cti-engine:0.0.1 \
+    python -m ctiengine \
+    --model.path nvidia/Qwen3.8-27B-NVFP4 \
+    --speculative.model-path z-lab/Qwen3.8-27B-DFlash2 \
+    --server.host 0.0.0.0 \
+    --server.port 1919
+```
+
+The NVFP4 checkpoint supports inference and serving LoRA adapters, but not weight training.
+
 Keep the exposed port accessible only on a trusted network. If Coco runs on the same host and remote access is unnecessary, use `-p 127.0.0.1:1919:1919` instead; that binding prevents connections from other machines.
 
-Leave the server running and configure the model as the sensing model in Settings -> Model.
+Leave the server running and configure the model as the screen understanding model in Settings -> Model.
 
 ## For developers
 

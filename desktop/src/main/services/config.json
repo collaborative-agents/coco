@@ -27,7 +27,7 @@
     },
     {
       "id": "sensing-server",
-      "name": "Sensing Server",
+      "name": "Screen Understanding Server",
       "enabled": true,
       "type": "python",
       "command": "uv",

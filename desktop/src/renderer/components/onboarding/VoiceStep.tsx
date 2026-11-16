@@ -9,6 +9,7 @@ export default function VoiceStep({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [heard, setHeard] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -29,6 +30,14 @@ export default function VoiceStep({
     };
     load();
   }, []);
+
+  useEffect(
+    () =>
+      window.electron.ipcRenderer.on?.('onboarding-wake-word-detected', () =>
+        setHeard(true),
+      ),
+    [],
+  );
 
   const toggle = async () => {
     setSaving(true);
@@ -96,6 +105,16 @@ export default function VoiceStep({
       <p className="coco-setup-note">
         Optional. Change voice activation at any time in Settings.
       </p>
+      {enabled && (
+        <p
+          className={`ob-voice-status${heard ? ' ob-voice-status-heard' : ''}`}
+          role="status"
+        >
+          {heard
+            ? 'Coco heard you! Once setup is finished, “Hey Coco” will open chat and start a voice message.'
+            : 'Try it now: say “Hey Coco”.'}
+        </p>
+      )}
       {saving && (
         <p className="coco-setup-note" role="status">
           Updating voice activation…

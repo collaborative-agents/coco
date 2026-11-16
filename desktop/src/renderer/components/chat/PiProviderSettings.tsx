@@ -6,8 +6,12 @@ const invoke = (action: string, payload?: unknown) =>
 
 export default function PiProviderSettings({
   onStatus,
+  selectedProvider,
+  onProviderChange,
 }: {
   onStatus?: (status: any) => void;
+  selectedProvider?: string;
+  onProviderChange?: (provider: string) => void;
 }) {
   const [status, setStatus] = useState<any>(null);
   const [provider, setProvider] = useState('');
@@ -36,7 +40,7 @@ export default function PiProviderSettings({
           onStatus?.(next);
         }
       } catch {
-        if (mounted) setError('Could not load Pi providers.');
+        if (mounted) setError('Could not load providers.');
       }
       if (mounted) timer = setTimeout(refresh, 1000);
     };
@@ -47,6 +51,9 @@ export default function PiProviderSettings({
       void invoke('cancel').catch(() => {});
     };
   }, [onStatus]);
+  useEffect(() => {
+    if (selectedProvider) setProvider(selectedProvider);
+  }, [selectedProvider]);
   useEffect(() => {
     setAnswer('');
   }, [status?.flow?.prompt?.id]);
@@ -64,16 +71,19 @@ export default function PiProviderSettings({
       setPending(false);
     }
   };
-  if (!status) return <p role="status">{error || 'Loading Pi providers…'}</p>;
+  if (!status) return <p role="status">{error || 'Loading providers…'}</p>;
   const selected = status.providers.find((p: any) => p.id === provider);
   const prompt = status.flow?.prompt;
   const busy = pending || status.flow?.busy;
   return (
     <section className="ob-model-card pi-provider-settings">
       <h4>Connect a provider</h4>
-      <p>Sign in or enter an API key. Then add a model to chat below.</p>
+      <p>
+        Sign in or enter an API key. Your connected providers are available in
+        the model selectors.
+      </p>
       <label className="coco-field">
-        Pi provider
+        Provider
         <span className="coco-select-wrap">
           <select
             className="coco-select"
@@ -81,6 +91,7 @@ export default function PiProviderSettings({
             disabled={busy}
             onChange={(e) => {
               setProvider(e.target.value);
+              onProviderChange?.(e.target.value);
             }}
           >
             {status.providers.map((p: any) => (

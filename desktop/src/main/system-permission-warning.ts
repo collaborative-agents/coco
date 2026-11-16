@@ -61,6 +61,15 @@ export const getSystemPermissionWarning = (
   };
 };
 
+/** Check the platform before evaluating any macOS-only Electron APIs. */
+export const readSystemPermissionWarning = (
+  platform: NodeJS.Platform,
+  readState: () => SystemPermissionState,
+): SystemPermissionWarning | null => {
+  if (platform !== 'darwin') return null;
+  return getSystemPermissionWarning(platform, readState());
+};
+
 export const systemPermissionSettingsUrl = (
   target: SystemPermissionSettingsTarget,
 ): string => {

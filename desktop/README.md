@@ -27,8 +27,8 @@ path, including when the Python service is unavailable. Changing global provider
 credentials or restarting services requires waiting for active runs; selecting a
 model or folder for an idle conversation does not stop other conversations.
 
-Sleep pauses screen sensing and wake-word capture while manual chat and background
-agent runs continue. Waking restarts sensing without resetting tutor context.
+Sleep pauses screen understanding and wake-word capture while manual chat and background
+agent runs continue. Waking restarts screen understanding without resetting tutor context.
 The avatar shows brief progress/completion reminders when chat is out of view.
 Its bubble, menu, and Activity panel use separate windows so opening them does not
 resize or move the pet. Chat uses normal window stacking with an optional pin.
@@ -100,7 +100,7 @@ A single React bundle is loaded into several `BrowserWindow` instances, each rou
 
 ### Observation bubbles
 
-The avatar surfaces observations from the sensing service in three tiers:
+The avatar surfaces observations from the screen understanding service in three tiers:
 
 - **Tier 1** (`progress`, `observing`) — informational phrase only, no action needed
 - **Tier 2** (`stuck`, `mistake`, `inefficient`, `ai_struggle`, `discernment_opportunity`) — actionable, with a one-click "Help me with this" button
@@ -108,7 +108,7 @@ The avatar surfaces observations from the sensing service in three tiers:
 
 ### How the main process orchestrates everything
 
-1. On first launch, collects separate sensing and tutor provider/model settings;
+1. On first launch, collects separate screen understanding and chat provider/model settings;
    credentials are stored in a plaintext configuration file protected with
    owner-only permissions (`chmod 600`) in Electron's user-data directory
 2. Checks whether onboarding is complete; if not, opens the onboarding window
@@ -127,6 +127,39 @@ The avatar surfaces observations from the sensing service in three tiers:
 | `npm run build:services` | Bundle both Python executables into one shared `service-dist/coco-services/` runtime |
 | `npm run package` | Full production build + electron-builder (DMG / NSIS / AppImage) |
 | `npm test` | Run Jest unit tests |
+
+### Package a standalone release from main
+
+Run **Package & Release (standalone)** in GitHub Actions and select `main`.
+The workflow rejects other branches and packages the exact commit selected for
+that run. Commit the release changes to `main` before starting it.
+
+- **Version:** leave `auto` for `0.2.0` initially, then the next patch after the
+  latest stable tag. The committed app version is the minimum, so a future minor
+  version bump takes precedence over older tags. An explicit newer stable version
+  is also accepted; existing tags cannot be reused.
+- **Release notes:** enter the changes users should see on the GitHub release.
+- **Platforms:** choose macOS (Apple Silicon and Intel), Windows, or all.
+
+These builds require no hosted Coco backend, gateway, router URL, model API key,
+or account-service secret. The installer includes the local Python screen understanding,
+tutor, personalization, and wake-word runtimes, plus the embedded agent runtime.
+Users connect their own model providers or local endpoints after installation.
+Builds still download dependencies, and macOS signing contacts Apple.
+
+The workflow installs both npm lockfiles and the locked Python dependencies,
+checks the embedded agent and frozen Python runtime, then builds the installers.
+macOS releases require the GitHub secrets `MAC_CERT`, `MAC_CERT_PWD`,
+`APPLE_API_KEY_P8` (base64 encoded), `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`.
+Signing and notarization checkpoints allow failed jobs to resume within the same
+workflow run.
+
+Successful runs publish installers, blockmaps, and stable update metadata to
+`collaborative-agents/coco`. The two macOS architectures share a merged
+`latest-mac.yml`; Windows uses `latest.yml`. The assembly step validates every
+update file's checksum before publication. Packaged apps check GitHub Releases
+for updates. Running the workflow publishes a public release; local
+`npm run package` builds installers without publishing.
 
 ### Signed macOS releases
 
@@ -241,7 +274,7 @@ credentials, if any, are managed outside the app).
 
 Native text/image chat and Pi's file/command tools do not require Python services.
 When the local Coco service is running, its context and tools remain available.
-Screen sensing, proactive suggestions, and voice transcription still require the
+Screen understanding, proactive suggestions, and voice transcription still require the
 local services and their model configuration. Native login alone does not configure
 those services. Native-only users can finish onboarding after choosing a Pi model.
 

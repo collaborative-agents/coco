@@ -110,7 +110,11 @@
   border-top: 1px solid var(--coco-color-border);
 }
 .model-settings-reminder {
+  margin: 0;
   padding: 12px 16px;
+  color: var(--coco-color-text-muted);
+  font-size: var(--coco-text-secondary);
+  line-height: var(--coco-leading-body);
   border-left: 3px solid var(--coco-color-primary);
   border-radius: 4px;
   background: var(--coco-color-accent-soft);
@@ -187,7 +191,23 @@
   color: var(--coco-color-primary);
   font-weight: 600;
 }
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.settings-notice {
+  flex-shrink: 0;
+  padding: 0 24px 20px 0;
+}
+.settings-notice > .model-settings-reminder {
+  box-sizing: border-box;
+  max-width: 880px;
+}
 .settings-content {
+  flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -250,6 +270,9 @@
   }
   .settings-content {
     padding: 0 20px 20px;
+  }
+  .settings-notice {
+    padding: 0 20px 16px;
   }
   .settings-category > .workspace-settings-section,
   .settings-category > .settings-token-usage {

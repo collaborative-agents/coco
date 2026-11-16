@@ -1,11 +1,16 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import PiProviderSettings from '../chat/PiProviderSettings';
-const ADDITIONAL_PROVIDERS = [
-  ['tinker', 'Tinker'],
-  ['tinfoil', 'Tinfoil (confidential)'],
+const ENDPOINT_OPTIONS = [
   ['hosted_vllm', 'OpenAI-compatible endpoint'],
   ['lm_studio', 'LM Studio (local)'],
+  ['tinfoil', 'Tinfoil (confidential)'],
+  ['tinker', 'Tinker'],
 ] as const;
+interface ProviderOption {
+  id: string;
+  name: string;
+  connected: boolean;
+}
 interface PiModel {
   provider: string;
   id: string;
@@ -21,6 +26,7 @@ export interface ModelDraft {
   model: string;
   apiKey: string;
   baseUrl: string;
+  catalogProvider?: string;
 }
 
 export interface ConnectionTestStatus {
@@ -35,7 +41,11 @@ function ModelFields({
   onTest,
   testStatus,
   piModels,
+  providers,
+  onConnect,
 }: {
+  providers: ProviderOption[];
+  onConnect: (provider: string) => void;
   piModels: PiModel[];
   value: ModelDraft;
   onChange: (next: ModelDraft) => void;
@@ -43,9 +53,22 @@ function ModelFields({
   onTest: () => void;
   testStatus: ConnectionTestStatus | undefined;
 }) {
+  const catalogProvider =
+    value.catalogProvider ||
+    (value.provider === 'pi' ? value.model.split('/')[1] : '') ||
+    providers[0]?.id ||
+    '';
+  const selectedProvider = providers.find(
+    (item) => item.id === catalogProvider,
+  );
+  const availableModels = piModels.filter(
+    (item) =>
+      item.provider === catalogProvider &&
+      (!sensing || item.input?.includes('image')),
+  );
   const legacyProvider =
     value.provider !== 'pi' &&
-    !ADDITIONAL_PROVIDERS.some(([id]) => id === value.provider);
+    !ENDPOINT_OPTIONS.some(([id]) => id === value.provider);
   const update = (field: keyof ModelDraft, next: string) =>
     onChange({ ...value, [field]: next });
   let modelPlaceholder = sensing
@@ -57,12 +80,11 @@ function ModelFields({
   return (
     <div className="ob-model-card">
       <div className="ob-model-card-title">
-        {sensing ? 'Sensing model' : value.label || 'Additional model'}
+        {sensing ? 'Screen understanding model' : value.label || 'Chat model'}
       </div>
       {sensing && (
         <div className="ob-model-warning">
-          This model receives screenshots. Choose a vision-capable model and a
-          provider you trust.
+          This model receives screenshots. Choose a provider you trust.
         </div>
       )}
       {!sensing && (
@@ -74,28 +96,45 @@ function ModelFields({
           onChange={(event) => update('label', event.target.value)}
         />
       )}
-      {legacyProvider && (
-        <p className="ob-sub">
-          Existing direct connection. You can keep using it or connect this
-          provider through Pi above.
-        </p>
-      )}
-      {(sensing || value.provider !== 'pi') && (
+      <label className="coco-field">
+        Provider
         <select
           className="ob-custom-input"
-          aria-label={sensing ? 'Sensing provider' : 'Additional provider'}
-          value={value.provider}
-          onChange={(event) =>
+          aria-label={sensing ? 'Screen understanding provider' : 'Chat provider'}
+          value={
+            value.provider === 'pi'
+              ? `catalog:${catalogProvider}`
+              : value.provider
+          }
+          onChange={(event) => {
+            const source = event.target.value;
+            const catalog = source.startsWith('catalog:');
             onChange({
               ...value,
-              provider: event.target.value,
+              provider: catalog ? 'pi' : source,
+              catalogProvider: catalog ? source.slice(8) : undefined,
               model: '',
               apiKey: '',
               baseUrl: '',
-            })
-          }
+            });
+          }}
         >
-          {sensing && <option value="pi">Connected through Pi</option>}
+          {ENDPOINT_OPTIONS.map(([id, label]) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
+          {value.provider === 'pi' &&
+            !providers.some((item) => item.id === catalogProvider) && (
+              <option value={`catalog:${catalogProvider}`}>
+                {catalogProvider || 'Choose a provider…'}
+              </option>
+            )}
+          {providers.map((item) => (
+            <option key={item.id} value={`catalog:${item.id}`}>
+              {item.name}
+            </option>
+          ))}
           {legacyProvider && (
             <option value={value.provider}>
               {(
@@ -106,20 +145,33 @@ function ModelFields({
                   open_anonymity: 'Open Anonymity',
                 } as Record<string, string>
               )[value.provider] || value.provider}{' '}
-              (existing connection)
+              (saved API connection)
             </option>
           )}
-          {ADDITIONAL_PROVIDERS.map(([id, label]) => (
-            <option key={id} value={id}>
-              {label}
-            </option>
-          ))}
         </select>
+      </label>
+      {value.provider === 'pi' && (
+        <div className="coco-actions">
+          <span>
+            {selectedProvider?.connected
+              ? 'Connected'
+              : 'Connect this provider to choose a model.'}
+          </span>
+          <button
+            type="button"
+            className="ob-model-add"
+            onClick={() => onConnect(catalogProvider)}
+          >
+            {selectedProvider?.connected
+              ? 'Manage connection'
+              : `Connect ${selectedProvider?.name || 'provider'}`}
+          </button>
+        </div>
       )}
       {value.provider === 'pi' ? (
         <select
           className="ob-custom-input"
-          aria-label={sensing ? 'Sensing Pi model' : 'Chat Pi model'}
+          aria-label={sensing ? 'Screen understanding model' : 'Chat model'}
           value={value.model}
           onChange={(event) => {
             const selected = piModels.find(
@@ -134,29 +186,28 @@ function ModelFields({
         >
           <option value="">Choose a connected model…</option>
           {value.model &&
-            !piModels.some(
+            !availableModels.some(
               (m) => `pi/${m.provider}/${m.id}` === value.model,
             ) && (
               <option value={value.model}>
-                {value.model} (connect provider to use)
+                {value.model.replace(/^pi\/[^/]+\//, '')} (connect provider to
+                use)
               </option>
             )}
-          {piModels
-            .filter((m) => !sensing || m.input?.includes('image'))
-            .map((m) => (
-              <option
-                key={`${m.provider}/${m.id}`}
-                value={`pi/${m.provider}/${m.id}`}
-              >
-                {m.name} · {m.provider}
-              </option>
-            ))}
+          {availableModels.map((m) => (
+            <option
+              key={`${m.provider}/${m.id}`}
+              value={`pi/${m.provider}/${m.id}`}
+            >
+              {m.name} · {m.provider}
+            </option>
+          ))}
         </select>
       ) : (
         <input
           className="ob-custom-input"
           value={value.model}
-          aria-label={sensing ? 'Sensing model ID' : 'Additional model ID'}
+          aria-label={sensing ? 'Screen understanding model ID' : 'Chat model ID'}
           placeholder={modelPlaceholder}
           onChange={(event) => update('model', event.target.value)}
         />
@@ -240,6 +291,17 @@ export default function ModelsStep({
   onTest: (role: 'sensing' | 'tutor', model: ModelDraft) => void;
 }) {
   const [piStatus, setPiStatus] = useState<any>(null);
+  const [accountProvider, setAccountProvider] = useState('');
+  const accounts = useRef<HTMLDetailsElement>(null);
+  const providers: ProviderOption[] = piStatus?.providers ?? [];
+  const connectProvider = (provider: string) => {
+    setAccountProvider(provider);
+    if (accounts.current) {
+      accounts.current.open = true;
+      accounts.current.scrollIntoView?.({ block: 'nearest' });
+      accounts.current.querySelector<HTMLSelectElement>('select')?.focus();
+    }
+  };
   const piModels: PiModel[] = (piStatus?.models ?? []).filter(
     (model: PiModel) =>
       piStatus.providers.some(
@@ -250,7 +312,7 @@ export default function ModelsStep({
     setTutors([...tutors, connection]);
     if (!defaultTutorId) setDefaultTutorId(connection.id);
   };
-  const addAdditional = () =>
+  const addModel = () =>
     addConnection({
       id: `model-${Date.now()}`,
       label: '',
@@ -263,6 +325,8 @@ export default function ModelsStep({
     <div key={tutor.id} className="ob-model-wrap">
       <ModelFields
         piModels={piModels}
+        providers={providers}
+        onConnect={connectProvider}
         value={tutor}
         sensing={false}
         onChange={(next) =>
@@ -302,82 +366,27 @@ export default function ModelsStep({
   );
   return (
     <>
-      <section aria-labelledby="pi-connections-heading">
-        <h3 id="pi-connections-heading" className="ob-model-section-title">
-          Pi connections
+      <section aria-labelledby="chat-models-heading">
+        <h3 id="chat-models-heading" className="ob-model-section-title">
+          Chat models
         </h3>
         <p className="ob-sub">
-          Connect OpenAI, Anthropic, Google, and other Pi providers, then add
-          the models you want in Coco chat.
+          Add models from any provider, then choose a default for new chats.
         </p>
-        <details className="ob-provider-disclosure">
-          <summary className="ob-model-add">Connect a provider</summary>
-          <PiProviderSettings onStatus={setPiStatus} />
+        <details ref={accounts} className="ob-provider-disclosure">
+          <summary className="ob-model-add">Manage provider accounts</summary>
+          <PiProviderSettings
+            onStatus={setPiStatus}
+            selectedProvider={accountProvider}
+            onProviderChange={setAccountProvider}
+          />
         </details>
-        {tutors.filter((item) => item.provider === 'pi').map(renderChatModel)}
-        <label className="coco-field">
-          Add a Pi model to chat
-          <select
-            className="ob-custom-input"
-            value=""
-            onChange={(event) => {
-              const selected = piModels.find(
-                (model) =>
-                  `pi/${model.provider}/${model.id}` === event.target.value,
-              );
-              if (!selected) return;
-              addConnection({
-                id: `pi-${Date.now()}`,
-                label: selected.name,
-                provider: 'pi',
-                model: event.target.value,
-                apiKey: '',
-                baseUrl: '',
-              });
-            }}
-          >
-            <option value="">Choose a connected model…</option>
-            {piModels
-              .filter(
-                (model) =>
-                  !tutors.some(
-                    (item) => item.model === `pi/${model.provider}/${model.id}`,
-                  ),
-              )
-              .map((model) => (
-                <option
-                  key={`${model.provider}/${model.id}`}
-                  value={`pi/${model.provider}/${model.id}`}
-                >
-                  {model.name} · {model.provider}
-                </option>
-              ))}
-          </select>
-        </label>
-        {!piModels.length && (
-          <p className="ob-sub">
-            Connect a provider above to load its models. Additional connections
-            below also work without Pi.
-          </p>
-        )}
-      </section>
-      <section aria-labelledby="additional-connections-heading">
-        <h3
-          id="additional-connections-heading"
-          className="ob-model-section-title"
-        >
-          Additional model connections
-        </h3>
-        <p className="ob-sub">
-          Add Tinker, Tinfoil, LM Studio, or a custom OpenAI-compatible endpoint.
-          These models appear alongside Pi models in the chat picker.
-        </p>
-        {tutors.filter((item) => item.provider !== 'pi').map(renderChatModel)}
-        <button type="button" className="ob-model-add" onClick={addAdditional}>
-          + Add model connection
+        {tutors.map(renderChatModel)}
+        <button type="button" className="ob-model-add" onClick={addModel}>
+          + Add model
         </button>
       </section>
-      <h3 className="ob-model-section-title">Optional sensing</h3>
+      <h3 className="ob-model-section-title">Optional screen understanding</h3>
       <label className="coco-field">
         <span>
           <input
@@ -385,19 +394,19 @@ export default function ModelsStep({
             checked={sensingEnabled}
             onChange={(event) => setSensingEnabled(event.target.checked)}
           />{' '}
-          Enable screen sensing (optional)
+          Enable screen understanding (optional)
         </span>
       </label>
       <p className="ob-sub">
-        You can use Coco for chat without a sensing model. Without this
+        You can use Coco for chat without a screen understanding model. Without this
         connection, proactive suggestions and self-evolving memory are
-        unavailable. Connect a sensing model later when you have a provider you
+        unavailable. Connect a screen understanding model later when you have a provider you
         trust with your screen.
       </p>
       {sensingEnabled && (
         <>
           <label className="coco-field">
-            Reuse a configured model for sensing
+            Reuse a configured model for screen understanding
             <select
               className="ob-custom-input"
               value=""
@@ -406,7 +415,7 @@ export default function ModelsStep({
                   (item) => item.id === event.target.value,
                 );
                 if (selected)
-                  setSensing({ ...selected, id: 'sensing', label: 'Sensing' });
+                  setSensing({ ...selected, id: 'sensing', label: 'Screen understanding' });
               }}
             >
               <option value="">Choose a model or configure below…</option>
@@ -430,6 +439,8 @@ export default function ModelsStep({
           </label>
           <ModelFields
             piModels={piModels}
+            providers={providers}
+            onConnect={connectProvider}
             value={sensing}
             onChange={setSensing}
             sensing

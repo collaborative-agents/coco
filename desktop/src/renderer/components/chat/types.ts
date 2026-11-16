@@ -1,6 +1,7 @@
 import type { LLMCallMetrics, TutorToolCall } from '../observation-types';
 import type { ChatSuggestion } from '../../../shared/chat-suggestion';
 import type { AgentActivity } from '../../../shared/agent-execution';
+import type { ModelThinking } from '../../../shared/model-thinking';
 
 export interface Guidance {
   text: string;
@@ -53,6 +54,7 @@ export interface SavedConversation {
   createdAt: number;
   updatedAt: number;
   tutorModelId?: string;
+  thinking?: ModelThinking;
   workingDirectory?: string;
   messages: ChatMessage[];
 }
