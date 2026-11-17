@@ -28,7 +28,9 @@ Coco uses a **dual-agent architecture**:
 
 ## Quickstart
 
-Install [uv](https://docs.astral.sh/uv/) and [Node.js](https://nodejs.org/), then run:
+Download and install the latest [release version](https://github.com/collaborative-agents/coco/releases/latest) to use Coco directly. We support **macOS (Apple Silicon)**, **macOS (Intel)**, and **Windows**.
+
+To run from source, install [uv](https://docs.astral.sh/uv/) and [Node.js](https://nodejs.org/), then run:
 
 ```bash
 # 1. Clone
