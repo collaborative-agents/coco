@@ -17,6 +17,8 @@ There is an inherent tension for personal agent: The more it knows about you, th
 
 For on-device personalization, we recommend [CTI](https://github.com/mit-han-lab/cti-engine), which is an engine optimized for consumer hardware and AI PCs, making it easy to run local models through Docker. Loading the model with one command on RTX 5090, RTX PRO 6000, and DGX Spark on Linux with NVIDIA driver 580 or newer and the NVIDIA Container Toolkit.
 
+The commands below use CTI-engine's current `python -m cti` entry point. To use only one GPU on a multi-GPU machine, replace `--gpus all` with `--gpus device=0` (or `device=1` for the second GPU).
+
 **Qwen3.5-9B**
 
 ```bash
@@ -24,7 +26,7 @@ docker run --rm --gpus all --ipc=host \
     -p 1919:1919 \
     -v cti-engine-cache:/root/.cache \
     ghcr.io/mit-han-lab/cti-engine:0.0.1 \
-    python -m ctiengine \
+    python -m cti \
     --model.path Qwen/Qwen3.5-9B \
     --speculative.model-path z-lab/Qwen3.5-9B-DFlash \
     --server.host 0.0.0.0 \
@@ -38,7 +40,7 @@ docker run --rm --gpus all --ipc=host \
     -p 1919:1919 \
     -v cti-engine-cache:/root/.cache \
     ghcr.io/mit-han-lab/cti-engine:0.0.1 \
-    python -m ctiengine \
+    python -m cti \
     --model.path Qwen/Qwen3.5-35B-A3B \
     --speculative.model-path z-lab/Qwen3.5-35B-A3B-DFlash \
     --server.host 0.0.0.0 \
@@ -54,14 +56,14 @@ docker run --rm --gpus all --ipc=host \
     -p 1919:1919 \
     -v cti-engine-cache:/root/.cache \
     ghcr.io/mit-han-lab/cti-engine:0.0.1 \
-    python -m ctiengine \
+    python -m cti \
     --model.path nvidia/Qwen3.8-27B-NVFP4 \
     --speculative.model-path z-lab/Qwen3.8-27B-DFlash2 \
     --server.host 0.0.0.0 \
     --server.port 1919
 ```
 
-The NVFP4 checkpoint supports inference and serving LoRA adapters, but not weight training.
+The NVFP4 checkpoint supports inference and serving LoRA adapters, but not weight training. Upstream supports this model on RTX PRO 6000; it is unverified on RTX 5090, where it fits without DFlash2. For RTX 5090, omit the `--speculative.model-path` line. See [CTI-engine's model and hardware status](https://github.com/mit-han-lab/cti-engine#status).
 
 Keep the exposed port accessible only on a trusted network. If Coco runs on the same host and remote access is unnecessary, use `-p 127.0.0.1:1919:1919` instead; that binding prevents connections from other machines.
 

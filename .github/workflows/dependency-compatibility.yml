@@ -1,9 +1,6 @@
 name: Dependency compatibility
 
 on:
-  pull_request:
-  push:
-    branches: [main, dev/nv]
   workflow_dispatch:
 
 permissions:
