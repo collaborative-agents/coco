@@ -55,6 +55,21 @@ Semantic observer outputs are also persisted to the shared local memory database
 The everyday-support tutor can retrieve relevant long-term context and bounded
 observation evidence through the local `memory_mcp` server.
 
+### Screen history indexing
+
+Although Coco can operate without retaining screenshots, screen history can
+preserve details that summaries may miss: What exactly did the earlier email
+thread say? Where were the files you recently reviewed? Which hotels did you
+bookmark while planning your trip? Retrieving those details can help Coco draft
+replies, organize projects, and pick up where you left off.
+
+Coco integrates [StreamEmbed](https://github.com/StarTrail-org/StreamEmbed), introduced
+in [*Real-time Indexing from Pixels for Screenshot Retrieval*](https://arxiv.org/abs/2611.18516),
+to make screen history searchable. A separate worker samples sensing's existing
+frames every five seconds and stores screenshots and embeddings locally.
+
+Enable screen history indexing with `COCO_SCREEN_HISTORY_ENABLED=1` in the launch
+environment, or turn it on in the desktop app's settings.
 
 ### Data Flow
 

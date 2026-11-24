@@ -84,6 +84,7 @@ WAKE_WORD_HIDDEN_IMPORTS = [
 
 if platform.system() == "Darwin":
     SENSING_HIDDEN_IMPORTS += [
+        "sensing.capture_worker",
         "Quartz",
         "objc",
         "pynput",

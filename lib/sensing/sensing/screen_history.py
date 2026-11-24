@@ -1,0 +1,246 @@
+"""Bounded, opt-in bridge from sensing frames to an isolated StreamEmbed worker.
+
+Torch/transformers are loaded only in the worker process. The worker receives
+owned images rather than paths into sensing's short-lived screenshot directory.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import io
+import json
+import logging
+import math
+import os
+import signal
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from memory.paths import default_memory_db_path
+from PIL import Image
+from sensing.streamembed_worker import write_status
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class HistoryFrame:
+    frame: Any  # An owned mss ScreenShot, never a mutable capture buffer.
+    timestamp: float
+    monitor_id: str
+
+
+def encode_frames(frames: list[HistoryFrame]) -> bytes:
+    """Encode one capture group outside the sensing event loop."""
+    images = []
+    for item in frames:
+        frame = item.frame
+        image = Image.frombytes("RGB", (frame.width, frame.height), frame.rgb)
+        # Bound pipe traffic and worker memory; preserve small images as-is.
+        if image.width > 1280:
+            image = image.resize(
+                (1280, max(1, image.height * 1280 // image.width)),
+                Image.Resampling.LANCZOS,
+            )
+        with io.BytesIO() as buffer:
+            image.save(buffer, "PNG", compress_level=1)
+            images.append(
+                {
+                    "timestamp": item.timestamp,
+                    "monitor_id": item.monitor_id,
+                    "png": base64.b64encode(buffer.getvalue()).decode("ascii"),
+                }
+            )
+    return (json.dumps(images, separators=(",", ":")) + "\n").encode("ascii")
+
+
+class ScreenHistory:
+    """A sampled producer; a slow or failed indexer never blocks capture."""
+
+    def __init__(self, index_dir: Path, command: list[str], interval: float = 5.0):
+        if not math.isfinite(interval) or interval <= 0:
+            raise ValueError("COCO_SCREEN_HISTORY_INTERVAL must be positive and finite")
+        if not command or not all(isinstance(arg, str) and arg for arg in command):
+            raise ValueError(
+                "COCO_SCREEN_HISTORY_COMMAND must be a nonempty JSON string array"
+            )
+        self.index_dir = index_dir.expanduser().resolve()
+        self.command = command
+        self.interval = interval
+        self._queue: asyncio.Queue[list[HistoryFrame]] = asyncio.Queue(maxsize=1)
+        self._last_sample = float("-inf")
+        self._task: asyncio.Task | None = None
+        self._process: asyncio.subprocess.Process | None = None
+        self.dropped = 0
+        self.sampled_groups = 0
+        self.sent_groups = 0
+        self.last_sample_at: float | None = None
+        self.last_sent_at: float | None = None
+
+    @classmethod
+    def from_env(cls) -> ScreenHistory | None:
+        if os.environ.get("COCO_SCREEN_HISTORY_ENABLED", "").lower() not in {
+            "1",
+            "true",
+            "yes",
+        }:
+            return None
+        raw_command = os.environ.get("COCO_SCREEN_HISTORY_COMMAND")
+        if raw_command:
+            command = json.loads(raw_command)
+            if not isinstance(command, list):
+                raise ValueError(
+                    "COCO_SCREEN_HISTORY_COMMAND must be a JSON string array"
+                )
+        else:
+            if getattr(sys, "frozen", False):
+                raise ValueError(
+                    "Screen history in a packaged app requires COCO_SCREEN_HISTORY_COMMAND; "
+                    "the default worker is supported in source runs only"
+                )
+            command = [sys.executable, "-m", "sensing.streamembed_worker"]
+        return cls(
+            Path(
+                os.environ.get(
+                    "COCO_SCREEN_HISTORY_DIR",
+                    str(default_memory_db_path().parent.parent / "screen-history"),
+                )
+            ),
+            command,
+            float(os.environ.get("COCO_SCREEN_HISTORY_INTERVAL", "5")),
+        )
+
+    def submit(self, frames: list[HistoryFrame]) -> None:
+        """Called on the sensing loop with fresh frames, after capture guards."""
+        if not frames or (self._task is not None and self._task.done()):
+            return
+        now = time.monotonic()
+        if now - self._last_sample < self.interval:
+            return
+        self._last_sample = now
+        self.sampled_groups += 1
+        self.last_sample_at = max(frame.timestamp for frame in frames)
+        if self._queue.full():
+            self._queue.get_nowait()
+            self.dropped += 1
+        self._queue.put_nowait(frames)
+        if self._task is None:
+            self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        failure = None
+        try:
+            self.index_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.index_dir.chmod(0o700)
+            write_status(self.index_dir, "loading", {})
+            log_path = self.index_dir / "worker.log"
+            with log_path.open("ab") as log:
+                log_path.chmod(0o600)
+                self._process = await asyncio.create_subprocess_exec(
+                    *self.command,
+                    "--index-dir",
+                    str(self.index_dir),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=log,
+                    stderr=log,
+                    start_new_session=os.name == "posix",
+                )
+            logger.info("Screen history worker started; index: %s", self.index_dir)
+            while self._process.returncode is None:
+                try:
+                    frames = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                except TimeoutError:
+                    continue
+                payload = await asyncio.to_thread(encode_frames, frames)
+                self._process.stdin.write(payload)
+                await self._process.stdin.drain()
+                self.sent_groups += 1
+                self.last_sent_at = time.time()
+            raise RuntimeError(f"worker exited with code {self._process.returncode}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failure = str(exc)
+            logger.exception("Screen history indexing disabled for this run")
+        finally:
+            await self._stop_process()
+            while not self._queue.empty():
+                self._queue.get_nowait()
+            try:
+                status_path = self.index_dir / "worker-status.json"
+                status = (
+                    json.loads(status_path.read_text()) if status_path.exists() else {}
+                )
+                if status.get("state") != "error":
+                    write_status(
+                        self.index_dir,
+                        "error" if failure else "stopped",
+                        status.get("stats", {}),
+                        failure,
+                    )
+            except Exception:
+                logger.exception("Could not write final screen history status")
+
+    async def _stop_process(self) -> None:
+        process = self._process
+        if process is None:
+            return
+        if process.stdin is not None and not process.stdin.is_closing():
+            # abort also releases a write blocked behind a slow model load.
+            process.stdin.transport.abort()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except TimeoutError:
+            await self._signal_process(signal.SIGTERM)
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                await self._signal_process(
+                    signal.SIGKILL if os.name == "posix" else signal.SIGTERM
+                )
+                await process.wait()
+
+    async def _signal_process(self, sig: int) -> None:
+        process = self._process
+        if process is None or process.returncode is not None:
+            return
+        try:
+            if os.name == "posix":
+                # uv may have spawned a Python child that is still loading the
+                # model. Stop the whole worker group, not just the uv wrapper.
+                os.killpg(process.pid, sig)
+            else:
+                # Terminate uv and its Python child together on Windows too.
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill",
+                    "/PID",
+                    str(process.pid),
+                    "/T",
+                    "/F",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await killer.wait()
+        except ProcessLookupError:
+            pass
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+
+    def status(self) -> dict:
+        return {
+            "sampled_groups": self.sampled_groups,
+            "sent_groups": self.sent_groups,
+            "dropped_groups": self.dropped,
+            "pending_groups": self._queue.qsize(),
+            "last_sample_at": self.last_sample_at,
+            "last_sent_at": self.last_sent_at,
+            "running": self._task is not None and not self._task.done(),
+            "index_dir": str(self.index_dir),
+        }

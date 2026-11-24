@@ -24,6 +24,8 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "pillow>=10.0.0",
     "numpy>=1.24.0",
+    # Local screenshot embeddings and history indexing (separate worker process).
+    "streamembed==0.3.3",
     # Fully local, streaming wake-word inference for the desktop app.
     "sherpa-onnx==1.13.6",
     # sherpa-onnx 1.13.6 declares this runtime companion in wheel metadata,

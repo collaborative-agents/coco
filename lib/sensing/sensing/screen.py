@@ -12,6 +12,7 @@ import time
 from collections import deque
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -20,7 +21,9 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from pynput import keyboard, mouse  # still synchronous
 from sensing.activity import SensingActivityMonitor
+from sensing.capture_client import CaptureClient
 from sensing.observer import Observer
+from sensing.screen_history import HistoryFrame, ScreenHistory
 
 _IS_MACOS = sys.platform == "darwin"
 
@@ -315,6 +318,8 @@ class Screen(Observer):
         # capture_for_hotkey() to determine which monitor is under the cursor.
         self._mons: list[dict] = []
         self._topology_generation: int = 0
+        self._screen_history = ScreenHistory.from_env()
+        self._capture_client: CaptureClient | None = None
 
         # call parent
         super().__init__()
@@ -510,6 +515,22 @@ class Screen(Observer):
         return await loop.run_in_executor(
             self._thread_pool, lambda: func(*args, **kwargs)
         )
+
+    @asynccontextmanager
+    async def _capture_backend(self):
+        if _IS_MACOS:
+            async with CaptureClient() as capture:
+                self._capture_client = capture
+                yield capture.grab
+        else:
+            # Preserve the existing in-process MSS/thread-pool path on Windows
+            # and Linux until process isolation is validated on those platforms.
+            with mss.mss() as capture:
+
+                async def grab(monitor):
+                    return await self._run_in_thread(capture.grab, monitor)
+
+                yield grab
 
     def _detect_high_dpi(self) -> bool:
         """Detect if running on a high-DPI display and adjust settings."""
@@ -735,9 +756,18 @@ class Screen(Observer):
             step = f"{action}({ev['text']})"
             await self.update_queue.put(Update(content=step, content_type="input_text"))
 
+    async def _worker_wrapper(self) -> None:
+        try:
+            await super()._worker_wrapper()
+        finally:
+            if self._screen_history is not None:
+                await self._screen_history.stop()
+
     async def stop(self) -> None:
         """Stop the observer and clean up resources."""
         await super().stop()
+        if getattr(self, "_screen_history", None) is not None:
+            await self._screen_history.stop()
 
         # Clean up frame objects
         async with self._frame_lock:
@@ -757,6 +787,12 @@ class Screen(Observer):
     # ─────────────────────────────── skip guard
     def _skip(self) -> bool:
         return _is_app_visible(self._guard) if self._guard else False
+
+    def _publish_history_frames(self, frames: list[HistoryFrame]) -> None:
+        history = self._screen_history
+        if history is None or self.is_sensing_paused() or self._skip():
+            return
+        history.submit(frames)
 
     # ─────────────────────────────── inspect current frame screenshot
     async def _inspect(self) -> tuple[str, str]:
@@ -913,9 +949,9 @@ class Screen(Observer):
         loop = asyncio.get_running_loop()
 
         # ------------------------------------------------------------------
-        # All calls to mss / Quartz are wrapped in `to_thread`
+        # macOS isolates native grabs; other platforms retain threaded MSS.
         # ------------------------------------------------------------------
-        with mss.mss() as sct:
+        async with self._capture_backend() as grab_frame:
             mons = await self._run_in_thread(self._enumerate_monitors)
             # Expose monitor list so capture_for_hotkey() can resolve cursor position.
             self._mons = mons
@@ -986,7 +1022,7 @@ class Screen(Observer):
                     # f"[FLUSH] [{ev['eid']}] processing event: {ev['type']} at {ev['position']} on monitor {ev['mon']}"
                 )
                 try:
-                    aft = await self._run_in_thread(sct.grab, mons[ev["mon"] - 1])
+                    aft = await grab_frame(mons[ev["mon"] - 1])
                     after_timestamp = f"{time.time():.5f}"
                 except Exception as e:
                     # print(f"[FLUSH] [{ev['eid']}] failed to capture after frame: {e}")
@@ -1252,14 +1288,15 @@ class Screen(Observer):
                     last_monitor_refresh = time.monotonic()
 
                 # refresh 'before' buffers
+                history_frames = []
                 for idx, m in enumerate(mons, 1):
                     old_frame = None
                     async with self._frame_lock:
                         old_frame = self._frames.get(idx)
 
-                    # Capture new frame using custom thread pool
+                    # macOS can recover a stalled grab on the next cycle.
                     try:
-                        frame = await self._run_in_thread(sct.grab, m)
+                        frame = await grab_frame(m)
                     except Exception as e:
                         if self.debug:
                             logging.getLogger("Screen").error(
@@ -1270,6 +1307,14 @@ class Screen(Observer):
                     async with self._frame_lock:
                         self._frames[idx] = frame
                         self._frame_timestamps[idx] = f"{time.time():.5f}"
+                        if self._screen_history is not None:
+                            history_frames.append(
+                                HistoryFrame(
+                                    frame=frame,
+                                    timestamp=float(self._frame_timestamps[idx]),
+                                    monitor_id=self._monitor_id(m, idx),
+                                )
+                            )
 
                     # Explicitly delete old frame to free memory
                     if old_frame is not None:
@@ -1280,6 +1325,8 @@ class Screen(Observer):
                     # Force garbage collection every 30 frames to prevent memory buildup
                     if frame_count % self._MEMORY_CLEANUP_INTERVAL == 0:
                         await self._run_in_thread(gc.collect)
+
+                self._publish_history_frames(history_frames)
 
                 # Check for keyboard session timeout
                 current_time = time.time()

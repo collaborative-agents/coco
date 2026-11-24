@@ -274,6 +274,38 @@ async def guidance_delivered():
     return StatusResponse(status="ok", total_actions=total)
 
 
+@app.get("/screen-history/status")
+async def screen_history_status():
+    """Trace capture freshness, bridge delivery and worker progress separately."""
+    if screen is None:
+        raise HTTPException(status_code=503, detail="Screen observer not initialized")
+    timestamps = [float(ts) for ts in screen._frame_timestamps.values()]
+    latest = max(timestamps) if timestamps else None
+    history = screen._screen_history
+    capture = screen._capture_client
+    worker = None
+    if history is not None:
+        try:
+            worker = json.loads((history.index_dir / "worker-status.json").read_text())
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as exc:
+            worker = {"error": str(exc)}
+    return {
+        "enabled": history is not None,
+        "capture": {
+            **(capture.status() if capture is not None else {"backend": "mss"}),
+            "running": screen._task is not None and not screen._task.done(),
+            "paused": screen.is_sensing_paused(),
+            "pause_reason": screen._activity_monitor.reason,
+            "last_frame_at": latest,
+            "frame_age_seconds": time.time() - latest if latest is not None else None,
+        },
+        "bridge": history.status() if history is not None else None,
+        "worker": worker,
+    }
+
+
 @app.post("/config/observer_model", response_model=StatusResponse)
 async def set_observer_model(req: ObserverModelRequest):
     """Switch the observer (multimodal) model live — no restart needed.
@@ -1078,4 +1110,11 @@ def main(
 
 
 if __name__ == "__main__":
-    chz.entrypoint(main, allow_hyphens=True)
+    import sys
+
+    if sys.argv[1:2] == ["--screen-capture-worker"]:
+        from sensing.capture_worker import main as capture_main
+
+        capture_main(sys.argv[2:])
+    else:
+        chz.entrypoint(main, allow_hyphens=True)
