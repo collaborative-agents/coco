@@ -609,6 +609,7 @@ class AiTutoringProcessor(SegmentProcessor):
         self.snapshot_buffer = SnapshotBuffer(max_size=snapshot_buffer_max_size)
         self._image_num: int = 0
         self._observer_model = observer_model
+        self._observation_lock = asyncio.Lock()
         self._scenario = scenario
         self._memory_engine = memory_engine
         self._user_name = (
@@ -1104,6 +1105,16 @@ class AiTutoringProcessor(SegmentProcessor):
         type: str | None = None,
         hotkey_image_paths: list[str] | None = None,
     ) -> tuple[str, str, LLMCallMetrics]:
+        # Model calls run off-thread, so serialize access to observer state.
+        async with self._observation_lock:
+            return await self._generate_observation(user_text, type, hotkey_image_paths)
+
+    async def _generate_observation(
+        self,
+        user_text: str | None = None,
+        type: str | None = None,
+        hotkey_image_paths: list[str] | None = None,
+    ) -> tuple[str, str, LLMCallMetrics]:
         from datetime import datetime as _dt
 
         user_name_block = self._user_name_context_block()
@@ -1157,7 +1168,9 @@ class AiTutoringProcessor(SegmentProcessor):
         all_image_paths = snapshot_image_paths + hk_paths
 
         observation_id = uuid.uuid4().hex
-        obs, metrics = _observe(
+        # Keep capture/indexing and sleep controls responsive during the model call.
+        obs, metrics = await asyncio.to_thread(
+            _observe,
             text_prompt,
             all_image_paths,
             system_prompt=self._observer_prompt,

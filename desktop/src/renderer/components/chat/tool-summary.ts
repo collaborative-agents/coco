@@ -102,6 +102,7 @@ export default function toolSummary(call: TutorToolCall): string {
     observe_screen: 'Check the current screen',
     get_user_context: 'Look up relevant context',
     get_recent_observations: 'Review recent activity',
+    search_screen_history: 'Search screen history',
   };
   if (call.name !== 'bash') return labels[call.name] ?? 'Use a tool';
   const { command } = call.arguments;

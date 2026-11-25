@@ -191,6 +191,7 @@ export async function createRuntime({
     'observe_screen',
     'get_user_context',
     'get_recent_observations',
+    'search_screen_history',
   ]);
   const guardedTools = createPermissionTools(
     cwd,
@@ -223,6 +224,25 @@ export async function createRuntime({
           throw new Error(`Coco tool failed (HTTP ${response.status})`);
         const result = await response.json();
         if (result.error) throw new Error(result.error);
+        if (definition.name === 'search_screen_history') {
+          const { images = [], ...details } = result;
+          const content = [{ type: 'text', text: JSON.stringify(details) }];
+          for (const image of images) {
+            if (
+              !['image/jpeg', 'image/png', 'image/webp'].includes(
+                image.mimeType,
+              ) ||
+              typeof image.data !== 'string'
+            )
+              throw new Error('Invalid screen history image');
+            content.push({
+              type: 'image',
+              mimeType: image.mimeType,
+              data: image.data,
+            });
+          }
+          return { content, details };
+        }
         return {
           content: [{ type: 'text', text: JSON.stringify(result) }],
           details: result,

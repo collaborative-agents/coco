@@ -7,6 +7,8 @@ import ActionTooltip from './chat/ActionTooltip';
 import './PersonalizationKnowledge.css';
 import { preferenceOutline } from './preference-outline';
 import ContextGraph, { type ContextGroup } from './ContextGraph';
+import ObserverMemorySearch, { useObserverMemorySearch } from './ObserverMemorySearch';
+import useScreenHistorySettings from '../services/screen-history-settings';
 
 export interface ActivePersonalizationMemory {
   content: string;
@@ -528,12 +530,17 @@ export function LearnedPreferences({
 
 export function ObserverContext() {
   const [query, setQuery] = useState('');
+  const history = useScreenHistorySettings();
+  const memory = useObserverMemorySearch();
   const [trail, setTrail] = useState<string[]>([]);
   const [version, setVersion] = useState(0);
   const [page, setPage] = useState<ContextPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const request = useRef(0);
+  useEffect(() => {
+    if (history.enabled === false) memory.clear();
+  }, [history.enabled, memory.clear]);
   useEffect(() => {
     let inFlight = false;
     setLoading(true);
@@ -588,23 +595,39 @@ export function ObserverContext() {
       request.current += 1;
     };
   }, [query, version, trail]);
+  const memoryActive = !!query.trim() && history.enabled === true && !!(memory.busy || memory.error || memory.answer);
   return (
     <div className="knowledge-page">
-      <div className="knowledge-toolbar">
-        <label className="knowledge-search">
+      <form className="knowledge-toolbar observer-context-search" onSubmit={(event) => {
+        event.preventDefault();
+        if (history.enabled) void memory.search(query);
+        else setVersion((value) => value + 1);
+      }}>
+        <div className="knowledge-search">
           <input
             aria-label="Search observer context"
             type="search"
-            maxLength={200}
-            placeholder="Search tasks, projects, and routines"
+            maxLength={2000}
+            placeholder={history.enabled ? 'Search your memory or ask a question…' : 'Search saved context…'}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
               setTrail([]);
+              if (!memory.busy) memory.clear();
             }}
           />
-        </label>
-      </div>
+          <button type="button" className="screen-history-indicator" role="switch" aria-label="Screenshot history" aria-checked={history.enabled === true} disabled={history.enabled === null || history.saving} onClick={() => void history.update(!history.enabled)} title="Save searchable screenshots locally. You can also change this in Settings → Memory.">
+            <span className="screen-history-dot" aria-hidden="true" />
+            <span>{history.enabled === null ? 'Checking…' : history.enabled ? 'Screenshots on' : 'Screenshots off'}</span>
+          </button>
+          <button type="submit" className="observer-context-submit" aria-label="Search memory" disabled={!query.trim() || memory.busy}>
+            {memory.busy ? <span aria-hidden="true">…</span> : <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>}
+          </button>
+        </div>
+      </form>
+      {history.error && <p className="observer-memory-error" role="alert">{history.error}</p>}
+      {memoryActive && <ObserverMemorySearch state={memory} />}
+      <div hidden={memoryActive}>
       <nav className="context-breadcrumbs" aria-label="Context path">
         <button
           type="button"
@@ -808,6 +831,7 @@ export function ObserverContext() {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

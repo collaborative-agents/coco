@@ -1,0 +1,25 @@
+[project]
+name = "screen-history"
+version = "0.1.0"
+description = "Local screen-history indexing and retrieval for Coco, powered by StreamEmbed."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "memory",
+    "pillow>=10.0.0",
+    "httpx>=0.25.0",
+    "streamembed==0.3.3",
+]
+
+[project.scripts]
+screen-history-worker = "screen_history.worker:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["screen_history"]
+
+[tool.uv.sources]
+memory = { workspace = true }

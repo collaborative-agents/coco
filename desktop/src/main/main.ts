@@ -4,6 +4,8 @@ import type { ChatSeed, InstantSuggestion } from './proactive-types';
 import ensureChatConversation from './chat-conversation';
 import { PersonalizationScheduler } from './services/personalization-scheduler';
 import { DailyMemoryDraftService } from './services/daily-memory-drafts';
+import { searchObserverMemory } from './services/observer-memory-search';
+import ScreenHistorySettings from './services/screen-history-settings';
 import { PersonalizationCenterService } from './services/personalization-center';
 import { EveningPersonalizationScheduler } from './services/evening-personalization-scheduler';
 import { applyAgentPreferences, observerPreferences, type AgentPreferencesInput } from './agent-preferences';
@@ -2087,7 +2089,7 @@ ipcMain.handle(
     _event,
     { forceModelTest = false }: { forceModelTest?: boolean } = {},
   ) => {
-    // Sensing is deliberately paused during sleep; manual agents remain available.
+    // Observer model checks are paused during sleep; screenshot indexing stays active.
     if (isCocoSleeping()) {
       return { checkedAt: Date.now(), sleeping: true };
     }
@@ -2506,6 +2508,7 @@ ipcMain.handle(
             runtime.config.sensing.model,
           );
         }
+        serviceManager.configureServiceEnv('sensing-server', { COCO_SCREEN_HISTORY_ENABLED: screenHistorySettings.read() ? '1' : '0' });
         startModelServices(
           serviceManager,
           runtime.config.sensing?.model ?? '',
@@ -2723,6 +2726,39 @@ ipcMain.handle('get-personalization-status', () => ({
   },
 }));
 
+const screenHistorySettings = new ScreenHistorySettings(() => path.join(app.getPath('userData'), 'screen-history-settings.json'));
+
+ipcMain.handle('get-screen-history-settings', () => {
+  try {
+    return { success: true, enabled: screenHistorySettings.read() };
+  } catch {
+    return { success: false, error: 'Screenshot history settings could not be read.' };
+  }
+});
+
+ipcMain.handle('set-screen-history-enabled', async (_event, input: { enabled?: unknown } = {}) => {
+  if (typeof input?.enabled !== 'boolean') return { success: false, error: 'Invalid screenshot history setting.' };
+  const enabled = input.enabled;
+  try {
+    await screenHistorySettings.set(enabled, async (value) => {
+      if (servicesStarted && sensingEnabled) {
+        const { data } = await axios.post(`http://127.0.0.1:${process.env.SENSING_PORT || '8080'}/screen-history/config`, { enabled: value }, { timeout: 15000 });
+        if (data.enabled !== value) throw new Error('Screenshot history did not apply the new setting.');
+      }
+    });
+    serviceManager.configureServiceEnv('sensing-server', { COCO_SCREEN_HISTORY_ENABLED: enabled ? '1' : '0' });
+    const settings = { success: true, enabled };
+    BrowserWindow.getAllWindows().forEach((window) => window.webContents.send('screen-history-settings-changed', settings));
+    return settings;
+  } catch {
+    return { success: false, error: 'Screenshot history could not be changed. Check that Coco is running and try again.' };
+  }
+});
+
+ipcMain.handle('search-observer-memory', async (_event, input: { question?: unknown } = {}) =>
+  searchObserverMemory(input?.question, process.env.SENSING_PORT || '8080'),
+);
+
 ipcMain.handle('get-observer-context', async (_event, input: { query?: string; offset?: number; groupBy?: string; group?: string; trail?: string[] } = {}) => {
   const query = typeof input.query === 'string' ? input.query.slice(0, 200) : '';
   const offset = Number.isInteger(input.offset) && input.offset! >= 0 ? input.offset : 0;
@@ -2903,18 +2939,44 @@ async function runEveningPersonalizationTransition(): Promise<boolean> {
   return true;
 }
 
-async function setCocoSleepMode(sleeping: boolean, { wakeAfterPersonalization = false } = {}) {
+let cocoSleepUpdate: Promise<unknown> = Promise.resolve();
+function setCocoSleepMode(sleeping: boolean, options: { wakeAfterPersonalization?: boolean } = {}) {
+  const update = cocoSleepUpdate.then(() => applyCocoSleepMode(sleeping, options));
+  cocoSleepUpdate = update.catch(() => {});
+  return update;
+}
+
+async function setSensingObserverEnabled(enabled: boolean): Promise<void> {
+  // The capture service may still be starting when sleep/wake is requested.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const { data } = await axios.post(
+        `http://127.0.0.1:${process.env.SENSING_PORT || '8080'}/observer/config`,
+        { enabled }, { timeout: 15000 },
+      );
+      if (data.enabled !== enabled) throw new Error('Observer state did not apply.');
+      return;
+    } catch (error) {
+      const starting = axios.isAxiosError(error) && (
+        error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET' || error.response?.status === 503
+      );
+      if (attempt === 19 || !starting) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+}
+
+async function applyCocoSleepMode(sleeping: boolean, { wakeAfterPersonalization = false } = {}) {
   wakeAfterEveningPersonalization = wakeAfterPersonalization;
   personalizationScheduler?.setSleepMode(sleeping);
   if (cocoSleeping === sleeping) {
     return { success: true, sleeping };
   }
 
-  // Make the requested state authoritative before service shutdown so health
-  // checks and wake-word callbacks cannot mistake an intentional pause for a
-  // failure or accept another interaction while shutdown is in progress.
+  // Suppress notifications and voice activation before pausing observer work.
   cocoSleeping = sleeping;
   syncWakeWordService();
+  serviceManager.configureServiceEnv('sensing-server', { COCO_OBSERVER_ENABLED: sleeping ? '0' : '1' });
 
   if (sleeping) {
     proactive.clearInvite();
@@ -2922,9 +2984,27 @@ async function setCocoSleepMode(sleeping: boolean, { wakeAfterPersonalization = 
     proactive.dismissNotification();
     stopObservationStream();
     serviceManager.configureServiceEnv('sensing-server', { COCO_RESET_TUTOR_ON_START: '0' });
-    await serviceManager.stopService('sensing-server');
+    if (servicesStarted && sensingEnabled) {
+      try {
+        await setSensingObserverEnabled(false);
+      } catch (error) {
+        // Fail closed if an old/unresponsive backend cannot pause its observer.
+        log.warn('[Sleep] Could not pause observer; stopping sensing as a fallback:', error);
+        await serviceManager.stopService('sensing-server');
+      }
+    }
   } else if (servicesStarted && sensingEnabled) {
     serviceManager.startService('sensing-server');
+    try {
+      await setSensingObserverEnabled(true);
+    } catch (error) {
+      cocoSleeping = true;
+      serviceManager.configureServiceEnv('sensing-server', { COCO_OBSERVER_ENABLED: '0' });
+      personalizationScheduler?.setSleepMode(true);
+      syncWakeWordService();
+      await serviceManager.stopService('sensing-server');
+      throw error;
+    }
     subscribeToObservations();
     if (currentSessionId) {
       const sessionId = currentSessionId;
@@ -4182,6 +4262,7 @@ const startObserver = () => {
         true,
       );
     }
+    serviceManager.configureServiceEnv('sensing-server', { COCO_SCREEN_HISTORY_ENABLED: screenHistorySettings.read() ? '1' : '0' });
     startModelServices(serviceManager, observerModel, isCocoSleeping());
     const recordsRoot = path.join(app.getPath('userData'), 'coco-records');
     const stateRoot = path.join(app.getPath('userData'), 'personalization');

@@ -9,6 +9,7 @@ dependencies = [
     "external_api",
     "py_utils",
     "memory",
+    "screen-history",
     # Web server
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
@@ -45,6 +46,7 @@ packages = ["."]
 external_api = { workspace = true }
 py_utils = { workspace = true }
 memory = { workspace = true }
+screen-history = { workspace = true }
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py", "*_test.py"]

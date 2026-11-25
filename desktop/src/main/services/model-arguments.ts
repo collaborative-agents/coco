@@ -18,10 +18,18 @@ export function configureServiceModelArguments(
 }
 
 export function startModelServices(
-  manager: { startService(id: string): void },
+  manager: {
+    startService(id: string): void;
+    configureServiceEnv(id: string, env: Record<string, string>): void;
+  },
   sensingModel: string,
   sleeping: boolean,
 ): void {
   manager.startService('tutor-server');
-  if (sensingModel.trim() && !sleeping) manager.startService('sensing-server');
+  if (sensingModel.trim()) {
+    manager.configureServiceEnv('sensing-server', {
+      COCO_OBSERVER_ENABLED: sleeping ? '0' : '1',
+    });
+    manager.startService('sensing-server');
+  }
 }

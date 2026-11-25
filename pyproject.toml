@@ -8,6 +8,7 @@ authors = [{ name = "Yijia Shao", email = "shaoyj.echo@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "sensing",
+    "screen-history",
     "proactive_tutor",
     "external_api",
     "py_utils",
@@ -23,6 +24,7 @@ package = false
 
 [tool.uv.sources]
 sensing = { workspace = true }
+screen-history = { workspace = true }
 proactive_tutor = { workspace = true }
 external_api = { workspace = true }
 py_utils = { workspace = true }
@@ -33,6 +35,7 @@ memory-mcp = { workspace = true }
 [tool.uv.workspace]
 members = [
     "lib/sensing",
+    "lib/screen_history",
     "lib/proactive_tutor",
     "lib/external_api",
     "lib/py_utils",

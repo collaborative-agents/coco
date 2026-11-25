@@ -37,22 +37,33 @@ describe('configureServiceModelArguments', () => {
   });
 });
 
-it('starts chat without sensing, and keeps sensing off while sleeping', () => {
-  const manager = { configureServiceArg: jest.fn(), startService: jest.fn() };
+it('keeps capture running while sleeping and sets observer state before startup', () => {
+  const manager = {
+    configureServiceArg: jest.fn(),
+    configureServiceEnv: jest.fn(),
+    startService: jest.fn(),
+  };
   configureServiceModelArguments(manager, 'pi/test/chat', '');
   expect(manager.configureServiceArg).toHaveBeenCalledTimes(1);
-  for (const [model, sleeping] of [
-    ['', false],
-    ['pi/test/vision', true],
-  ] as const) {
+  startModelServices(manager, '', false);
+  expect(manager.startService.mock.calls).toEqual([['tutor-server']]);
+  expect(manager.configureServiceEnv).not.toHaveBeenCalled();
+
+  [true, false].forEach((sleeping) => {
     manager.startService.mockClear();
-    startModelServices(manager, model, sleeping);
-    expect(manager.startService.mock.calls).toEqual([['tutor-server']]);
-  }
-  manager.startService.mockClear();
-  startModelServices(manager, 'pi/test/vision', false);
-  expect(manager.startService.mock.calls).toEqual([
-    ['tutor-server'],
-    ['sensing-server'],
-  ]);
+    startModelServices(manager, 'pi/test/vision', sleeping);
+    expect(manager.startService.mock.calls).toEqual([
+      ['tutor-server'],
+      ['sensing-server'],
+    ]);
+    expect(manager.configureServiceEnv).toHaveBeenLastCalledWith(
+      'sensing-server',
+      {
+        COCO_OBSERVER_ENABLED: sleeping ? '0' : '1',
+      },
+    );
+    expect(
+      manager.configureServiceEnv.mock.invocationCallOrder.at(-1),
+    ).toBeLessThan(manager.startService.mock.invocationCallOrder.at(-1)!);
+  });
 });

@@ -40,6 +40,7 @@ import LocalProfileSettings from './chat/LocalProfileSettings';
 import LocalModelPicker from './chat/LocalModelPicker';
 import type { ModelThinking } from '../../shared/model-thinking';
 import MemorySettings from './chat/MemorySettings';
+import ScreenHistorySettings from './chat/ScreenHistorySettings';
 
 export { ToolCallCard } from './chat/ToolCallCard';
 
@@ -1632,6 +1633,8 @@ export default function SessionChatView() {
                 ),
                 models: <LocalModelSettings onUnsavedChanges={setHasPendingModelSave} />,
                 memory: (
+                  <>
+                  <ScreenHistorySettings />
                   <MemorySettings
                     {...{
                       memoryDraft,
@@ -1641,6 +1644,7 @@ export default function SessionChatView() {
                       memoryFlash,
                     }}
                   />
+                  </>
                 ),
                 usage: <TokenUsageSettings />,
                 health: (

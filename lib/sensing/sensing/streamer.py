@@ -6,6 +6,7 @@ from typing import cast
 import numpy as np
 from PIL import Image
 from py_utils.logging import init_logger
+from sensing.observer_gate import ObserverGate, ObserverPaused
 from sensing.segment_processor import AiTutoringProcessor, SegmentProcessor
 from sensing.utils import (
     compose_key_input,
@@ -390,6 +391,7 @@ class Streamer:
         periodic_delete: bool = False,
         segment_processors: list[SegmentProcessor] | None = None,
         pause_predicate: Callable[[], bool] | None = None,
+        observer_enabled: bool = True,
     ) -> None:
         """
         Initialize the Streamer.
@@ -408,6 +410,7 @@ class Streamer:
                 processing (useful for testing).
             pause_predicate: Optional callback that suspends background database
                 polling while it returns True.
+            observer_enabled: Start observer processing enabled; capture is independent.
         """
         self.db_path = os.path.expanduser(db_path)
         self.screenshot_dir = os.path.expanduser(screenshot_dir)
@@ -419,6 +422,7 @@ class Streamer:
         self.periodic_delete = periodic_delete
         self._segment_processors: list[SegmentProcessor] = segment_processors or []
         self._pause_predicate = pause_predicate
+        self.observer_gate = ObserverGate(observer_enabled)
 
         print(f"[INIT] db_path: {self.db_path}, screenshot_dir: {self.screenshot_dir}")
 
@@ -481,6 +485,20 @@ class Streamer:
         ``hotkey_image_paths`` are forwarded verbatim to the processor and are
         never deleted — they persist in the session's HotKeyBuffer.
         """
+        return await self.observer_gate.run(
+            lambda: self._generate_observation(
+                type, user_text, image_path, timestamp, hotkey_image_paths
+            )
+        )
+
+    async def _generate_observation(
+        self,
+        type: str,
+        user_text: str | None,
+        image_path: str | None,
+        timestamp: str | None,
+        hotkey_image_paths: list[str] | None,
+    ) -> tuple[str, dict]:
         for proc in self._segment_processors:
             if hasattr(proc, "generate_observation"):
                 ai_proc = cast(AiTutoringProcessor, proc)
@@ -558,6 +576,23 @@ class Streamer:
     # ------------------------------------------------------------------
 
     async def _process_actions(
+        self,
+        force: bool = False,
+        type: str | None = None,
+        user_text: str | None = None,
+        image_path: str | None = None,
+        timestamp: str | None = None,
+    ) -> None:
+        try:
+            await self.observer_gate.run(
+                lambda: self._process_actions_enabled(
+                    force, type, user_text, image_path, timestamp
+                )
+            )
+        except ObserverPaused:
+            pass
+
+    async def _process_actions_enabled(
         self,
         force: bool = False,
         type: str | None = None,

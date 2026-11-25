@@ -1,11 +1,13 @@
-# -*- mode: python ; coding: utf-8 -*-
 """Build Coco's Python services into one shared onedir bundle."""
 
 import platform
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, copy_metadata
-
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    copy_metadata,
+)
 
 ROOT = Path(SPEC).resolve().parents[2]
 
@@ -18,6 +20,9 @@ PERSONALIZATION_ENTRY = (
 )
 
 WAKE_WORD_ENTRY = ROOT / "lib" / "sensing" / "sensing" / "wake_word_worker.py"
+
+SCREEN_HISTORY_ENTRY = ROOT / "lib" / "screen_history" / "screen_history" / "worker.py"
+SCREEN_CAPTURE_ENTRY = ROOT / "lib" / "sensing" / "sensing" / "capture_worker.py"
 
 COMMON_HIDDEN_IMPORTS = [
     # uvicorn internals
@@ -184,6 +189,34 @@ wake_word = Analysis(
     optimize=0,
 )
 
+screen_history = Analysis(
+    [str(SCREEN_HISTORY_ENTRY)],
+    pathex=[str(ROOT)],
+    binaries=[],
+    datas=collect_data_files("screen_history") + collect_data_files("streamembed"),
+    hiddenimports=["screen_history.worker"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["pandas"],
+    noarchive=False,
+    optimize=0,
+)
+
+screen_capture = Analysis(
+    [str(SCREEN_CAPTURE_ENTRY)],
+    pathex=[str(ROOT)],
+    binaries=[],
+    datas=[],
+    hiddenimports=["sensing.capture_worker", "mss"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["pandas"],
+    noarchive=False,
+    optimize=0,
+)
+
 tutor_pyz = PYZ(tutor.pure)
 sensing_pyz = PYZ(sensing.pure)
 wake_word_pyz = PYZ(wake_word.pure)
@@ -262,7 +295,31 @@ wake_word_exe = EXE(
     entitlements_file=None,
 )
 
-# A single COLLECT gives both executables one shared _internal directory. Files
+
+def worker_executable(analysis, name):
+    return EXE(
+        PYZ(analysis.pure),
+        analysis.scripts,
+        [],
+        exclude_binaries=True,
+        name=name,
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        console=True,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
+
+
+screen_history_exe = worker_executable(screen_history, "screen-history-worker")
+screen_capture_exe = worker_executable(screen_capture, "screen-capture-worker")
+
+# A single COLLECT gives all executables one shared _internal directory. Files
 # with the same destination (Python, LiteLLM, Pillow, NumPy, and so on) are
 # collected only once.
 bundle = COLLECT(
@@ -270,6 +327,12 @@ bundle = COLLECT(
     sensing_exe,
     wake_word_exe,
     personalization_exe,
+    screen_history_exe,
+    screen_capture_exe,
+    screen_history.binaries,
+    screen_history.datas,
+    screen_capture.binaries,
+    screen_capture.datas,
     tutor.binaries,
     tutor.datas,
     sensing.binaries,

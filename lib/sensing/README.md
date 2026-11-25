@@ -55,7 +55,6 @@ Semantic observer outputs are also persisted to the shared local memory database
 The everyday-support tutor can retrieve relevant long-term context and bounded
 observation evidence through the local `memory_mcp` server.
 
-
 ### Data Flow
 
 1. **Capture**: `Screen` observer captures interactions and saves screenshots
