@@ -14,14 +14,17 @@ import time
 from datetime import datetime
 
 import chz
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from memory import MemoryEngine, MemoryStore, default_memory_db_path
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder, default_records_dir
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from screen_history.memory_search import answer_memory_question
 from sensing.gum import GUM
+from sensing.observer_gate import ObserverPaused
 from sensing.progress_detector import ProgressDetector, ProgressDetectorConfig
 from sensing.screen import Screen
 from sensing.segment_processor import (
@@ -293,6 +296,7 @@ async def screen_history_status():
             worker = {"error": str(exc)}
     return {
         "enabled": history is not None,
+        "observer_enabled": screen.observer_enabled,
         "capture": {
             **(capture.status() if capture is not None else {"backend": "mss"}),
             "running": screen._task is not None and not screen._task.done(),
@@ -304,6 +308,99 @@ async def screen_history_status():
         "bridge": history.status() if history is not None else None,
         "worker": worker,
     }
+
+
+class ObserverConfiguration(BaseModel):
+    enabled: bool = Field(strict=True)
+
+
+@app.post("/observer/config")
+async def configure_observer(request: ObserverConfiguration):
+    """Pause observer work while leaving capture and StreamEmbed running."""
+    if screen is None or streamer is None:
+        raise HTTPException(503, "Screen observer is not running")
+    async with _session_config_lock:
+        screen.set_observer_enabled(request.enabled)
+        await streamer.observer_gate.set_enabled(request.enabled)
+        if not request.enabled:
+            if progress_detector is not None:
+                await progress_detector.stop()
+        elif progress_detector is not None:
+            await progress_detector.start()
+        else:
+            await _start_progress_detector(None)
+    return {"enabled": streamer.observer_gate.enabled}
+
+
+class ScreenHistorySearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    top_k: int = Field(default=3, ge=1, le=5)
+    since: str | float | None = None
+    until: str | float | None = None
+
+
+class ScreenHistoryConfiguration(BaseModel):
+    enabled: bool = Field(strict=True)
+
+
+@app.post("/screen-history/config")
+async def configure_screen_history(request: ScreenHistoryConfiguration):
+    if screen is None:
+        raise HTTPException(503, "Screen observer is not running")
+    await screen.set_screen_history_enabled(request.enabled)
+    return {"enabled": screen._screen_history is not None}
+
+
+@app.post("/screen-history/search")
+async def search_screen_history(request: ScreenHistorySearchRequest):
+    if screen is None or screen._screen_history is None:
+        raise HTTPException(
+            503, "Screen history indexing is disabled. Enable it in Settings first."
+        )
+    return await screen._screen_history.search(request.model_dump())
+
+
+class ObserverMemoryQuestion(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+
+_memory_search_lock = asyncio.Lock()
+
+
+@app.post("/screen-history/ask")
+async def ask_observer_memory(request: ObserverMemoryQuestion):
+    if screen is None or screen._screen_history is None:
+        raise HTTPException(
+            503, "Enable screen history indexing in Settings to search your memory."
+        )
+    processor = _get_ai_processor()
+    if processor is None:
+        raise HTTPException(
+            503, "Configure a local screen-understanding model in Settings first."
+        )
+    if _memory_search_lock.locked():
+        raise HTTPException(
+            429, "A memory search is already running. Please wait for it to finish."
+        )
+    try:
+        async with _memory_search_lock, asyncio.timeout(150):
+            return await answer_memory_question(
+                request.question,
+                processor._observer_model,
+                screen._screen_history.search,
+            )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise HTTPException(
+            504,
+            "Memory search took too long. Try a more specific question or check your local model.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            503,
+            "The local screen-understanding model is unavailable. Check that it is running.",
+        ) from exc
 
 
 @app.post("/config/observer_model", response_model=StatusResponse)
@@ -362,6 +459,8 @@ async def observe_user_prompt(request: ObserveUserPromptRequest):
         raise HTTPException(
             status_code=503, detail="Screen or streamer not initialized"
         )
+    if not streamer.observer_gate.enabled:
+        raise HTTPException(503, "Coco's observer is sleeping")
     if progress_detector is not None:
         progress_detector.reset_timing()
     try:
@@ -397,6 +496,8 @@ async def observe_user_prompt(request: ObserveUserPromptRequest):
             llm_metrics=llm_metrics,
             hotkey_image_path=hk_paths[0] if hk_paths else None,
         )
+    except ObserverPaused as e:
+        raise HTTPException(503, str(e)) from e
     except Exception as e:
         logger.error(f"Error generating user_prompt observation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -622,6 +723,11 @@ async def _start_progress_detector(request: SessionConfigRequest | None = None) 
     if streamer is None or screen is None:
         return
 
+    if not streamer.observer_gate.enabled:
+        if progress_detector is not None:
+            await progress_detector.stop()
+        return
+
     # Observer-only mode (default): the judge never runs. Make sure any
     # previously-started detector is stopped, then bail.
     if not _judge_enabled:
@@ -734,7 +840,7 @@ async def _observer_ticker(interval_seconds: float) -> None:
     while True:
         try:
             await asyncio.sleep(interval_seconds)
-            if screen is None:
+            if screen is None or streamer is None or not streamer.observer_gate.enabled:
                 continue
             ai_proc = _get_ai_processor()
             if ai_proc is None:
@@ -745,8 +851,9 @@ async def _observer_ticker(interval_seconds: float) -> None:
             image_path, timestamp = await screen._inspect()
             if not image_path:
                 continue
-            ai_proc._add_snapshot(image_path, timestamp)
-            await ai_proc._handle_observation(type="snapshot")
+            await streamer.generate_observation(
+                type="snapshot", image_path=image_path, timestamp=timestamp
+            )
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -931,11 +1038,14 @@ async def main_async(
     _progress_log_path = _os.path.expanduser(f"{session_dir}/progress_judgments.jsonl")
 
     # Initialize screen observer
+    observer_enabled = os.environ.get("COCO_OBSERVER_ENABLED", "1") != "0"
     screen = Screen(
         screenshots_dir=screenshot_dir,
         debug=False,
         enable_global_hotkey=False,
     )
+
+    screen.set_observer_enabled(observer_enabled)
 
     # Initialize hot-key buffer and register the capture callback on the screen.
     hotkey_buffer = HotKeyBuffer(max_size=10)
@@ -984,7 +1094,7 @@ async def main_async(
         # into pre-session observations (task-suggestion notifications etc.).
         # Retry with backoff so a slow tutor-server startup doesn't leave stale
         # state silently in place.
-        # Desktop sleep restarts sensing independently; preserve its live tutor.
+        # Independent sensing restarts must preserve the live tutor when requested.
         if _os.environ.get("COCO_RESET_TUTOR_ON_START", "1") != "0":
             _reset_delays = [0.5, 1.0, 2.0, 4.0]
             for _attempt, _delay in enumerate(_reset_delays, start=1):
@@ -1020,6 +1130,7 @@ async def main_async(
         min_actions_threshold=min_actions_threshold,
         enable_hotkey=False,
         segment_processors=processors,
+        observer_enabled=observer_enabled,
     )
 
     try:
@@ -1110,11 +1221,4 @@ def main(
 
 
 if __name__ == "__main__":
-    import sys
-
-    if sys.argv[1:2] == ["--screen-capture-worker"]:
-        from sensing.capture_worker import main as capture_main
-
-        capture_main(sys.argv[2:])
-    else:
-        chz.entrypoint(main, allow_hyphens=True)
+    chz.entrypoint(main, allow_hyphens=True)

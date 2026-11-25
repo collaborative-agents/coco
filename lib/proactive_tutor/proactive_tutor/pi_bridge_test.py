@@ -6,6 +6,7 @@ from external_api.litellm_api import FunctionCall, LiteLLMMessage, ToolCall
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from proactive_tutor import pi_bridge
+from proactive_tutor.tools.screen_history import ScreenHistoryToolProvider
 
 
 @pytest.fixture
@@ -62,6 +63,35 @@ def test_bridge_uses_existing_tools_and_records_turn_for_other_coco_flows(bridge
     response = client.post("/agent/turn", json={"user_text": "Do it", "text": "Done"})
     assert response.json()["history_length"] == 3
     assert tutor._chat_messages[-1] == {"role": "assistant", "content": "Done"}
+
+
+def test_execution_bridge_exposes_history_tool_and_preserves_images(
+    bridge, monkeypatch
+):
+    client, _, existing_calls = bridge
+    client.headers["Authorization"] = "Bearer secret"
+    context = client.get("/agent/context").json()
+    assert "search_screen_history" in [
+        tool["function"]["name"] for tool in context["tools"]
+    ]
+    assert "confidence probabilities" in context["instructions"]
+    result = {
+        "matches": [{"id": 1}],
+        "images": [{"data": "image-bytes", "mimeType": "image/jpeg"}],
+    }
+    calls = []
+    monkeypatch.setattr(
+        ScreenHistoryToolProvider,
+        "execute",
+        lambda self, name, args: calls.append((name, args)) or result,
+    )
+    response = client.post(
+        "/agent/tools/execute",
+        json={"name": "search_screen_history", "arguments": {"query": "researcher"}},
+    )
+    assert response.json() == result
+    assert calls == [("search_screen_history", {"query": "researcher"})]
+    assert existing_calls == []
 
 
 def test_completion_preserves_tools_and_streaming_while_using_configured_model(

@@ -14,6 +14,7 @@ from external_api.llm import chat_completion
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from proactive_tutor.audio_input import validate_wav_base64
+from proactive_tutor.tools.screen_history import ScreenHistoryToolProvider
 from proactive_tutor.tutor_system import TutorSystem
 from pydantic import BaseModel, Field
 
@@ -58,6 +59,8 @@ class TranscriptionRequest(BaseModel):
 
 
 def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
+    screen_history = ScreenHistoryToolProvider()
+
     def authorize(authorization: str = Header(default="")) -> None:
         token = os.environ.get("COCO_PI_BRIDGE_TOKEN", "")
         if not token or not hmac.compare_digest(authorization, f"Bearer {token}"):
@@ -82,9 +85,12 @@ def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
     async def context(tutor: TutorSystem = Depends(system)):
         return {
             "model": tutor.tutor_agent.model,
-            "instructions": tutor.tutor_agent.prompt,
+            "instructions": tutor.tutor_agent.prompt
+            + "\n\n"
+            + screen_history.instructions(),
             "profile": "\n\n".join(
                 [
+                    f"Current local date and time: {datetime.now().astimezone().isoformat(timespec='seconds')}",
                     tutor._user_name_context_block(),
                     tutor._ai_tools_context_block(),
                     tutor._curriculum_context_block(),
@@ -93,7 +99,11 @@ def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
                 ]
             ),
             "history": tutor.conversation_history,
-            "tools": tutor.tutor_agent._tool_definitions(),
+            "tools": tutor.tutor_agent._tool_definitions()
+            + [
+                definition.as_function_tool()
+                for definition in screen_history.definitions()
+            ],
         }
 
     @router.post("/active/{session_id}")
@@ -121,6 +131,10 @@ def create_pi_router(get_tutor: Callable[[], TutorSystem | None]) -> APIRouter:
 
     @router.post("/tools/execute")
     async def execute(req: ToolRequest, tutor: TutorSystem = Depends(system)):
+        if req.name == "search_screen_history":
+            return await asyncio.to_thread(
+                screen_history.execute, req.name, req.arguments
+            )
         agent = tutor.tutor_agent
         return await asyncio.to_thread(agent._execute_tool_call, req.model_dump())
 

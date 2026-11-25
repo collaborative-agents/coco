@@ -22,6 +22,7 @@ members = [
     "personalization",
     "proactive-tutor",
     "py-utils",
+    "screen-history",
     "sensing",
 ]
 
@@ -430,6 +431,7 @@ dependencies = [
     { name = "personalization" },
     { name = "proactive-tutor" },
     { name = "py-utils" },
+    { name = "screen-history" },
     { name = "sensing" },
 ]
 
@@ -450,6 +452,7 @@ requires-dist = [
     { name = "personalization", editable = "lib/personalization" },
     { name = "proactive-tutor", editable = "lib/proactive_tutor" },
     { name = "py-utils", editable = "lib/py_utils" },
+    { name = "screen-history", editable = "lib/screen_history" },
     { name = "sensing", editable = "lib/sensing" },
 ]
 
@@ -2691,6 +2694,25 @@ wheels = [
 ]
 
 [[package]]
+name = "screen-history"
+version = "0.1.0"
+source = { editable = "lib/screen_history" }
+dependencies = [
+    { name = "httpx" },
+    { name = "memory" },
+    { name = "pillow" },
+    { name = "streamembed" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.25.0" },
+    { name = "memory", editable = "lib/memory" },
+    { name = "pillow", specifier = ">=10.0.0" },
+    { name = "streamembed", specifier = "==0.3.3" },
+]
+
+[[package]]
 name = "sensing"
 version = "0.1.0"
 source = { editable = "lib/sensing" }
@@ -2711,11 +2733,11 @@ dependencies = [
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
     { name = "python-dotenv" },
     { name = "redis" },
+    { name = "screen-history" },
     { name = "shapely" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
     { name = "sqlalchemy" },
-    { name = "streamembed" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -2737,11 +2759,11 @@ requires-dist = [
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'", specifier = ">=10.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "redis", extras = ["asyncio"], specifier = ">=5.0.0" },
+    { name = "screen-history", editable = "lib/screen_history" },
     { name = "shapely", specifier = ">=2.1.2" },
     { name = "sherpa-onnx", specifier = "==1.13.6" },
     { name = "sherpa-onnx-core", specifier = "==1.13.6" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
-    { name = "streamembed", specifier = "==0.3.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
 

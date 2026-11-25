@@ -9,6 +9,7 @@ dependencies = [
     "external_api",
     "py_utils",
     "memory",
+    "screen-history",
     # Web server
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
@@ -24,8 +25,6 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "pillow>=10.0.0",
     "numpy>=1.24.0",
-    # Local screenshot embeddings and history indexing (separate worker process).
-    "streamembed==0.3.3",
     # Fully local, streaming wake-word inference for the desktop app.
     "sherpa-onnx==1.13.6",
     # sherpa-onnx 1.13.6 declares this runtime companion in wheel metadata,
@@ -47,6 +46,7 @@ packages = ["."]
 external_api = { workspace = true }
 py_utils = { workspace = true }
 memory = { workspace = true }
+screen-history = { workspace = true }
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py", "*_test.py"]

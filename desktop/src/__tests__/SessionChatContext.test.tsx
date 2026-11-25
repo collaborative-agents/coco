@@ -244,7 +244,7 @@ describe('deferred suggestion context', () => {
     fireEvent.click(screen.getByTitle('Settings'));
     expect(
       await screen.findByText(
-        'Sleeping intentionally stops the screen understanding server and tutor agent.',
+        'Sleeping pauses the observer and proactive suggestions. Screenshot indexing continues when enabled.',
       ),
     ).toBeInTheDocument();
     expect(

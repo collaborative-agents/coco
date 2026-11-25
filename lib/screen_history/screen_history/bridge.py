@@ -1,4 +1,4 @@
-"""Bounded, opt-in bridge from sensing frames to an isolated StreamEmbed worker.
+"""Bounded bridge from externally supplied frames to an isolated StreamEmbed worker.
 
 Torch/transformers are loaded only in the worker process. The worker receives
 owned images rather than paths into sensing's short-lived screenshot directory.
@@ -16,13 +16,15 @@ import os
 import signal
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from memory.paths import default_memory_db_path
 from PIL import Image
-from sensing.streamembed_worker import write_status
+
+from screen_history.status import write_status
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +82,78 @@ class ScreenHistory:
         self.sent_groups = 0
         self.last_sample_at: float | None = None
         self.last_sent_at: float | None = None
+        self._started = asyncio.Event()
+        self._write_lock = asyncio.Lock()
+        self._queries: dict[str, asyncio.Future] = {}
+
+    async def _write(self, payload: bytes) -> None:
+        async with self._write_lock:
+            if self._process is None or self._process.returncode is not None:
+                raise RuntimeError("Screen history worker is not running")
+            self._process.stdin.write(payload)
+            await self._process.stdin.drain()
+
+    async def search(self, arguments: dict) -> dict:
+        if self._task is None or self._task.done():
+            return {
+                "error": "Screen history is not ready; wait for sensing to capture a frame"
+            }
+        if len(self._queries) >= 4:
+            return {"error": "Screen history search is busy; retry shortly"}
+        request_id = uuid.uuid4().hex
+        try:
+            async with asyncio.timeout(90):
+                await self._started.wait()
+                if self._task.done():
+                    return {
+                        "error": "Screen history worker is unavailable; restart sensing"
+                    }
+                future = asyncio.get_running_loop().create_future()
+                self._queries[request_id] = future
+                await self._write(
+                    (
+                        json.dumps(
+                            {"type": "search", "id": request_id, "arguments": arguments}
+                        )
+                        + "\n"
+                    ).encode()
+                )
+                return await future
+        except TimeoutError:
+            return {
+                "error": "Screen history search timed out; the local model may still be loading"
+            }
+        except (OSError, RuntimeError) as exc:
+            return {"error": f"Screen history search unavailable: {exc}"}
+        finally:
+            self._queries.pop(request_id, None)
+
+    async def _read_responses(self, stream) -> None:
+        async for line in stream:
+            try:
+                response = json.loads(line)
+            except ValueError:
+                logger.warning("Ignoring non-protocol screen history worker output")
+                continue
+            future = self._queries.get(response.get("id"))
+            if future is not None and not future.done():
+                future.set_result(
+                    response.get("result")
+                    or {"error": response.get("error", "Invalid worker response")}
+                )
 
     @classmethod
-    def from_env(cls) -> ScreenHistory | None:
-        if os.environ.get("COCO_SCREEN_HISTORY_ENABLED", "").lower() not in {
-            "1",
-            "true",
-            "yes",
-        }:
+    def from_env(cls, *, enabled: bool | None = None) -> ScreenHistory | None:
+        if enabled is None:
+            enabled = os.environ.get(
+                "COCO_SCREEN_HISTORY_ENABLED", "1"
+            ).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        if not enabled:
             return None
         raw_command = os.environ.get("COCO_SCREEN_HISTORY_COMMAND")
         if raw_command:
@@ -96,13 +162,15 @@ class ScreenHistory:
                 raise ValueError(
                     "COCO_SCREEN_HISTORY_COMMAND must be a JSON string array"
                 )
+        elif getattr(sys, "frozen", False):
+            executable = (
+                "screen-history-worker.exe"
+                if sys.platform == "win32"
+                else "screen-history-worker"
+            )
+            command = [str(Path(sys.executable).with_name(executable))]
         else:
-            if getattr(sys, "frozen", False):
-                raise ValueError(
-                    "Screen history in a packaged app requires COCO_SCREEN_HISTORY_COMMAND; "
-                    "the default worker is supported in source runs only"
-                )
-            command = [sys.executable, "-m", "sensing.streamembed_worker"]
+            command = [sys.executable, "-m", "screen_history.worker"]
         return cls(
             Path(
                 os.environ.get(
@@ -133,6 +201,7 @@ class ScreenHistory:
 
     async def _run(self) -> None:
         failure = None
+        responses = None
         try:
             self.index_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             self.index_dir.chmod(0o700)
@@ -145,19 +214,24 @@ class ScreenHistory:
                     "--index-dir",
                     str(self.index_dir),
                     stdin=asyncio.subprocess.PIPE,
-                    stdout=log,
+                    stdout=asyncio.subprocess.PIPE,
                     stderr=log,
+                    limit=16 * 1024 * 1024,
                     start_new_session=os.name == "posix",
                 )
+            responses = asyncio.create_task(self._read_responses(self._process.stdout))
+            self._started.set()
             logger.info("Screen history worker started; index: %s", self.index_dir)
             while self._process.returncode is None:
+                if responses.done():
+                    responses.result()
+                    raise RuntimeError("Screen history worker response channel closed")
                 try:
                     frames = await asyncio.wait_for(self._queue.get(), timeout=1.0)
                 except TimeoutError:
                     continue
                 payload = await asyncio.to_thread(encode_frames, frames)
-                self._process.stdin.write(payload)
-                await self._process.stdin.drain()
+                await self._write(payload)
                 self.sent_groups += 1
                 self.last_sent_at = time.time()
             raise RuntimeError(f"worker exited with code {self._process.returncode}")
@@ -167,7 +241,14 @@ class ScreenHistory:
             failure = str(exc)
             logger.exception("Screen history indexing disabled for this run")
         finally:
+            self._started.set()
             await self._stop_process()
+            if responses is not None:
+                responses.cancel()
+                await asyncio.gather(responses, return_exceptions=True)
+            for future in self._queries.values():
+                if not future.done():
+                    future.set_result({"error": "Screen history worker stopped"})
             while not self._queue.empty():
                 self._queue.get_nowait()
             try:
@@ -210,11 +291,10 @@ class ScreenHistory:
             return
         try:
             if os.name == "posix":
-                # uv may have spawned a Python child that is still loading the
-                # model. Stop the whole worker group, not just the uv wrapper.
+                # Stop the whole worker group, including children of custom commands.
                 os.killpg(process.pid, sig)
             else:
-                # Terminate uv and its Python child together on Windows too.
+                # Terminate the worker and any children together on Windows too.
                 killer = await asyncio.create_subprocess_exec(
                     "taskkill",
                     "/PID",

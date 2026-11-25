@@ -11,6 +11,18 @@ import {
   ObserverContext,
 } from '../renderer/components/PersonalizationKnowledge';
 
+function installIpc(invoke: jest.Mock) {
+  (window as any).electron = {
+    ipcRenderer: {
+      invoke: (channel: string, ...args: unknown[]) =>
+        channel === 'get-screen-history-settings'
+          ? Promise.resolve({ success: true, enabled: false })
+          : invoke(channel, ...args),
+      on: () => () => {},
+    },
+  };
+}
+
 it('shows approved memory, searches sections, and links to pending review', () => {
   const onReview = jest.fn();
   render(
@@ -73,7 +85,7 @@ it('loads observer evidence on demand and recovers from an unavailable service',
         },
       ],
     });
-  (window as any).electron = { ipcRenderer: { invoke } };
+  installIpc(invoke);
   render(<ObserverContext />);
   expect(await screen.findByText('Service unavailable')).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
@@ -109,7 +121,7 @@ it('shows a compact graph without redundant headings or manual grouping controls
       { id: 'Writing & editing', label: 'Writing & editing', count: 1494 },
     ],
   });
-  (window as any).electron = { ipcRenderer: { invoke } };
+  installIpc(invoke);
   render(<ObserverContext />);
   expect(
     await screen.findByRole('region', { name: 'Observer context graph' }),
@@ -161,7 +173,7 @@ it('focuses on nested groups and reveals insights only at a leaf, with breadcrum
           : [],
     };
   });
-  (window as any).electron = { ipcRenderer: { invoke } };
+  installIpc(invoke);
   render(<ObserverContext />);
   fireEvent.click(
     await screen.findByRole('button', { name: '40 Development' }),
@@ -206,7 +218,7 @@ it('refreshes visible context without hiding the graph and stops polling when un
     groups: [{ id: 'Development', label: 'Development', count: 20 }],
   };
   const invoke = jest.fn().mockResolvedValue(result);
-  (window as any).electron = { ipcRenderer: { invoke } };
+  installIpc(invoke);
   const view = render(<ObserverContext />);
   try {
     await act(async () => {
@@ -255,7 +267,7 @@ it('keeps the original preference version while editing and retains failed draft
     .fn()
     .mockResolvedValueOnce({ success: false, error: 'Preferences changed' })
     .mockResolvedValue({ success: true });
-  (window as any).electron = { ipcRenderer: { invoke } };
+  installIpc(invoke);
   const onChanged = jest.fn().mockResolvedValue(undefined);
   const props = { pendingCount: 0, onReview: jest.fn(), onChanged };
   const original = '## Support\n- Original.\n- Other.';
@@ -342,7 +354,7 @@ it('edits and deletes observer insights through the saved-memory channel', async
           ],
     };
   });
-  (window as any).electron = { ipcRenderer: { invoke } };
+  installIpc(invoke);
   render(<ObserverContext />);
   fireEvent.click(await screen.findByRole('button', { name: '9 Development' }));
   fireEvent.click(

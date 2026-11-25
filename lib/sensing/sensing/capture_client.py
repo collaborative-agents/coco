@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 
 from mss.screenshot import ScreenShot
 
@@ -20,11 +21,17 @@ class CaptureClient:
         self.timeout = timeout
         self.backend = "mss"
         self._macos_fallback = command is None and sys.platform == "darwin"
-        self.command = command or (
-            [sys.executable, "--screen-capture-worker"]
-            if getattr(sys, "frozen", False)
-            else [sys.executable, "-m", "sensing.capture_worker"]
-        )
+        if command is None:
+            if getattr(sys, "frozen", False):
+                executable = (
+                    "screen-capture-worker.exe"
+                    if sys.platform == "win32"
+                    else "screen-capture-worker"
+                )
+                command = [str(Path(sys.executable).with_name(executable))]
+            else:
+                command = [sys.executable, "-m", "sensing.capture_worker"]
+        self.command = command
         self._process: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
         self._closed = False

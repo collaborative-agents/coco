@@ -20,10 +20,10 @@ import mss
 from PIL import Image
 from pydantic import BaseModel, Field
 from pynput import keyboard, mouse  # still synchronous
+from screen_history.bridge import HistoryFrame, ScreenHistory
 from sensing.activity import SensingActivityMonitor
 from sensing.capture_client import CaptureClient
 from sensing.observer import Observer
-from sensing.screen_history import HistoryFrame, ScreenHistory
 
 _IS_MACOS = sys.platform == "darwin"
 
@@ -318,7 +318,9 @@ class Screen(Observer):
         # capture_for_hotkey() to determine which monitor is under the cursor.
         self._mons: list[dict] = []
         self._topology_generation: int = 0
+        self.observer_enabled = True
         self._screen_history = ScreenHistory.from_env()
+        self._screen_history_lock = asyncio.Lock()
         self._capture_client: CaptureClient | None = None
 
         # call parent
@@ -756,6 +758,27 @@ class Screen(Observer):
             step = f"{action}({ev['text']})"
             await self.update_queue.put(Update(content=step, content_type="input_text"))
 
+    def set_observer_enabled(self, enabled: bool) -> None:
+        """Control action recording and idle callbacks independently of capture."""
+        self.observer_enabled = enabled
+        self._pending_event = None
+        if self._debounce_handle:
+            self._debounce_handle.cancel()
+            self._debounce_handle = None
+        self._key_activity_start = None
+        self._key_screenshots = []
+        self.reset_idle_timer()
+
+    async def set_screen_history_enabled(self, enabled: bool) -> None:
+        async with self._screen_history_lock:
+            if enabled:
+                if self._screen_history is None:
+                    self._screen_history = ScreenHistory.from_env(enabled=True)
+            else:
+                history, self._screen_history = self._screen_history, None
+                if history is not None:
+                    await history.stop()
+
     async def _worker_wrapper(self) -> None:
         try:
             await super()._worker_wrapper()
@@ -1013,7 +1036,7 @@ class Screen(Observer):
             async def flush():
                 if self._pending_event is None:
                     return
-                if self._skip():
+                if not self.observer_enabled or self._skip():
                     self._pending_event = None
                     return
 
@@ -1074,7 +1097,7 @@ class Screen(Observer):
 
             # ---- keyboard event reception ----
             async def key_event(key, typ: str):
-                if self._note_user_activity():
+                if self._note_user_activity() or not self.observer_enabled:
                     return  # wait for a fresh frame after waking
                 # Get current mouse position to determine active monitor
                 x, y = mouse.Controller().position
@@ -1141,7 +1164,7 @@ class Screen(Observer):
 
             # ---- scroll event reception ----
             async def scroll_event(x: float, y: float, dx: float, dy: float):
-                if self._note_user_activity():
+                if self._note_user_activity() or not self.observer_enabled:
                     return  # wait for a fresh frame after waking
                 # Apply scroll filtering
                 async with self._scroll_lock:
@@ -1196,7 +1219,7 @@ class Screen(Observer):
 
             # ---- mouse event reception ----
             async def mouse_event(x: float, y: float, typ: str):
-                if self._note_user_activity():
+                if self._note_user_activity() or not self.observer_enabled:
                     return  # wait for a fresh frame after waking
                 idx = self._mon_for(x, y, mons)
                 if idx is None:
@@ -1357,7 +1380,8 @@ class Screen(Observer):
                 now = time.time()
                 # Check for idle state
                 if (
-                    now - self._last_active_click_time > self._idle_timeout
+                    self.observer_enabled
+                    and now - self._last_active_click_time > self._idle_timeout
                     and not self._idle_triggered
                 ):
                     self._idle_triggered = True

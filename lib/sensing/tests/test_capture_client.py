@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,6 +12,16 @@ from sensing.capture_client import CaptureClient
 from sensing.capture_worker import grab_screencapture, serve
 
 MONITOR = {"left": -100, "top": 0, "width": 1, "height": 1}
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_packaged_capture_uses_sibling_worker(monkeypatch, platform):
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    name = (
+        "screen-capture-worker.exe" if platform == "win32" else "screen-capture-worker"
+    )
+    assert CaptureClient().command == [str(Path(sys.executable).with_name(name))]
 
 
 @pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
@@ -159,10 +170,12 @@ def test_history_status_exposes_each_stage(monkeypatch, tmp_path):
             ),
             _task=SimpleNamespace(done=lambda: False),
             _activity_monitor=SimpleNamespace(reason=None),
+            observer_enabled=False,
             is_sensing_paused=lambda: False,
         ),
     )
     result = asyncio.run(sensing_server.screen_history_status())
+    assert result["observer_enabled"] is False
     assert result["capture"]["backend"] == "screencapture"
     assert result["capture"]["last_frame_at"] == timestamp
     assert 0 <= result["capture"]["frame_age_seconds"] < 5
